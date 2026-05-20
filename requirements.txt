@@ -1,0 +1,9 @@
+# Cercus Analysis - Locked Dependencies
+# Last updated: 2026-05-20
+# LOCKED - Any additions require explicit human approval per BOUNDARY.md
+
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+PyQt5>=5.15.0
