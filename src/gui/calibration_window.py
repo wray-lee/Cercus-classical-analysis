@@ -38,6 +38,7 @@ from PyQt5.QtWidgets import (
 from src.processors.calibration_core import CalibrationProcessor, CalibrationResult
 from src.visualization.calibration import (
     create_crosstalk_panel,
+    create_cumulative_distance_panel,
     create_yaw_drift_panel,
     create_jitter_histogram,
     create_steering_sine_panel,
@@ -124,6 +125,7 @@ class CalibrationCanvas(QWidget):
         self._tab_canvases: Dict[str, FigureCanvas] = {}
         tab_names = {
             "cross_talk": "Cross-talk Inspection",
+            "cumulative_distance": "Cumulative Distance (mm)",
             "yaw_drift": "Yaw Drift",
             "jitter_histogram": "Jitter Histogram",
             "steering_sine": "Steering Angle",
@@ -236,6 +238,9 @@ class CalibrationWindow(QMainWindow):
         self._resample_freq = _make_spin(QDoubleSpinBox, 10.0, 1000.0, 100.0, 10.0)
         signal_form.addRow("Resample Freq:", _add_unit_label(self._resample_freq, "Hz"))
 
+        self._sphere_radius = _make_spin(QDoubleSpinBox, 10.0, 500.0, 100.0, 5.0)
+        signal_form.addRow("Sphere Radius:", _add_unit_label(self._sphere_radius, "mm"))
+
         signal_layout.addLayout(signal_form)
         ctrl_layout.addWidget(signal_card)
 
@@ -325,6 +330,7 @@ class CalibrationWindow(QMainWindow):
             filter_cutoff_hz=self._filter_cutoff.value(),
             filter_order=self._filter_order.value(),
             resample_freq_hz=self._resample_freq.value(),
+            sphere_radius_mm=self._sphere_radius.value(),
         )
 
     def _on_generate(self) -> None:
@@ -342,6 +348,10 @@ class CalibrationWindow(QMainWindow):
                 "cross_talk": create_crosstalk_panel(
                     result.time, result.dx_filtered, result.dy_filtered,
                     result.dz_filtered, result.session_id,
+                ),
+                "cumulative_distance": create_cumulative_distance_panel(
+                    result.time, result.cum_dx_mm, result.cum_dy_mm,
+                    result.cum_dz_mm, result.session_id,
                 ),
                 "yaw_drift": create_yaw_drift_panel(
                     result.time, result.dz_filtered, result.session_id,

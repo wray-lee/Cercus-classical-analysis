@@ -17,19 +17,23 @@ from scipy.interpolate import CubicSpline
 @dataclass
 class CalibrationResult:
     """Processed calibration data for a single recording."""
+
     session_id: str
-    time: np.ndarray              # Uniform time axis (s)
-    dx_raw: np.ndarray            # Raw lateral displacement
-    dy_raw: np.ndarray            # Raw forward/back displacement
-    dz_raw: np.ndarray            # Raw rotational displacement
-    dx_filtered: np.ndarray       # Filtered lateral
-    dy_filtered: np.ndarray       # Filtered forward/back
-    dz_filtered: np.ndarray       # Filtered rotational
-    speed: np.ndarray             # Instantaneous speed (mm/s)
+    time: np.ndarray  # Uniform time axis (s)
+    dx_raw: np.ndarray  # Raw lateral displacement
+    dy_raw: np.ndarray  # Raw forward/back displacement
+    dz_raw: np.ndarray  # Raw rotational displacement
+    dx_filtered: np.ndarray  # Filtered lateral
+    dy_filtered: np.ndarray  # Filtered forward/back
+    dz_filtered: np.ndarray  # Filtered rotational
+    cum_dx_mm: np.ndarray  # Cumulative lateral displacement (mm)
+    cum_dy_mm: np.ndarray  # Cumulative forward/back displacement (mm)
+    cum_dz_mm: np.ndarray  # Cumulative rotational arc-length (mm)
+    speed: np.ndarray  # Instantaneous speed (mm/s)
     angular_velocity: np.ndarray  # Instantaneous angular velocity
-    cumulative_yaw: np.ndarray    # Cumulative sum of dz
-    raw_dt: float                 # Median raw sample interval
-    resample_freq_hz: float       # Resampling frequency
+    cumulative_yaw: np.ndarray  # Cumulative sum of dz
+    raw_dt: float  # Median raw sample interval
+    resample_freq_hz: float  # Resampling frequency
 
 
 class CalibrationProcessor:
@@ -50,10 +54,12 @@ class CalibrationProcessor:
         filter_cutoff_hz: float = 10.0,
         filter_order: int = 4,
         resample_freq_hz: float = 100.0,
+        sphere_radius_mm: float = 60.0,
     ) -> None:
         self.filter_cutoff_hz: float = filter_cutoff_hz
         self.filter_order: int = filter_order
         self.resample_freq_hz: float = resample_freq_hz
+        self.sphere_radius_mm: float = sphere_radius_mm
 
     def load_csv(self, filepath: Path) -> pd.DataFrame:
         """Load and validate a raw kinematics CSV.
@@ -255,7 +261,9 @@ class CalibrationProcessor:
         # Load
         df = self.load_csv(filepath)
         if session_id is None:
-            session_id = filepath.stem.replace("_kinematics", "").replace("-kinematics", "")
+            session_id = filepath.stem.replace("_kinematics", "").replace(
+                "-kinematics", ""
+            )
 
         timestamps = df["sys_time"].values.astype(np.float64)
         dx_raw = df["dx"].values.astype(np.float64)
@@ -266,19 +274,36 @@ class CalibrationProcessor:
         raw_dt = self.compute_uniform_dt(timestamps)
 
         # Resample to uniform
-        t_uniform, dx_uniform = self.resample_to_uniform(timestamps, dx_raw, self.resample_freq_hz)
-        _, dy_uniform = self.resample_to_uniform(timestamps, dy_raw, self.resample_freq_hz)
-        _, dz_uniform = self.resample_to_uniform(timestamps, dz_raw, self.resample_freq_hz)
+        t_uniform, dx_uniform = self.resample_to_uniform(
+            timestamps, dx_raw, self.resample_freq_hz
+        )
+        _, dy_uniform = self.resample_to_uniform(
+            timestamps, dy_raw, self.resample_freq_hz
+        )
+        _, dz_uniform = self.resample_to_uniform(
+            timestamps, dz_raw, self.resample_freq_hz
+        )
 
         # Low-pass filter
-        dx_filtered = self.apply_lowpass_filter(dx_uniform, self.filter_cutoff_hz, self.resample_freq_hz, self.filter_order)
-        dy_filtered = self.apply_lowpass_filter(dy_uniform, self.filter_cutoff_hz, self.resample_freq_hz, self.filter_order)
-        dz_filtered = self.apply_lowpass_filter(dz_uniform, self.filter_cutoff_hz, self.resample_freq_hz, self.filter_order)
+        dx_filtered = self.apply_lowpass_filter(
+            dx_uniform, self.filter_cutoff_hz, self.resample_freq_hz, self.filter_order
+        )
+        dy_filtered = self.apply_lowpass_filter(
+            dy_uniform, self.filter_cutoff_hz, self.resample_freq_hz, self.filter_order
+        )
+        dz_filtered = self.apply_lowpass_filter(
+            dz_uniform, self.filter_cutoff_hz, self.resample_freq_hz, self.filter_order
+        )
+
+        # Cumulative physical displacement (integration)
+        cum_dx_mm = np.cumsum(dx_filtered)
+        cum_dy_mm = np.cumsum(dy_filtered)
+        cum_dz_mm = np.cumsum(dz_filtered)
 
         # Kinematics
         dt_resample = 1.0 / self.resample_freq_hz
         speed = self.compute_speed(dx_filtered, dy_filtered, dt_resample)
-        angular_velocity = dz_filtered / dt_resample
+        angular_velocity = (dz_filtered / dt_resample) / self.sphere_radius_mm
         cumulative_yaw = self.compute_cumulative_yaw(dz_filtered)
 
         return CalibrationResult(
@@ -290,6 +315,9 @@ class CalibrationProcessor:
             dx_filtered=dx_filtered,
             dy_filtered=dy_filtered,
             dz_filtered=dz_filtered,
+            cum_dx_mm=cum_dx_mm,
+            cum_dy_mm=cum_dy_mm,
+            cum_dz_mm=cum_dz_mm,
             speed=speed,
             angular_velocity=angular_velocity,
             cumulative_yaw=cumulative_yaw,

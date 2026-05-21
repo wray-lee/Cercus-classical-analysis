@@ -12,6 +12,7 @@ import pandas as pd
 class CommandAction(str, Enum):
     """Valid commands for DataProcessor."""
     PROCESS_BATCH = "process_batch"
+    PROCESS_GROUP_BATCH = "process_group_batch"
     COMPUTE_PSTH = "compute_psth"
     EXPORT_RESULTS = "export_results"
     SHUTDOWN = "shutdown"
@@ -56,6 +57,7 @@ class ProcessingParams:
     psth_window_pre_s: float = -2.0
     psth_window_post_s: float = 5.0
     escape_acceleration_threshold: float = 2.0
+    stimulus_offset_s: float = 0.0
 
 
 @dataclass
@@ -86,6 +88,9 @@ class PSTHResult:
     mean_angular_velocity: np.ndarray
     sem_angular_velocity: np.ndarray
     n_trials: int
+    speed_trials: Optional[np.ndarray] = None
+    trial_x: Optional[np.ndarray] = None
+    trial_y: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -117,3 +122,4 @@ class SessionResults:
     mean_angular_velocity: float = 0.0
     total_distance: float = 0.0
     total_freezing_time_s: float = 0.0
+    group_label: str = "treatment"

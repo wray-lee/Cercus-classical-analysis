@@ -50,6 +50,7 @@ from src.models import (
 )
 from src.visualization.visualizer import generate_all_panels, export_figures
 from src.gui.theme import MAIN_STYLESHEET, apply_mpl_theme
+from src.gui.group_analysis_window import GroupAnalysisWindow
 
 from PyQt5.QtCore import QTimer
 
@@ -128,6 +129,7 @@ class ParameterPanel(QWidget):
         dir_row.addWidget(self._dir_label, stretch=1)
         dir_row.addWidget(self._dir_btn)
         io_form.addRow("Directory:", dir_row)
+
         io_layout.addLayout(io_form)
         layout.addWidget(io_card)
 
@@ -191,6 +193,9 @@ class ParameterPanel(QWidget):
         self._psth_post = self._make_spin(QDoubleSpinBox, 0.0, 60.0, 5.0, 0.5)
         psth_form.addRow("Post-stimulus:", self._add_unit_label(self._psth_post, "s"))
 
+        self._stimulus_offset = self._make_spin(QDoubleSpinBox, 0.0, 30.0, 0.0, 0.1)
+        psth_form.addRow("Stimulus Offset:", self._add_unit_label(self._stimulus_offset, "s"))
+
         psth_layout.addLayout(psth_form)
         layout.addWidget(psth_card)
 
@@ -216,6 +221,10 @@ class ParameterPanel(QWidget):
         self._export_fig_btn.setEnabled(False)
         export_row.addWidget(self._export_fig_btn)
         actions_layout.addLayout(export_row)
+
+        self._group_analysis_btn = QPushButton("Launch Group Analysis (基线对比)")
+        self._group_analysis_btn.setEnabled(True)
+        actions_layout.addWidget(self._group_analysis_btn)
 
         root_layout.addWidget(actions_card)
 
@@ -284,6 +293,7 @@ class ParameterPanel(QWidget):
             "escape_acceleration_threshold": self._escape_threshold.value(),
             "psth_window_pre_s": self._psth_pre.value(),
             "psth_window_post_s": self._psth_post.value(),
+            "stimulus_offset_s": self._stimulus_offset.value(),
             "filter_order": 4,
         }
 
@@ -300,6 +310,7 @@ class ParameterPanel(QWidget):
         self._process_btn.setEnabled(not busy and self._selected_dir is not None)
         self._export_btn.setEnabled(not busy)
         self._export_fig_btn.setEnabled(not busy)
+        self._group_analysis_btn.setEnabled(not busy)
 
 
 # =============================================================================
@@ -340,11 +351,14 @@ class VisualizationCanvas(QWidget):
         # Pre-create tabs
         self._tab_canvases: Dict[str, FigureCanvas] = {}
         self._tab_toolbars: Dict[str, NavigationToolbar] = {}
+        self._tab_widgets: Dict[str, QWidget] = {}
         tab_names = {
+            "trial_trajectory": "Trial Trajectory",
             "trajectory_heatmap": "Trajectory + Heatmap",
             "speed_timeseries": "Speed vs Time",
             "psth": "PSTH Response",
             "angular_velocity_histogram": "Angular Velocity",
+            "multimodal_psth": "Multimodal PSTH",
         }
         for key, title in tab_names.items():
             canvas = FigureCanvas(Figure(figsize=(8, 6)))
@@ -356,9 +370,13 @@ class VisualizationCanvas(QWidget):
             tab_layout.setSpacing(2)
             tab_layout.addWidget(toolbar)
             tab_layout.addWidget(canvas, stretch=1)
-            self._tabs.addTab(tab_widget, title)
+            tab_idx = self._tabs.addTab(tab_widget, title)
             self._tab_canvases[key] = canvas
             self._tab_toolbars[key] = toolbar
+            self._tab_widgets[key] = tab_widget
+            # Hide data-dependent tabs by default
+            if key in ("trial_trajectory", "multimodal_psth"):
+                self._tabs.setTabVisible(tab_idx, False)
 
         self._results: List[SessionResults] = []
         self._current_session_idx: int = -1
@@ -383,36 +401,72 @@ class VisualizationCanvas(QWidget):
 
     def _update_figures(self, session_idx: int) -> None:
         """Render figures for the selected session into tab canvases."""
-        if session_idx < 0 or session_idx >= len(self._results):
-            return
-
-        self._current_session_idx = session_idx
-        result = self._results[session_idx]
-
         # Close previous figures to free memory
         for fig in self._current_figures.values():
             plt.close(fig)
         self._current_figures.clear()
 
+        if session_idx < 0 or session_idx >= len(self._results):
+            # Clear all canvases with a placeholder so the tab layout stays intact
+            for key, canvas in self._tab_canvases.items():
+                canvas.figure.clear()
+                ax = canvas.figure.add_subplot(111)
+                ax.text(
+                    0.5, 0.5, "No data loaded",
+                    ha="center", va="center",
+                    transform=ax.transAxes, fontsize=12, color="gray",
+                )
+                ax.set_axis_off()
+                canvas.draw()
+            return
+
+        self._current_session_idx = session_idx
+        result = self._results[session_idx]
+
         # Generate fresh figures
         figures = generate_all_panels(result)
 
-        for key, fig in figures.items():
-            canvas = self._tab_canvases.get(key)
-            if canvas is None:
+        # Render each panel into its canvas
+        for key, canvas in self._tab_canvases.items():
+            if key in figures:
+                fig = figures[key]
+                old_fig = canvas.figure
+                canvas.figure = fig
+                fig.set_canvas(canvas)
+
+                toolbar = self._tab_toolbars.get(key)
+                if toolbar:
+                    toolbar.update()
+
+                canvas.draw()
+                plt.close(old_fig)
+                self._current_figures[key] = fig
+            else:
+                # Clear canvases that have no data this session
+                canvas.figure.clear()
+                ax = canvas.figure.add_subplot(111)
+                ax.text(
+                    0.5, 0.5, "Not available for this session",
+                    ha="center", va="center",
+                    transform=ax.transAxes, fontsize=12, color="gray",
+                )
+                ax.set_axis_off()
+                canvas.draw()
+
+        # Toggle visibility of data-dependent tabs
+        data_dependent_keys = ("trial_trajectory", "multimodal_psth")
+        for key in data_dependent_keys:
+            tab_widget = self._tab_widgets.get(key)
+            if tab_widget is None:
+                continue
+            tab_idx = self._tabs.indexOf(tab_widget)
+            if tab_idx < 0:
                 continue
 
-            old_fig = canvas.figure
-            canvas.figure = fig
-            fig.set_canvas(canvas)
-
-            toolbar = self._tab_toolbars.get(key)
-            if toolbar:
-                toolbar.update()
-
-            canvas.draw()
-            plt.close(old_fig)
-            self._current_figures[key] = fig
+            if key in figures:
+                self._tabs.setTabVisible(tab_idx, True)
+            else:
+                self._tabs.setTabVisible(tab_idx, False)
 
     def get_current_figures(self) -> Dict[str, Figure]:
         """Return figures for the currently selected session."""
@@ -483,6 +537,7 @@ class MainWindow(QMainWindow):
         self._telemetry_queue: mp.Queue = telemetry_queue
         self._pending_requests: Dict[str, str] = {}
         self._results: List[SessionResults] = []
+        self._cached_results: List[SessionResults] = []
 
         # Apply theme
         self.setStyleSheet(MAIN_STYLESHEET)
@@ -508,6 +563,9 @@ class MainWindow(QMainWindow):
         self._param_panel._process_btn.clicked.connect(self._on_process)
         self._param_panel._export_btn.clicked.connect(self._on_export_csv)
         self._param_panel._export_fig_btn.clicked.connect(self._on_export_figures)
+        self._param_panel._group_analysis_btn.clicked.connect(
+            self._on_launch_group_analysis
+        )
         main_layout.addWidget(self._param_panel)
 
         # Right panel: visualization (expanding)
@@ -540,6 +598,7 @@ class MainWindow(QMainWindow):
 
             if msg.data and "results" in msg.data:
                 self._results = msg.data["results"]
+                self._cached_results = self._results
                 self._viz_canvas.set_results(self._results)
                 self._param_panel._export_btn.setEnabled(True)
                 self._param_panel._export_fig_btn.setEnabled(True)
@@ -635,6 +694,16 @@ class MainWindow(QMainWindow):
             "Export Complete",
             f"Saved {len(saved)} figure(s) to:\n{output_dir}",
         )
+
+    def _on_launch_group_analysis(self) -> None:
+        """Open the group analysis window as an independent workspace."""
+        dlg = GroupAnalysisWindow(
+            cmd_queue=self._cmd_queue,
+            telemetry_queue=self._telemetry_queue,
+            speed_threshold_mm_s=self._param_panel._escape_threshold.value(),
+            parent=self,
+        )
+        dlg.exec_()
 
     def closeEvent(self, event: Any) -> None:
         """Shutdown DataProcessor on window close."""

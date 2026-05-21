@@ -89,6 +89,66 @@ def create_crosstalk_panel(
     return fig
 
 
+def create_cumulative_distance_panel(
+    time: np.ndarray,
+    cum_dx_mm: np.ndarray,
+    cum_dy_mm: np.ndarray,
+    cum_dz_mm: np.ndarray,
+    session_id: str = "",
+) -> Figure:
+    """Cumulative Distance Panel: integrated dx, dy, dz on a uniform mm scale.
+
+    Plots cumulative sums so each trace shows total physical distance
+    travelled on that axis over time — useful for spotting drift.
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True, sharey=True)
+    fig.suptitle(
+        f"Cumulative Real-world Distance (Uniform mm Scale) — {session_id}" if session_id
+        else "Cumulative Real-world Distance (Uniform mm Scale)",
+        fontsize=13,
+        fontweight="bold",
+    )
+
+    # Global symmetric limits from all three cumulative axes
+    global_max = max(
+        float(np.max(np.abs(cum_dx_mm))) if len(cum_dx_mm) > 0 else 1.0,
+        float(np.max(np.abs(cum_dy_mm))) if len(cum_dy_mm) > 0 else 1.0,
+        float(np.max(np.abs(cum_dz_mm))) if len(cum_dz_mm) > 0 else 1.0,
+    )
+    ylim_hi = global_max * 1.05
+    ylim_lo = -ylim_hi
+
+    # cum_dx trace
+    ax_dx: Axes = axes[0]
+    ax_dx.plot(time, cum_dx_mm, linewidth=0.5, color=_COLOR_DX, alpha=0.9)
+    ax_dx.set_ylabel("Cumulative Distance (mm)")
+    ax_dx.set_title("Lateral (X-axis)")
+    ax_dx.axhline(0, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
+    ax_dx.set_ylim(ylim_lo, ylim_hi)
+    ax_dx.invert_yaxis()
+    ax_dx.grid(True, alpha=_GRID_ALPHA)
+
+    # cum_dy trace
+    ax_dy: Axes = axes[1]
+    ax_dy.plot(time, cum_dy_mm, linewidth=0.5, color=_COLOR_DY, alpha=0.9)
+    ax_dy.set_ylabel("Cumulative Distance (mm)")
+    ax_dy.set_title("Forward/Back (Y-axis)")
+    ax_dy.axhline(0, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
+    ax_dy.grid(True, alpha=_GRID_ALPHA)
+
+    # cum_dz trace
+    ax_dz: Axes = axes[2]
+    ax_dz.plot(time, cum_dz_mm, linewidth=0.5, color=_COLOR_DZ, alpha=0.9)
+    ax_dz.set_ylabel("Cumulative Distance (mm)")
+    ax_dz.set_xlabel("Time (s)")
+    ax_dz.set_title("Rotational (Z-axis / Yaw arc-length)")
+    ax_dz.axhline(0, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
+    ax_dz.grid(True, alpha=_GRID_ALPHA)
+
+    fig.tight_layout()
+    return fig
+
+
 def create_steering_sine_panel(
     time: np.ndarray,
     dz: np.ndarray,

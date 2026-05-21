@@ -29,6 +29,55 @@ _LINEWIDTH_TIMESERIES = 0.7
 _LINEWIDTH_PSTH = 1.6
 _GRID_ALPHA = 0.3
 
+# Multi-modal stimulus colors (high contrast on dark bg)
+_COLOR_LOOMING = "#FF6B6B"    # Soft red
+_COLOR_AIRPUFF = "#4A9EFF"    # Bright blue
+_COLOR_BASE_VIS = "#FFB86C"   # Orange (baseline visual)
+_COLOR_BASE_WIND = "#8BE9FD"  # Cyan (baseline wind)
+
+# Base-type keyword → color (substring matching for composite labels)
+_EVT_COLOR_RULES: List[Tuple[str, str]] = [
+    ("looming", _COLOR_LOOMING),
+    ("air_puff", _COLOR_AIRPUFF),
+    ("air puff", _COLOR_AIRPUFF),
+    ("base_visual", _COLOR_BASE_VIS),
+    ("base_visual", _COLOR_BASE_VIS),
+    ("base_wind", _COLOR_BASE_WIND),
+    ("base wind", _COLOR_BASE_WIND),
+]
+
+# Base-type keyword → human-readable label
+_EVT_LABEL_RULES: List[Tuple[str, str]] = [
+    ("looming", "Looming"),
+    ("air_puff", "Air-puff"),
+    ("air puff", "Air-puff"),
+    ("base_visual", "Baseline Visual"),
+    ("base_wind", "Baseline Wind"),
+    ("base wind", "Baseline Wind"),
+]
+
+
+def _resolve_evt_color(evt_type: str, fallback: str = _COLOR_PRIMARY) -> str:
+    """Match event color by substring (handles composite labels like ``looming_wind_left``)."""
+    evt_lower = evt_type.lower()
+    for keyword, color in _EVT_COLOR_RULES:
+        if keyword in evt_lower:
+            return color
+    return fallback
+
+
+def _resolve_evt_label(evt_type: str) -> str:
+    """Derive a human-readable label from a (possibly composite) event type."""
+    evt_lower = evt_type.lower()
+    for keyword, label in _EVT_LABEL_RULES:
+        if keyword in evt_lower:
+            # Append direction suffix if present
+            for direction in ("left", "right"):
+                if direction in evt_lower:
+                    return f"{label} ({direction.title()})"
+            return label
+    return evt_type
+
 
 def create_trajectory_heatmap(
     traj_x: np.ndarray,
@@ -71,12 +120,18 @@ def create_trajectory_heatmap(
         zorder=5,
         label="End",
     )
+    ax_traj.set_aspect('equal', adjustable='box')
+    max_val = np.nanmax([np.abs(traj_x), np.abs(traj_y)])
+    limit = max_val * 1.1
+    ax_traj.set_xlim(-limit, limit)
+    ax_traj.set_ylim(-limit, limit)
+    ax_traj.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    ax_traj.axvline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    ax_traj.plot(0, 0, marker='o', color='black', markersize=6, zorder=10)
     ax_traj.set_xlabel("X displacement (mm)")
     ax_traj.set_ylabel("Y displacement (mm)")
     ax_traj.set_title("2D Trajectory (color = time)")
     ax_traj.legend(loc="upper right", fontsize=8, framealpha=0.8)
-    ax_traj.set_aspect("equal", adjustable="datalim")
-    ax_traj.invert_yaxis()
     ax_traj.grid(True, alpha=_GRID_ALPHA)
 
     # --- Heatmap ---
@@ -89,11 +144,15 @@ def create_trajectory_heatmap(
         density=True,
     )
     fig.colorbar(h[3], ax=ax_heat, label="Probability Density", shrink=0.8)
+    ax_heat.set_aspect('equal', adjustable='box')
+    ax_heat.set_xlim(-limit, limit)
+    ax_heat.set_ylim(-limit, limit)
+    ax_heat.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    ax_heat.axvline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    ax_heat.plot(0, 0, marker='o', color='black', markersize=6, zorder=10)
     ax_heat.set_xlabel("X displacement (mm)")
     ax_heat.set_ylabel("Y displacement (mm)")
     ax_heat.set_title("Spatial Probability Density")
-    ax_heat.set_aspect("equal", adjustable="datalim")
-    ax_heat.invert_yaxis()
 
     fig.tight_layout()
     return fig
@@ -201,13 +260,32 @@ def create_psth_plot(
             label="±SEM",
         )
 
+        # Shaded stimulus time windows based on event modality
+        evt_lower = evt_type.lower()
+        stim_color = _resolve_evt_color(evt_type, _COLOR_STIMULUS)
+        if "looming" in evt_lower or "visual" in evt_lower:
+            # Approach window: looming expansion before contact
+            ax.axvspan(-0.5, 0, alpha=0.12, color=stim_color, label="Approach window")
+        elif "air_puff" in evt_lower or "air puff" in evt_lower or "wind" in evt_lower:
+            # Contact window: air-puff / wind delivery
+            ax.axvspan(0, 0.2, alpha=0.12, color=stim_color, label="Contact window")
+
+        # Stimulus boundary lines
         ax.axvline(
-            0,
+            -0.5,
+            color=_COLOR_LOOMING,
+            linestyle="--",
+            linewidth=1.2,
+            alpha=0.8,
+            label="Looming Onset",
+        )
+        ax.axvline(
+            0.0,
             color=_COLOR_STIMULUS,
             linestyle="--",
             linewidth=1.2,
             alpha=0.8,
-            label="Stimulus Onset",
+            label="Air-puff / Wind Onset",
         )
         ax.set_ylabel("Speed (mm/s)", color=_COLOR_PRIMARY)
         ax.tick_params(axis="y", labelcolor=_COLOR_PRIMARY)
@@ -338,9 +416,6 @@ def create_decoupled_velocity_panel(
     This visually compresses cross-talk noise to a flat baseline relative
     to the primary movement signal, preventing matplotlib auto-scaling
     from amplifying ~% cross-talk as false coupling.
-
-    The Y-axis is inverted to match spherical treadmill convention
-    (positive displacement = forward/right visual movement).
     """
     fig, axes = plt.subplots(
         3, 1, figsize=(14, 8), sharex=True, sharey=True,
@@ -350,16 +425,6 @@ def create_decoupled_velocity_panel(
         else "Decoupled Axis Outputs",
         fontsize=13, fontweight="bold",
     )
-
-    # Compute global symmetric limits from all three axes
-    global_max = max(
-        float(np.max(np.abs(dx))) if len(dx) > 0 else 1.0,
-        float(np.max(np.abs(dy))) if len(dy) > 0 else 1.0,
-        float(np.max(np.abs(dz))) if len(dz) > 0 else 1.0,
-    )
-    # Add 5% margin so primary peaks don't clip against the frame
-    ylim_hi = global_max * 1.05
-    ylim_lo = -ylim_hi
 
     traces = [
         (dx, _COLOR_DX, "Lateral (X-axis)", "dx (displacement)"),
@@ -372,8 +437,6 @@ def create_decoupled_velocity_panel(
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.axhline(0, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
-        ax.set_ylim(ylim_lo, ylim_hi)
-        ax.invert_yaxis()
         ax.grid(True, alpha=_GRID_ALPHA)
 
     axes[-1].set_xlabel("Time (s)")
@@ -420,6 +483,186 @@ def create_steering_sine_panel(
     ax_sin.axhline(1, color="gray", linestyle="--", linewidth=0.5, alpha=0.3)
     ax_sin.axhline(-1, color="gray", linestyle="--", linewidth=0.5, alpha=0.3)
     ax_sin.grid(True, alpha=_GRID_ALPHA)
+
+    fig.tight_layout()
+    return fig
+
+
+def create_trial_trajectory_overlay(
+    psth_results: Dict[str, PSTHResult],
+    session_id: str,
+) -> Figure:
+    """Symmetric spatial trajectory overlay with left/right color separation and explicit arrows.
+
+    Colors are assigned by spatial direction (left=red, right=blue) rather
+    than base modality.  Horizontal stimulus arrows indicate left/right
+    approach directions at the origin.
+    """
+    events_with_traj = {
+        k: v for k, v in psth_results.items()
+        if v.trial_x is not None and v.trial_y is not None and v.n_trials > 0
+    }
+
+    if not events_with_traj:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.text(
+            0.5, 0.5, "No trial trajectory data available",
+            ha="center", va="center", transform=ax.transAxes,
+            fontsize=12, color="gray",
+        )
+        ax.set_axis_off()
+        return fig
+
+    fig, ax = plt.subplots(figsize=(9, 9))
+    fig.suptitle(
+        f"Trial Trajectory Overlay — {session_id}",
+        fontsize=13, fontweight="bold",
+    )
+
+    has_left = False
+    has_right = False
+
+    _COLOR_LEFT = "#FF6B6B"
+    _COLOR_RIGHT = "#4A9EFF"
+
+    for evt_type, psth in events_with_traj.items():
+        n_trials_x, _ = psth.trial_x.shape
+        evt_lower = evt_type.lower()
+
+        # Direction-based color override
+        if "left" in evt_lower:
+            color = _COLOR_LEFT
+            has_left = True
+        elif "right" in evt_lower:
+            color = _COLOR_RIGHT
+            has_right = True
+        else:
+            color = _resolve_evt_color(evt_type)
+
+        label = _resolve_evt_label(evt_type)
+
+        # Draw individual trials
+        for t_idx in range(n_trials_x):
+            tx = psth.trial_x[t_idx]
+            ty = psth.trial_y[t_idx]
+            if np.all(np.isnan(tx)):
+                continue
+            ax.plot(tx, ty, linewidth=0.5, alpha=0.3, color=color)
+
+        # Draw mean trajectory
+        mean_x = np.nanmean(psth.trial_x, axis=0)
+        mean_y = np.nanmean(psth.trial_y, axis=0)
+        ax.plot(mean_x, mean_y, linewidth=2.5, color=color,
+                label=f"{label} Mean (n={psth.n_trials})")
+
+    # Origin marker
+    ax.plot(0, 0, "o", color=_COLOR_STIMULUS, markersize=12, zorder=6,
+            markeredgecolor="white", markeredgewidth=1.0, label="Subject Origin")
+
+    # Horizontal stimulus direction arrows (colored to match trajectories)
+    if has_left:
+        ax.annotate(
+            "", xy=(0, 0), xytext=(-2.0, 0),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=_COLOR_LEFT,
+                lw=3.0,
+                mutation_scale=25,
+            ),
+        )
+    if has_right:
+        ax.annotate(
+            "", xy=(0, 0), xytext=(2.0, 0),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=_COLOR_RIGHT,
+                lw=3.0,
+                mutation_scale=25,
+            ),
+        )
+
+    ax.set_aspect('equal', adjustable='box')
+    all_x = np.concatenate([psth.trial_x.ravel() for psth in events_with_traj.values()])
+    all_y = np.concatenate([psth.trial_y.ravel() for psth in events_with_traj.values()])
+    max_val = np.nanmax([np.abs(all_x), np.abs(all_y)])
+    limit = max_val * 1.1
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.axhline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    ax.axvline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+    ax.plot(0, 0, marker='o', color='black', markersize=6, zorder=10)
+
+    ax.set_xlabel("Lateral displacement (X, mm)")
+    ax.set_ylabel("Forward displacement (Y, mm)")
+    ax.grid(True, alpha=_GRID_ALPHA)
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.8)
+
+    fig.tight_layout()
+    return fig
+
+
+def create_multimodal_psth(
+    psth_results: Dict[str, PSTHResult],
+    session_id: str,
+) -> Figure:
+    """Multi-modal PSTH comparison on a single figure.
+
+    Overlays mean speed ± SEM for each stimulus modality with
+    high-contrast colors and individual stimulus-onset markers.
+
+    Uses substring matching to resolve colors and labels from
+    composite event labels (e.g. ``looming_wind_left``).
+    """
+    if not psth_results:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.text(
+            0.5, 0.5, "No PSTH data available",
+            ha="center", va="center", transform=ax.transAxes,
+            fontsize=12, color="gray",
+        )
+        ax.set_axis_off()
+        return fig
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    fig.suptitle(
+        f"Multi-Modal PSTH — {session_id}",
+        fontsize=13, fontweight="bold",
+    )
+
+    for evt_type, psth in psth_results.items():
+        color = _resolve_evt_color(evt_type)
+        label = _resolve_evt_label(evt_type)
+
+        ax.plot(
+            psth.time_axis,
+            psth.mean_speed,
+            linewidth=_LINEWIDTH_PSTH,
+            color=color,
+            label=f"{label} (n={psth.n_trials})",
+        )
+        ax.fill_between(
+            psth.time_axis,
+            psth.mean_speed - psth.sem_speed,
+            psth.mean_speed + psth.sem_speed,
+            alpha=_ALPHA_FILL,
+            color=color,
+        )
+
+        # Stimulus onset line per modality (offset by 0.02 s to avoid overlap)
+        offset = 0.0
+        ax.axvline(
+            offset,
+            color=color,
+            linestyle="--",
+            linewidth=1.0,
+            alpha=0.5,
+        )
+
+    ax.axvline(0, color=_COLOR_STIMULUS, linestyle="-", linewidth=1.5, alpha=0.8, label="Stimulus Onset")
+    ax.set_xlabel("Time relative to stimulus (s)")
+    ax.set_ylabel("Speed (mm/s)")
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.8)
+    ax.grid(True, alpha=_GRID_ALPHA)
 
     fig.tight_layout()
     return fig
@@ -476,6 +719,21 @@ def generate_all_panels(
             kd.heading_angle,
             kd.steering_sine,
             result.session_id,
+        )
+
+    # Trial-level trajectory overlay (requires spatial trial data)
+    if any(
+        p.trial_x is not None and p.n_trials > 0
+        for p in result.psth_results.values()
+    ):
+        panels["trial_trajectory"] = create_trial_trajectory_overlay(
+            result.psth_results, result.session_id,
+        )
+
+    # Multi-modal PSTH comparison (requires multiple event types)
+    if len(result.psth_results) >= 2:
+        panels["multimodal_psth"] = create_multimodal_psth(
+            result.psth_results, result.session_id,
         )
 
     return panels
