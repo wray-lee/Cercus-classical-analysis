@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 # Publication-Grade Global Style (Nature / Science / Cell)
 # ──────────────────────────────────────────────────────────────────────
 
+
 def _apply_publication_style():
     """Inject Nature/Science/Cell compliant rcParams."""
     rc = plt.rcParams
@@ -71,11 +72,11 @@ def _apply_publication_style():
 
 
 # NPG (Nature Publishing Group) palette
-COLOR_LEFT = "#4DBBD5"       # Nature blue
-COLOR_RIGHT = "#E64B35"      # Nature red
-COLOR_CONTROL = "#999999"    # Neutral gray
-COLOR_OSCI_VIS = "#8491B4"   # Oscilloscope visual channel
-COLOR_OSCI_HW = "#F39B7F"    # Oscilloscope hardware channel
+COLOR_LEFT = "#4DBBD5"  # Nature blue
+COLOR_RIGHT = "#E64B35"  # Nature red
+COLOR_CONTROL = "#999999"  # Neutral gray
+COLOR_OSCI_VIS = "#8491B4"  # Oscilloscope visual channel
+COLOR_OSCI_HW = "#F39B7F"  # Oscilloscope hardware channel
 
 
 _apply_publication_style()
@@ -83,16 +84,23 @@ _apply_publication_style()
 # ──────────────────────────────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────────────────────────────
-DETAILS_KEYS = ("type", "target_ttc_ms", "wind_dir", "screen_side",
-                "lv_ratio_ms", "init_half_angle_deg")
-SPEED_WINDOW_MS = 100          # rolling-mean smoothing window (ms)
-SCALE_BAR_MM = 5.0             # scale bar for trajectory plots
+DETAILS_KEYS = (
+    "type",
+    "target_ttc_ms",
+    "wind_dir",
+    "screen_side",
+    "lv_ratio_ms",
+    "init_half_angle_deg",
+)
+SPEED_WINDOW_MS = 100  # rolling-mean smoothing window (ms)
+SCALE_BAR_MM = 5.0  # scale bar for trajectory plots
 LEGACY_TRIAL_DURATION_MS = 5829.6  # fallback when trial_stop is missing
 
 
 # ══════════════════════════════════════════════════════════════════════
 # L0 — Data Loading
 # ══════════════════════════════════════════════════════════════════════
+
 
 def _parse_details(raw: Any) -> dict:
     """Parse a single 'details' cell — may be JSON string, NaN, or dict."""
@@ -150,13 +158,16 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict], dict[Any, f
             t_stop = float(stop_lookup[tid])
         else:
             t_stop = t_start + (LEGACY_TRIAL_DURATION_MS / 1000.0)
-            log.debug("Trial %s: no trial_stop found, using fallback t_stop=%.1f",
-                       tid, t_stop)
-        trial_windows.append({
-            "global_trial_id": tid,
-            "t_start": t_start,
-            "t_stop": t_stop,
-        })
+            log.debug(
+                "Trial %s: no trial_stop found, using fallback t_stop=%.1f", tid, t_stop
+            )
+        trial_windows.append(
+            {
+                "global_trial_id": tid,
+                "t_start": t_start,
+                "t_stop": t_stop,
+            }
+        )
 
     # ── TTC anchors from phase_transition → Collision_TTC0 ──
     ttc_anchors: dict[Any, float] = {}
@@ -166,8 +177,10 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict], dict[Any, f
         if details.get("to_phase") == "Collision_TTC0":
             tid = row["global_trial_id"]
             ttc_anchors[tid] = float(row["timestamp"])
-    log.info("Extracted %d Collision_TTC0 anchors from phase_transition events.",
-             len(ttc_anchors))
+    log.info(
+        "Extracted %d Collision_TTC0 anchors from phase_transition events.",
+        len(ttc_anchors),
+    )
 
     # ── Metadata from trial_start details ──
     parsed = starts["details"].apply(_parse_details)
@@ -195,6 +208,7 @@ def load_kinematics(path: str | Path) -> pd.DataFrame:
 # L0 — Preprocessing: Timestamp-Based Slicing & Integration
 # ══════════════════════════════════════════════════════════════════════
 
+
 def _slice_kinematics_by_window(
     kin: pd.DataFrame,
     window: dict,
@@ -217,12 +231,21 @@ def _slice_kinematics_by_window(
     if trial_kin.empty:
         trial_kin = kin[kin["global_trial_id"] == tid].copy()
         if not trial_kin.empty:
-            log.debug("Trial %s: timestamp slice empty, fell back to global_trial_id match "
-                       "(%d frames)", tid, len(trial_kin))
+            log.debug(
+                "Trial %s: timestamp slice empty, fell back to global_trial_id match "
+                "(%d frames)",
+                tid,
+                len(trial_kin),
+            )
 
     if trial_kin.empty:
-        log.warning("Trial %s: no kinematics data found (t_start=%.1f, t_stop=%.1f). "
-                     "Skipping.", tid, t_start, t_stop)
+        log.warning(
+            "Trial %s: no kinematics data found (t_start=%.1f, t_stop=%.1f). "
+            "Skipping.",
+            tid,
+            t_start,
+            t_stop,
+        )
 
     # Ensure global_trial_id is set consistently
     trial_kin["global_trial_id"] = tid
@@ -260,9 +283,10 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     df.loc[df.index[:2], "dx"] = 0.0
     df.loc[df.index[:2], "dy"] = 0.0
 
-    # Force-flip hardware X axis to align with real left-right space
+    # Force-flip hardware axes to align with real-world space
+    # (spherical treadmill: forward locomotion rolls the ball backward)
     x_raw = (-df["dx"]).cumsum().values
-    y_raw = df["dy"].cumsum().values
+    y_raw = (-df["dy"]).cumsum().values
 
     # Savitzky-Golay smoothing on accumulated positions
     median_dt = df["sys_time"].diff().replace(0, np.nan).median()
@@ -277,8 +301,12 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
 
     n = len(x_raw)
     if n >= win:
-        x_smooth = savgol_filter(x_raw, window_length=win, polyorder=poly_order, deriv=0)
-        y_smooth = savgol_filter(y_raw, window_length=win, polyorder=poly_order, deriv=0)
+        x_smooth = savgol_filter(
+            x_raw, window_length=win, polyorder=poly_order, deriv=0
+        )
+        y_smooth = savgol_filter(
+            y_raw, window_length=win, polyorder=poly_order, deriv=0
+        )
     else:
         # Too few points for S-G filter; fall back to raw positions
         x_smooth = x_raw
@@ -295,7 +323,7 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     if n > 1:
         dx_smooth[0] = x_smooth[1] - x_smooth[0]
         dy_smooth[0] = y_smooth[1] - y_smooth[0]
-    speed = np.sqrt(dx_smooth ** 2 + dy_smooth ** 2) / dt_sec  # mm/s
+    speed = np.sqrt(dx_smooth**2 + dy_smooth**2) / dt_sec  # mm/s
     speed[0] = np.nan  # dt[0] is NaN from diff()
 
     # Trim unstable boundary frames (half-window on each side)
@@ -309,7 +337,9 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     return df
 
 
-def _compute_theoretical_ttc_ms(lv_ratio_ms: float, init_half_angle_deg: float) -> float:
+def _compute_theoretical_ttc_ms(
+    lv_ratio_ms: float, init_half_angle_deg: float
+) -> float:
     """
     Compute theoretical TTC (ms) from looming parameters for control trials
     that never triggered a Collision_TTC0 phase_transition.
@@ -317,11 +347,14 @@ def _compute_theoretical_ttc_ms(lv_ratio_ms: float, init_half_angle_deg: float) 
     TTC = lv_ratio_ms / (1 - sin(init_half_angle_deg * π / 180))
     """
     import math
+
     rad = math.radians(init_half_angle_deg)
     denom = 1.0 - math.sin(rad)
     if denom <= 0:
-        log.warning("init_half_angle_deg=%.1f yields sin≥1; TTC undefined, returning lv_ratio_ms.",
-                     init_half_angle_deg)
+        log.warning(
+            "init_half_angle_deg=%.1f yields sin≥1; TTC undefined, returning lv_ratio_ms.",
+            init_half_angle_deg,
+        )
         return lv_ratio_ms
     return lv_ratio_ms / denom
 
@@ -363,18 +396,33 @@ def preprocess(
             lv_ratio = np.nan
             init_angle = np.nan
             if not meta_row.empty:
-                lv_ratio = meta_row["lv_ratio_ms"].iloc[0] if "lv_ratio_ms" in meta_row.columns else np.nan
-                init_angle = meta_row["init_half_angle_deg"].iloc[0] if "init_half_angle_deg" in meta_row.columns else np.nan
+                lv_ratio = (
+                    meta_row["lv_ratio_ms"].iloc[0]
+                    if "lv_ratio_ms" in meta_row.columns
+                    else np.nan
+                )
+                init_angle = (
+                    meta_row["init_half_angle_deg"].iloc[0]
+                    if "init_half_angle_deg" in meta_row.columns
+                    else np.nan
+                )
 
             if pd.notna(lv_ratio) and pd.notna(init_angle):
-                t_col_ms = _compute_theoretical_ttc_ms(float(lv_ratio), float(init_angle))
+                t_col_ms = _compute_theoretical_ttc_ms(
+                    float(lv_ratio), float(init_angle)
+                )
                 t_zero_sys = window["t_start"] + (t_col_ms / 1000.0)
-                log.debug("Trial %s: no TTC anchor, fallback t_col_ms=%.1f ms", tid, t_col_ms)
+                log.debug(
+                    "Trial %s: no TTC anchor, fallback t_col_ms=%.1f ms", tid, t_col_ms
+                )
             else:
                 # Last resort: use trial midpoint
                 t_zero_sys = (window["t_start"] + window["t_stop"]) / 2.0
-                log.warning("Trial %s: no TTC anchor and no lv_ratio/init_angle; "
-                            "using trial midpoint as zero.", tid)
+                log.warning(
+                    "Trial %s: no TTC anchor and no lv_ratio/init_angle; "
+                    "using trial midpoint as zero.",
+                    tid,
+                )
 
         try:
             parts.append(_integrate_trial(trial_kin, t_zero_sys))
@@ -390,6 +438,7 @@ def preprocess(
 # Plot 1 — Trajectory Overlay
 # ══════════════════════════════════════════════════════════════════════
 
+
 def _draw_cross_axes(ax: plt.Axes, scale_bar_val: float = SCALE_BAR_MM):
     """Draw cross-shaped origin axes with arrowheads and a minimalist scale bar."""
     for spine in ax.spines.values():
@@ -400,51 +449,89 @@ def _draw_cross_axes(ax: plt.Axes, scale_bar_val: float = SCALE_BAR_MM):
     ylim = ax.get_ylim()
 
     # Horizontal axis (y=0)
-    ax.annotate("", xy=(xlim[1], 0), xytext=(xlim[0], 0),
-                arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75))
+    ax.annotate(
+        "",
+        xy=(xlim[1], 0),
+        xytext=(xlim[0], 0),
+        arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75),
+    )
     # Vertical axis (x=0)
-    ax.annotate("", xy=(0, ylim[1]), xytext=(0, ylim[0]),
-                arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75))
+    ax.annotate(
+        "",
+        xy=(0, ylim[1]),
+        xytext=(0, ylim[0]),
+        arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75),
+    )
 
     # Scale bar — minimal solid black line, text tight and centered
     sb_x = xlim[1] * 0.65
     sb_y = ylim[0] * 0.85
-    ax.plot([sb_x, sb_x + scale_bar_val], [sb_y, sb_y], "k-", lw=1.0, solid_capstyle="butt")
-    ax.text(sb_x + scale_bar_val / 2, sb_y - (ylim[1] - ylim[0]) * 0.02,
-            f"{scale_bar_val:.0f} mm", ha="center", va="top", fontsize=7)
+    ax.plot(
+        [sb_x, sb_x + scale_bar_val], [sb_y, sb_y], "k-", lw=1.0, solid_capstyle="butt"
+    )
+    ax.text(
+        sb_x + scale_bar_val / 2,
+        sb_y - (ylim[1] - ylim[0]) * 0.02,
+        f"{scale_bar_val:.0f} mm",
+        ha="center",
+        va="top",
+        fontsize=7,
+    )
 
 
-def _draw_side_arrows(ax: plt.Axes, left_color: str = COLOR_LEFT, right_color: str = COLOR_RIGHT):
+def _draw_side_arrows(
+    ax: plt.Axes, left_color: str = COLOR_LEFT, right_color: str = COLOR_RIGHT
+):
     """
     Draw minimalist vector arrows on LEFT and RIGHT edges with text labels below.
     Uses axes-fraction coords. Arrows point inward (airflow toward center).
     """
     arrow_style = dict(
         arrowstyle="-|>",
-        color=None,   # set per arrow
+        color=None,  # set per arrow
         lw=1.0,
         mutation_scale=8,
     )
 
     # Left arrow → points right (airflow from left toward center)
     ax.annotate(
-        "", xy=(0.04, 0.5), xytext=(-0.02, 0.5),
-        xycoords="axes fraction", textcoords="axes fraction",
+        "",
+        xy=(0.04, 0.5),
+        xytext=(-0.02, 0.5),
+        xycoords="axes fraction",
+        textcoords="axes fraction",
         arrowprops={**arrow_style, "color": left_color},
     )
-    ax.text(0.01, 0.45, "Left Stimulus",
-            transform=ax.transAxes, ha="center", va="top",
-            fontsize=7, color=left_color)
+    ax.text(
+        0.01,
+        0.45,
+        "Left Stimulus",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=7,
+        color=left_color,
+    )
 
     # Right arrow → points left (airflow from right toward center)
     ax.annotate(
-        "", xy=(0.96, 0.5), xytext=(1.02, 0.5),
-        xycoords="axes fraction", textcoords="axes fraction",
+        "",
+        xy=(0.96, 0.5),
+        xytext=(1.02, 0.5),
+        xycoords="axes fraction",
+        textcoords="axes fraction",
         arrowprops={**arrow_style, "color": right_color},
     )
-    ax.text(0.99, 0.45, "Right Stimulus",
-            transform=ax.transAxes, ha="center", va="top",
-            fontsize=7, color=right_color)
+    ax.text(
+        0.99,
+        0.45,
+        "Right Stimulus",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=7,
+        color=right_color,
+    )
 
 
 def plot_trajectory_overlay(
@@ -465,8 +552,9 @@ def plot_trajectory_overlay(
         return fig
 
     n = len(all_types)
-    fig, axes = plt.subplots(1, n, figsize=(figsize_per_ax[0] * n, figsize_per_ax[1]),
-                             squeeze=False)
+    fig, axes = plt.subplots(
+        1, n, figsize=(figsize_per_ax[0] * n, figsize_per_ax[1]), squeeze=False
+    )
     axes = axes[0]
 
     for idx, ttype in enumerate(all_types):
@@ -474,8 +562,11 @@ def plot_trajectory_overlay(
         subset = df[df["type"] == ttype]
 
         for _tid, grp in subset.groupby("global_trial_id"):
-            ss = str(grp["screen_side"].iloc[0]).strip().lower() \
-                if pd.notna(grp["screen_side"].iloc[0]) else ""
+            ss = (
+                str(grp["screen_side"].iloc[0]).strip().lower()
+                if pd.notna(grp["screen_side"].iloc[0])
+                else ""
+            )
             if ttype == control_type:
                 color = COLOR_CONTROL
             elif ss == "left":
@@ -498,6 +589,7 @@ def plot_trajectory_overlay(
 # ══════════════════════════════════════════════════════════════════════
 # Plot 2 — Speed Kinetics & Oscilloscope Dual-Channel Waveforms
 # ══════════════════════════════════════════════════════════════════════
+
 
 def plot_speed_kinetics(
     df: pd.DataFrame,
@@ -524,8 +616,9 @@ def plot_speed_kinetics(
     t_max = df["t_rel"].max()
     bins = np.arange(t_min, t_max + t_bin, t_bin)
     df_binned = df.copy()
-    df_binned["t_bin"] = pd.cut(df_binned["t_rel"], bins=bins,
-                                labels=bins[:-1], include_lowest=True)
+    df_binned["t_bin"] = pd.cut(
+        df_binned["t_rel"], bins=bins, labels=bins[:-1], include_lowest=True
+    )
     df_binned["t_bin"] = df_binned["t_bin"].astype(float)
 
     cond_colors = {control_type: COLOR_CONTROL, stim_type: COLOR_LEFT}
@@ -534,17 +627,23 @@ def plot_speed_kinetics(
         if subset.empty:
             continue
         # Step 1: per-trial mean within each time bin
-        trial_means = (subset.groupby(["global_trial_id", "t_bin"])["speed"]
-                       .mean()
-                       .reset_index())
+        trial_means = (
+            subset.groupby(["global_trial_id", "t_bin"])["speed"].mean().reset_index()
+        )
         # Step 2: cross-trial mean and SEM
         agg = trial_means.groupby("t_bin")["speed"]
         mean = agg.mean()
         sem = agg.sem()
         t_vals = mean.index.values
         ax_main.plot(t_vals, mean.values, color=color, lw=1.0, label=cond)
-        ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
-                             color=color, alpha=0.2, edgecolor="none")
+        ax_main.fill_between(
+            t_vals,
+            (mean - sem).values,
+            (mean + sem).values,
+            color=color,
+            alpha=0.2,
+            edgecolor="none",
+        )
 
     ax_main.set_ylabel("Escape Speed (mm/s)")
     ax_main.legend(loc="upper right", frameon=False)
@@ -559,15 +658,23 @@ def plot_speed_kinetics(
     stim_t_rel = df.loc[df["type"] == stim_type, "t_rel"]
     t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
     t_loom = np.array([t_loom_start, 0.0])
-    ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
-                         step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
-                         label="Visual (looming)")
+    ax_stim.fill_between(
+        t_loom,
+        vis_baseline,
+        vis_baseline + 1.0,
+        step="mid",
+        color=COLOR_OSCI_VIS,
+        alpha=0.6,
+        label="Visual (looming)",
+    )
 
     # Channel 2: Wind stim_state from real hardware data
     stim_subset = df[df["type"] == stim_type]
     if not stim_subset.empty:
         first_tid = stim_subset["global_trial_id"].iloc[0]
-        grp = stim_subset[stim_subset["global_trial_id"] == first_tid].sort_values("t_rel")
+        grp = stim_subset[stim_subset["global_trial_id"] == first_tid].sort_values(
+            "t_rel"
+        )
         t_wind = grp["t_rel"].values
         stim = grp["stim_state"].values.astype(float)
 
@@ -579,9 +686,15 @@ def plot_speed_kinetics(
         t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
         stim_ext = np.append(stim, stim[-1])
 
-        ax_stim.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
-                             step="post", color=COLOR_OSCI_HW, alpha=0.6,
-                             label="Wind (stim_state)")
+        ax_stim.fill_between(
+            t_wind_ext,
+            wind_baseline,
+            wind_baseline + stim_ext,
+            step="post",
+            color=COLOR_OSCI_HW,
+            alpha=0.6,
+            label="Wind (stim_state)",
+        )
 
     ax_stim.set_ylim(0, 5)
     ax_stim.set_yticks([])
@@ -598,94 +711,175 @@ def plot_spaghetti_kinetics(
     df: pd.DataFrame,
     control_type: str = "baseline_visual",
     stim_type: str = "looming_wind",
-    figsize: tuple[float, float] = (10, 6),
+    figsize_per_col: float = 4.5,
+    row_height: float = 5.0,
 ):
     """
-    Two-panel figure (4:1 height ratio) with shared X axis.
+    Multi-panel spaghetti plot with per-condition spatial decoupling.
 
-    Upper panel: Single-trial speed traces (spaghetti) with population mean ± SEM.
-    Lower panel: Oscilloscope-style dual-channel stimulus waveforms.
+    Layout: 2 rows × N columns (one column per condition).
+        Row 0 — Speed spaghetti: tab20 per-trial coloring, white-stroked mean ± SEM
+        Row 1 — Oscilloscope: independent Visual + Wind channels per condition
+    All upper panels share Y axis; all columns share X axis within each row.
     """
-    fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
-    ax_main = fig.add_subplot(gs[0])
-    ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
+    # Resolve conditions and their NPG colors
+    cond_color_map = {control_type: COLOR_CONTROL}
+    for ttype in df["type"].dropna().unique():
+        if ttype == control_type:
+            continue
+        sample = df[df["type"] == ttype].iloc[0]
+        ss = str(sample.get("screen_side", "")).strip().lower()
+        cond_color_map[ttype] = (
+            COLOR_LEFT if ss == "left" else COLOR_RIGHT if ss == "right" else COLOR_LEFT
+        )
 
-    # ── Upper panel: spaghetti + mean ± SEM ──
-    cond_colors = {control_type: COLOR_CONTROL, stim_type: COLOR_LEFT}
-    for cond, color in cond_colors.items():
+    conditions = sorted(cond_color_map.keys())
+    n_conds = len(conditions)
+    if n_conds == 0:
+        fig, ax = plt.subplots()
+        return fig
+
+    # tab20 colormap for individual trials
+    cmap = plt.cm.get_cmap("tab20")
+    trial_idx = 0
+
+    fig = plt.figure(figsize=(figsize_per_col * n_conds, row_height * 2))
+    gs = gridspec.GridSpec(
+        2, n_conds, height_ratios=[4, 1], hspace=0.1, wspace=0.15, figure=fig
+    )
+
+    # Build axes: row 0 shares Y, row 1 shares X with its own column in row 0
+    ax_upper = []
+    ax_lower = []
+    for j in range(n_conds):
+        sharey = ax_upper[0] if ax_upper else None
+        ax_u = fig.add_subplot(gs[0, j], sharey=sharey)
+        ax_upper.append(ax_u)
+        ax_l = fig.add_subplot(gs[1, j], sharex=ax_u)
+        ax_lower.append(ax_l)
+
+    # ── Row 0: Speed spaghetti per condition ──
+    for j, cond in enumerate(conditions):
+        ax = ax_upper[j]
         subset = df[df["type"] == cond]
+        cond_color = cond_color_map[cond]
+
         if subset.empty:
+            ax.set_title(cond, fontweight="bold")
             continue
 
-        # Background layer: individual trial traces
+        # Background: individual trial traces with tab20 colors
         for _tid, grp in subset.groupby("global_trial_id"):
             grp_sorted = grp.sort_values("t_rel")
-            ax_main.plot(grp_sorted["t_rel"], grp_sorted["speed"],
-                         color=color, lw=0.3, alpha=0.15)
+            trial_color = cmap(trial_idx % 20)
+            trial_idx += 1
+            ax.plot(
+                grp_sorted["t_rel"],
+                grp_sorted["speed"],
+                color=trial_color,
+                lw=0.75,
+                alpha=0.6,
+            )
 
-        # Foreground layer: population mean ± SEM (binned two-step aggregation)
+        # Foreground: two-step aggregated mean ± SEM
         t_bin = 5.0
         t_min = subset["t_rel"].min()
         t_max = subset["t_rel"].max()
         bins = np.arange(t_min, t_max + t_bin, t_bin)
         binned = subset.copy()
-        binned["t_bin"] = pd.cut(binned["t_rel"], bins=bins,
-                                 labels=bins[:-1], include_lowest=True)
+        binned["t_bin"] = pd.cut(
+            binned["t_rel"], bins=bins, labels=bins[:-1], include_lowest=True
+        )
         binned["t_bin"] = binned["t_bin"].astype(float)
 
-        trial_means = (binned.groupby(["global_trial_id", "t_bin"])["speed"]
-                       .mean()
-                       .reset_index())
+        trial_means = (
+            binned.groupby(["global_trial_id", "t_bin"])["speed"].mean().reset_index()
+        )
         agg = trial_means.groupby("t_bin")["speed"]
         mean = agg.mean()
         sem = agg.sem()
         t_vals = mean.index.values
 
-        ax_main.plot(t_vals, mean.values, color=color, lw=1.5, alpha=1.0, label=cond)
-        ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
-                             color=color, alpha=0.2, edgecolor="none")
+        # White stroke underneath for contrast
+        ax.plot(
+            t_vals,
+            mean.values,
+            color="white",
+            lw=4.0,
+            alpha=0.8,
+            solid_capstyle="round",
+        )
+        # NPG-colored mean on top
+        ax.plot(t_vals, mean.values, color=cond_color, lw=2.0, alpha=1.0, label=cond)
+        ax.fill_between(
+            t_vals,
+            (mean - sem).values,
+            (mean + sem).values,
+            color=cond_color,
+            alpha=0.2,
+            edgecolor="none",
+        )
 
-    ax_main.set_ylabel("Escape Speed (mm/s)")
-    ax_main.legend(loc="upper right", frameon=False)
-    ax_main.set_xlabel("")
-    plt.setp(ax_main.get_xticklabels(), visible=False)
-
-    # ── Lower panel: oscilloscope waveforms ──
-    vis_baseline = 1.0
-    wind_baseline = 3.0
-
-    stim_t_rel = df.loc[df["type"] == stim_type, "t_rel"]
-    t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
-    t_loom = np.array([t_loom_start, 0.0])
-    ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
-                         step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
-                         label="Visual (looming)")
-
-    stim_subset = df[df["type"] == stim_type]
-    if not stim_subset.empty:
-        first_tid = stim_subset["global_trial_id"].iloc[0]
-        grp = stim_subset[stim_subset["global_trial_id"] == first_tid].sort_values("t_rel")
-        t_wind = grp["t_rel"].values
-        stim = grp["stim_state"].values.astype(float)
-
-        if len(t_wind) > 1:
-            dt_last = t_wind[-1] - t_wind[-2]
+        ax.set_title(cond, fontweight="bold")
+        if j == 0:
+            ax.set_ylabel("Escape Speed (mm/s)")
         else:
-            dt_last = 1.0
-        t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
-        stim_ext = np.append(stim, stim[-1])
+            plt.setp(ax.get_yticklabels(), visible=False)
+        plt.setp(ax.get_xticklabels(), visible=False)
+        ax.legend(loc="upper right", frameon=False)
 
-        ax_stim.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
-                             step="post", color=COLOR_OSCI_HW, alpha=0.6,
-                             label="Wind (stim_state)")
+    # ── Row 1: Oscilloscope channels per condition ──
+    for j, cond in enumerate(conditions):
+        ax = ax_lower[j]
+        subset = df[df["type"] == cond]
+        vis_baseline = 1.0
+        wind_baseline = 3.0
 
-    ax_stim.set_ylim(0, 5)
-    ax_stim.set_yticks([])
-    ax_stim.set_ylabel("")
-    ax_stim.set_xlabel("Time relative to TTC (ms)")
-    ax_stim.legend(loc="upper right", frameon=False, ncol=2)
-    ax_stim.grid(False)
+        # Channel 1: Visual looming
+        stim_t_rel = subset["t_rel"]
+        t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
+        t_loom = np.array([t_loom_start, 0.0])
+        ax.fill_between(
+            t_loom,
+            vis_baseline,
+            vis_baseline + 1.0,
+            step="mid",
+            color=COLOR_OSCI_VIS,
+            alpha=0.6,
+            label="Visual (looming)",
+        )
+
+        # Channel 2: Wind stim_state
+        if not subset.empty:
+            first_tid = subset["global_trial_id"].iloc[0]
+            grp = subset[subset["global_trial_id"] == first_tid].sort_values("t_rel")
+            t_wind = grp["t_rel"].values
+            stim = grp["stim_state"].values.astype(float)
+
+            if len(t_wind) > 1:
+                dt_last = t_wind[-1] - t_wind[-2]
+            else:
+                dt_last = 1.0
+            t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
+            stim_ext = np.append(stim, stim[-1])
+
+            ax.fill_between(
+                t_wind_ext,
+                wind_baseline,
+                wind_baseline + stim_ext,
+                step="post",
+                color=COLOR_OSCI_HW,
+                alpha=0.6,
+                label="Wind (stim_state)",
+            )
+
+        ax.set_ylim(0, 5)
+        ax.set_yticks([])
+        ax.set_ylabel("")
+        ax.set_xlabel("Time relative to TTC (ms)")
+        ax.grid(False)
+        if j == 0:
+            ax.legend(loc="upper right", frameon=False, ncol=2)
 
     fig.tight_layout(pad=1.0)
     return fig
@@ -695,6 +889,7 @@ def plot_spaghetti_kinetics(
 # CLI Entry Point
 # ══════════════════════════════════════════════════════════════════════
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Cercus framework — trajectory & speed analysis (TTC-aligned)",
@@ -702,12 +897,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--events", required=True, help="Path to *_events.csv")
     p.add_argument("--kinematics", required=True, help="Path to *_kinematics.csv")
-    p.add_argument("--control-type", default="baseline_visual",
-                   help="Trial type for control condition (default: baseline_visual)")
-    p.add_argument("--stim-type", default="looming_wind",
-                   help="Trial type for stimulus condition (default: looming_wind)")
-    p.add_argument("--save", default=None,
-                   help="Directory to save PNG figures. Omit to show interactively.")
+    p.add_argument(
+        "--control-type",
+        default="baseline_visual",
+        help="Trial type for control condition (default: baseline_visual)",
+    )
+    p.add_argument(
+        "--stim-type",
+        default="looming_wind",
+        help="Trial type for stimulus condition (default: looming_wind)",
+    )
+    p.add_argument(
+        "--save",
+        default=None,
+        help="Directory to save PNG figures. Omit to show interactively.",
+    )
     return p
 
 
@@ -717,8 +921,12 @@ def main(argv: list[str] | None = None):
     # ── Load events (extract trial windows, metadata, TTC anchors) ──
     log.info("Loading events: %s", args.events)
     meta, trial_windows, ttc_anchors = load_events(args.events)
-    log.info("  → %d trials with metadata, %d time windows, %d TTC anchors",
-             len(meta), len(trial_windows), len(ttc_anchors))
+    log.info(
+        "  → %d trials with metadata, %d time windows, %d TTC anchors",
+        len(meta),
+        len(trial_windows),
+        len(ttc_anchors),
+    )
 
     log.info("Loading kinematics: %s", args.kinematics)
     kin = load_kinematics(args.kinematics)
@@ -751,7 +959,9 @@ def main(argv: list[str] | None = None):
         out.mkdir(parents=True, exist_ok=True)
         fig_traj.savefig(out / "trajectory_overlay.png", dpi=300, bbox_inches="tight")
         fig_speed.savefig(out / "speed_kinetics.png", dpi=300, bbox_inches="tight")
-        fig_spaghetti.savefig(out / "spaghetti_kinetics.png", dpi=300, bbox_inches="tight")
+        fig_spaghetti.savefig(
+            out / "spaghetti_kinetics.png", dpi=300, bbox_inches="tight"
+        )
         log.info("Figures saved to %s", out)
     else:
         plt.show()

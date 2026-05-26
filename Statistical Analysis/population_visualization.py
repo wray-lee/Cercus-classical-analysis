@@ -321,21 +321,18 @@ def plot_population_spaghetti_kinetics(
     ts: pd.DataFrame,
     control_type: str = "baseline_visual",
     stim_type: str = "looming_wind",
-    figsize: tuple[float, float] = (10, 6),
+    figsize_per_ax: tuple[float, float] = (5, 6),
 ) -> plt.Figure:
     """
-    Two-panel figure (4:1 height ratio) with shared X axis.
+    Multi-panel figure: 1 row × N columns (one panel per condition).
 
-    Upper panel: Background layer with all individual speed traces (alpha=0.05, lw=0.2),
-    foreground layer with population mean ± SEM (lw=1.5).
-    Lower panel: Oscilloscope-style dual-channel stimulus waveforms.
+    Each panel:
+        Background — individual trial spaghetti lines colored by subject_id (tab20)
+        Foreground — population mean ± SEM with white stroke for visibility
+    Shared Y axis across all panels.
+    Bottom row: oscilloscope-style stimulus channels.
     """
-    fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
-    ax_main = fig.add_subplot(gs[0])
-    ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
-
-    # Condition color mapping
+    # Resolve condition list and colors
     cond_colors = {}
     for ttype in ts["type"].dropna().unique():
         if ttype == control_type:
@@ -350,31 +347,71 @@ def plot_population_spaghetti_kinetics(
             else:
                 cond_colors[ttype] = COLOR_LEFT
 
-    for cond, color in cond_colors.items():
+    conditions = sorted(cond_colors.keys())
+    n_conds = len(conditions) if conditions else 1
+
+    # Build subject → tab20 color mapping across entire dataset
+    all_subjects = sorted(ts["subject_id"].dropna().unique()) if "subject_id" in ts.columns else []
+    cmap = plt.cm.get_cmap("tab20", max(len(all_subjects), 1))
+    subj_color_map = {sid: cmap(i) for i, sid in enumerate(all_subjects)}
+
+    fig = plt.figure(figsize=(figsize_per_ax[0] * n_conds, figsize_per_ax[1]))
+    outer_gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08,
+                                 figure=fig)
+
+    # Upper row: condition panels sharing Y axis
+    inner_gs = gridspec.GridSpecFromSubplotSpec(
+        1, n_conds, subplot_spec=outer_gs[0], wspace=0.08,
+    )
+    axes = []
+    for i in range(n_conds):
+        share = axes[0] if axes else None
+        ax = fig.add_subplot(inner_gs[0, i], sharey=share)
+        axes.append(ax)
+
+    for idx, cond in enumerate(conditions):
+        ax = axes[idx]
         subset = ts[ts["type"] == cond]
+        cond_color = cond_colors[cond]
+
         if subset.empty:
+            ax.set_title(cond, fontweight="bold")
             continue
 
-        # Background layer: individual trial traces
+        # Background: per-subject spaghetti (tab20 individual colors)
         trial_key = ["subject_id", "global_trial_id"] if "subject_id" in subset.columns \
             else ["global_trial_id"]
-        for _, grp in subset.groupby(trial_key):
+        for key, grp in subset.groupby(trial_key):
             grp_sorted = grp.sort_values("t_rel")
-            ax_main.plot(grp_sorted["t_rel"], grp_sorted["speed"],
-                         color=color, lw=0.2, alpha=0.05)
+            sid = key[0] if isinstance(key, tuple) else key
+            line_color = subj_color_map.get(sid, cond_color)
+            ax.plot(grp_sorted["t_rel"], grp_sorted["speed"],
+                    color=line_color, lw=0.3, alpha=0.3)
 
-        # Foreground layer: population mean ± SEM (two-step aggregation)
+        # Foreground: population mean ± SEM
         t_vals, mean, sem = _two_step_aggregate(subset)
-        ax_main.plot(t_vals, mean, color=color, lw=1.5, alpha=1.0, label=cond)
-        ax_main.fill_between(t_vals, mean - sem, mean + sem,
-                             color=color, alpha=0.2, edgecolor="none")
 
-    ax_main.set_ylabel("Escape Speed (mm/s)")
-    ax_main.legend(loc="upper right", frameon=False)
-    ax_main.set_xlabel("")
-    plt.setp(ax_main.get_xticklabels(), visible=False)
+        # White stroke underneath for contrast against colored spaghetti
+        ax.plot(t_vals, mean, color="white", lw=4.0, alpha=1.0, solid_capstyle="round")
+        # Condition-colored mean line on top
+        ax.plot(t_vals, mean, color=cond_color, lw=1.5, alpha=1.0, label=cond)
+        ax.fill_between(t_vals, mean - sem, mean + sem,
+                        color=cond_color, alpha=0.2, edgecolor="none")
+
+        ax.set_title(cond, fontweight="bold")
+        if idx == 0:
+            ax.set_ylabel("Escape Speed (mm/s)")
+        else:
+            plt.setp(ax.get_yticklabels(), visible=False)
+
+    # Shared X label hidden on upper panels
+    for ax in axes:
+        plt.setp(ax.get_xticklabels(), visible=False)
+    axes[-1].legend(loc="upper right", frameon=False)
 
     # ── Lower panel: oscilloscope waveforms ──
+    ax_stim = fig.add_subplot(outer_gs[1], sharex=axes[0] if axes else None)
+
     vis_baseline = 1.0
     wind_baseline = 3.0
 

@@ -1,13 +1,13 @@
 """
-Population Statistics — Mixed-Effects Models & Circular Statistics
-=================================================================
+Population Statistics — GEE & Circular Statistics
+=================================================
 Reads population_master.csv from aggregator.py and runs:
-    1. Linear Mixed-Effects Model (LMM) for escape probability
+    1. Generalized Estimating Equation (GEE) for escape probability
     2. Circular statistics (Rayleigh Test) for escape direction preference
     3. Publication-grade statistical plots
 
 Outputs:
-    escape_probability_lmm.png — LMM escape probability bar/box plot
+    escape_probability_lmm.png — GEE escape probability bar/box plot
     escape_direction_rose.png  — Polar rose plot with KDE and mean vector
 
 Usage:
@@ -100,17 +100,19 @@ def _resolve_color(condition: str) -> str:
 
 def run_escape_lmm(master: pd.DataFrame) -> dict:
     """
-    Fit a Linear Mixed-Effects Model for escape probability.
+    Fit a Generalized Estimating Equation (GEE) for escape probability.
 
-    Model: is_escaped ~ type  (random intercept for subject_id)
-    Uses statsmodels MixedLM.
+    Model: is_escaped ~ type  (Binomial family, grouped by subject_id)
+    Uses statsmodels GEE — appropriate for binary (0/1) outcomes where
+    a linear mixed model violates the Gaussian assumption.
 
     Returns dict with model summary and per-condition escape rates.
     """
     try:
-        from statsmodels.formula.api import mixedlm
+        import statsmodels.api as sm
+        import statsmodels.formula.api as smf
     except ImportError:
-        log.warning("statsmodels not installed. Skipping LMM. "
+        log.warning("statsmodels not installed. Skipping GEE. "
                     "Install with: pip install statsmodels")
         return {"model": None, "rates": _compute_escape_rates(master)}
 
@@ -122,16 +124,17 @@ def run_escape_lmm(master: pd.DataFrame) -> dict:
     df = df.dropna(subset=["subject_id", "type", "is_escaped"])
 
     if df.empty or df["subject_id"].nunique() < 2:
-        log.warning("Insufficient data for LMM (need >= 2 subjects). Skipping.")
+        log.warning("Insufficient data for GEE (need >= 2 subjects). Skipping.")
         return {"model": None, "rates": _compute_escape_rates(master)}
 
     try:
-        model = mixedlm("is_escaped ~ type", data=df, groups=df["subject_id"])
+        model = smf.gee("is_escaped ~ type", data=df, groups=df["subject_id"],
+                        family=sm.families.Binomial())
         result = model.fit()
-        log.info("LMM fitted successfully.\n%s", result.summary().as_text())
+        log.info("GEE fitted successfully.\n%s", result.summary().as_text())
         return {"model": result, "rates": _compute_escape_rates(master)}
     except Exception as exc:
-        log.warning("LMM fitting failed: %s", exc)
+        log.warning("GEE fitting failed: %s", exc)
         return {"model": None, "rates": _compute_escape_rates(master)}
 
 
@@ -203,15 +206,15 @@ def plot_escape_probability(
     ax.set_ylabel("Escape Probability")
     ax.set_ylim(0, 1.05)
 
-    # Add LMM p-value annotation if available
+    # Add GEE p-value annotation if available
     if lmm_result and lmm_result.get("model") is not None:
         try:
             pvals = lmm_result["model"].pvalues
-            type_pvals = {k: v for k, v in pvals.items() if k != "Intercept" and k != "Group Var"}
+            type_pvals = {k: v for k, v in pvals.items() if k != "Intercept"}
             if type_pvals:
                 min_p = min(type_pvals.values())
                 sig = "***" if min_p < 0.001 else "**" if min_p < 0.01 else "*" if min_p < 0.05 else "n.s."
-                ax.text(0.98, 0.95, f"LMM p={min_p:.4f} {sig}",
+                ax.text(0.98, 0.95, f"GEE p={min_p:.4f} {sig}",
                         transform=ax.transAxes, ha="right", va="top", fontsize=7)
         except Exception:
             pass
@@ -416,14 +419,14 @@ def run_stats_pipeline(
 
     Returns
     -------
-    lmm_result : dict with LMM model and escape rates
+    lmm_result : dict with GEE model and escape rates
     circ_result : dict with circular statistics per condition
     """
     master = pd.read_csv(master_path)
     log.info("Loaded population_master.csv: %d trials, %d subjects",
              len(master), master["subject_id"].nunique() if "subject_id" in master.columns else 0)
 
-    # 1. LMM for escape probability
+    # 1. GEE for escape probability
     lmm_result = run_escape_lmm(master)
 
     # 2. Circular statistics
@@ -453,7 +456,7 @@ def run_stats_pipeline(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Population statistics — LMM escape probability & circular direction analysis",
+        description="Population statistics — GEE escape probability & circular direction analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--input", required=True, help="Path to population_master.csv")

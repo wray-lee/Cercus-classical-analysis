@@ -129,13 +129,17 @@ def _classify_behavior(trial: pd.DataFrame) -> str:
 
     # Check damping: find first peak, then look at subsequent peaks
     peak_idx = np.nanargmax(accel_post)
-    # Look at speed decay after peak
     speed_post = speed[1:][post_mask]
-    if peak_idx + 5 >= len(speed_post):
-        return "Jump"  # High accel with insufficient data for damping → classify as Jump
+    t_post = t[1:][post_mask]
 
-    # Compute ratio of speed at ~50ms after peak to peak speed
-    decay_idx = min(peak_idx + 5, len(speed_post) - 1)
+    # Time-decoupled decay: find the first sample >= 50ms after the peak
+    t_peak = t_post[peak_idx]
+    decay_mask = t_post >= (t_peak + 50.0)
+    if np.any(decay_mask):
+        decay_idx = np.argmax(decay_mask)
+    else:
+        decay_idx = len(speed_post) - 1  # fallback to last frame
+
     peak_speed = speed_post[peak_idx]
     decay_speed = speed_post[decay_idx]
 
