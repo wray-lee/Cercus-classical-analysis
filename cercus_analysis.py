@@ -28,6 +28,58 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
+# Publication-Grade Global Style (Nature / Science / Cell)
+# ──────────────────────────────────────────────────────────────────────
+
+def _apply_publication_style():
+    """Inject Nature/Science/Cell compliant rcParams."""
+    rc = plt.rcParams
+    # Font
+    rc["font.family"] = "sans-serif"
+    rc["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
+    rc["svg.fonttype"] = "none"
+    rc["pdf.fonttype"] = 42
+    # Font sizes
+    rc["font.size"] = 7
+    rc["axes.titlesize"] = 9
+    rc["axes.labelsize"] = 8
+    rc["legend.fontsize"] = 7
+    rc["xtick.labelsize"] = 7
+    rc["ytick.labelsize"] = 7
+    # Lines & spines
+    rc["lines.linewidth"] = 1.0
+    rc["axes.linewidth"] = 0.75
+    rc["axes.spines.top"] = False
+    rc["axes.spines.right"] = False
+    # Ticks
+    rc["xtick.direction"] = "in"
+    rc["ytick.direction"] = "in"
+    rc["xtick.major.size"] = 3
+    rc["ytick.major.size"] = 3
+    rc["xtick.major.width"] = 0.75
+    rc["ytick.major.width"] = 0.75
+    rc["xtick.minor.size"] = 1.5
+    rc["ytick.minor.size"] = 1.5
+    # Legend
+    rc["legend.frameon"] = False
+    rc["legend.borderaxespad"] = 0
+    # Figure
+    rc["figure.dpi"] = 150
+    rc["savefig.dpi"] = 300
+    rc["savefig.transparent"] = True
+
+
+# NPG (Nature Publishing Group) palette
+COLOR_LEFT = "#4DBBD5"       # Nature blue
+COLOR_RIGHT = "#E64B35"      # Nature red
+COLOR_CONTROL = "#999999"    # Neutral gray
+COLOR_OSCI_VIS = "#8491B4"   # Oscilloscope visual channel
+COLOR_OSCI_HW = "#F39B7F"    # Oscilloscope hardware channel
+
+
+_apply_publication_style()
+
+# ──────────────────────────────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────────────────────────────
 DETAILS_KEYS = ("type", "target_ttc_ms", "wind_dir", "screen_side",
@@ -315,7 +367,7 @@ def preprocess(
 # ══════════════════════════════════════════════════════════════════════
 
 def _draw_cross_axes(ax: plt.Axes, scale_bar_val: float = SCALE_BAR_MM):
-    """Draw cross-shaped origin axes with arrowheads and a scale bar."""
+    """Draw cross-shaped origin axes with arrowheads and a minimalist scale bar."""
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
@@ -325,61 +377,62 @@ def _draw_cross_axes(ax: plt.Axes, scale_bar_val: float = SCALE_BAR_MM):
 
     # Horizontal axis (y=0)
     ax.annotate("", xy=(xlim[1], 0), xytext=(xlim[0], 0),
-                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5))
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75))
     # Vertical axis (x=0)
     ax.annotate("", xy=(0, ylim[1]), xytext=(0, ylim[0]),
-                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5))
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75))
 
-    # Scale bar at bottom-right
+    # Scale bar — minimal solid black line, text tight and centered
     sb_x = xlim[1] * 0.65
     sb_y = ylim[0] * 0.85
-    ax.plot([sb_x, sb_x + scale_bar_val], [sb_y, sb_y], "k-", lw=2)
-    ax.text(sb_x + scale_bar_val / 2, sb_y - (ylim[1] - ylim[0]) * 0.04,
-            f"{scale_bar_val:.0f} mm", ha="center", va="top", fontsize=8)
+    ax.plot([sb_x, sb_x + scale_bar_val], [sb_y, sb_y], "k-", lw=1.0, solid_capstyle="butt")
+    ax.text(sb_x + scale_bar_val / 2, sb_y - (ylim[1] - ylim[0]) * 0.02,
+            f"{scale_bar_val:.0f} mm", ha="center", va="top", fontsize=7)
 
 
-def _draw_side_arrows(ax: plt.Axes, left_color: str = "blue", right_color: str = "red"):
+def _draw_side_arrows(ax: plt.Axes, left_color: str = COLOR_LEFT, right_color: str = COLOR_RIGHT):
     """
-    Draw thick short arrows on LEFT and RIGHT edges with text labels below.
+    Draw minimalist vector arrows on LEFT and RIGHT edges with text labels below.
     Uses axes-fraction coords. Arrows point inward (airflow toward center).
     """
     arrow_style = dict(
-        facecolor=None,  # set per arrow
-        edgecolor="none",
-        width=6, headwidth=14, headlength=12, shrink=0,
+        arrowstyle="-|>",
+        color=None,   # set per arrow
+        lw=1.0,
+        mutation_scale=8,
     )
 
-    # Blue arrow on left edge → points right (airflow from left toward center)
+    # Left arrow → points right (airflow from left toward center)
     ax.annotate(
         "", xy=(0.04, 0.5), xytext=(-0.02, 0.5),
         xycoords="axes fraction", textcoords="axes fraction",
-        arrowprops={**arrow_style, "facecolor": left_color},
+        arrowprops={**arrow_style, "color": left_color},
     )
     ax.text(0.01, 0.45, "Left Stimulus",
             transform=ax.transAxes, ha="center", va="top",
-            fontsize=8, color=left_color)
+            fontsize=7, color=left_color)
 
-    # Red arrow on right edge → points left (airflow from right toward center)
+    # Right arrow → points left (airflow from right toward center)
     ax.annotate(
         "", xy=(0.96, 0.5), xytext=(1.02, 0.5),
         xycoords="axes fraction", textcoords="axes fraction",
-        arrowprops={**arrow_style, "facecolor": right_color},
+        arrowprops={**arrow_style, "color": right_color},
     )
     ax.text(0.99, 0.45, "Right Stimulus",
             transform=ax.transAxes, ha="center", va="top",
-            fontsize=8, color=right_color)
+            fontsize=7, color=right_color)
 
 
 def plot_trajectory_overlay(
     df: pd.DataFrame,
     control_type: str = "baseline_visual",
-    left_color: str = "blue",
-    right_color: str = "red",
+    left_color: str = COLOR_LEFT,
+    right_color: str = COLOR_RIGHT,
     figsize_per_ax: tuple[float, float] = (4.0, 4.0),
 ):
     """
-    One subplot per trial type. Left stimuli in blue, right in red, control in gray.
-    Cross-shaped axes with thick short side-arrow indicators and text labels.
+    One subplot per trial type. Left stimuli in NPG blue, right in NPG red,
+    control in neutral gray. Cross-shaped axes with minimalist side-arrow indicators.
     """
     all_types = sorted(df["type"].dropna().unique())
     if not all_types:
@@ -400,21 +453,21 @@ def plot_trajectory_overlay(
             ss = str(grp["screen_side"].iloc[0]).strip().lower() \
                 if pd.notna(grp["screen_side"].iloc[0]) else ""
             if ttype == control_type:
-                color = "gray"
+                color = COLOR_CONTROL
             elif ss == "left":
                 color = left_color
             elif ss == "right":
                 color = right_color
             else:
-                color = "gray"
-            ax.plot(grp["x"], grp["y"], color=color, alpha=0.5, lw=0.8)
+                color = COLOR_CONTROL
+            ax.plot(grp["x"], grp["y"], color=color, alpha=0.3, lw=0.6)
 
         ax.set_aspect("equal")
-        ax.set_title(ttype, fontsize=10, fontweight="bold")
+        ax.set_title(ttype, fontweight="bold")
         _draw_cross_axes(ax)
         _draw_side_arrows(ax, left_color=left_color, right_color=right_color)
 
-    fig.tight_layout()
+    fig.tight_layout(pad=1.0)
     return fig
 
 
@@ -429,12 +482,12 @@ def plot_speed_kinetics(
     figsize: tuple[float, float] = (10, 6),
 ):
     """
-    Two-panel figure (8:2 height ratio) with shared X axis.
+    Two-panel figure (4:1 height ratio) with shared X axis.
 
-    Upper panel (80%): Escape speed (mean ± SEM) per condition.
-    Lower panel (20%): Oscilloscope-style dual-channel waveforms:
-        • Channel 1 — Visual looming (light blue): adaptive coverage ending at t=0
-        • Channel 2 — Wind stim_state (orange-red): real hardware timing via fill_between
+    Upper panel: Escape speed (mean ± SEM) per condition.
+    Lower panel: Oscilloscope-style dual-channel waveforms:
+        • Channel 1 — Visual looming: adaptive coverage ending at t=0
+        • Channel 2 — Wind stim_state: real hardware timing via fill_between
     """
     fig = plt.figure(figsize=figsize)
     gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
@@ -451,7 +504,7 @@ def plot_speed_kinetics(
                                 labels=bins[:-1], include_lowest=True)
     df_binned["t_bin"] = df_binned["t_bin"].astype(float)
 
-    cond_colors = {control_type: "gray", stim_type: "blue"}
+    cond_colors = {control_type: COLOR_CONTROL, stim_type: COLOR_LEFT}
     for cond, color in cond_colors.items():
         subset = df_binned[df_binned["type"] == cond]
         if subset.empty:
@@ -460,28 +513,25 @@ def plot_speed_kinetics(
         mean = grp.mean()
         sem = grp.sem()
         t_vals = mean.index.values
-        ax_main.plot(t_vals, mean.values, color=color, lw=1.5, label=cond)
+        ax_main.plot(t_vals, mean.values, color=color, lw=1.0, label=cond)
         ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
-                             color=color, alpha=0.2)
+                             color=color, alpha=0.2, edgecolor="none")
 
     ax_main.set_ylabel("Escape Speed (mm/s)")
-    ax_main.legend(loc="upper right", fontsize=8)
+    ax_main.legend(loc="upper right", frameon=False)
     ax_main.set_xlabel("")
     plt.setp(ax_main.get_xticklabels(), visible=False)
 
-    # ── Lower panel: oscilloscope waveforms ──
-    loom_color = "#A0C8E8"   # light blue
-    wind_color = "#F4A460"   # sandy orange
+    # ── Lower panel: oscilloscope waveforms (no grid, no outlines) ──
     vis_baseline = 1.0
     wind_baseline = 3.0
 
     # Channel 1: Visual looming — high pulse from condition trial start to TTC
-    # Use stim_type trials' t_rel min (t_start relative to zero, typically negative)
     stim_t_rel = df.loc[df["type"] == stim_type, "t_rel"]
     t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
     t_loom = np.array([t_loom_start, 0.0])
     ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
-                         step="mid", color=loom_color, alpha=0.8,
+                         step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
                          label="Visual (looming)")
 
     # Channel 2: Wind stim_state from real hardware data
@@ -501,20 +551,17 @@ def plot_speed_kinetics(
         stim_ext = np.append(stim, stim[-1])
 
         ax_stim.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
-                             step="post", color=wind_color, alpha=0.8,
+                             step="post", color=COLOR_OSCI_HW, alpha=0.6,
                              label="Wind (stim_state)")
 
     ax_stim.set_ylim(0, 5)
     ax_stim.set_yticks([])
     ax_stim.set_ylabel("")
     ax_stim.set_xlabel("Time relative to TTC (ms)")
-    ax_stim.legend(loc="upper right", fontsize=7, ncol=2)
-
-    # Remove lower panel background grid
+    ax_stim.legend(loc="upper right", frameon=False, ncol=2)
     ax_stim.grid(False)
-    ax_stim.set_facecolor("white")
 
-    fig.tight_layout()
+    fig.tight_layout(pad=1.0)
     return fig
 
 
