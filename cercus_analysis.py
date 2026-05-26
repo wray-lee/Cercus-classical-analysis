@@ -2,8 +2,9 @@
 Cercus Framework — Behavioral Neuroscience Data Analysis & Visualization
 =========================================================================
 Dual-track recording system: Events (low-freq) + Kinematics (high-freq)
-aligned by trial timestamps (trial_start / trial_stop) with legacy fallback.
-Time axis zeroed to visual TTC (t_col).
+aligned by lifecycle events (trial_start / trial_stop / phase_transition).
+Time axis zeroed to the absolute Collision_TTC0 system timestamp extracted
+from phase_transition events, with lv_ratio-based fallback for control trials.
 
 Usage:
     python cercus_analysis.py --events path/to/events.csv --kinematics path/to/kinematics.csv
@@ -32,8 +33,6 @@ log = logging.getLogger(__name__)
 DETAILS_KEYS = ("type", "target_ttc_ms", "wind_dir", "screen_side",
                 "lv_ratio_ms", "init_half_angle_deg")
 SPEED_WINDOW_MS = 100          # rolling-mean smoothing window (ms)
-DEFAULT_LV_RATIO_MS = 100.0    # looming expansion ratio (ms)
-DEFAULT_INIT_ANGLE_DEG = 2.0   # initial looming half-angle (degrees)
 SCALE_BAR_MM = 5.0             # scale bar for trajectory plots
 LEGACY_TRIAL_DURATION_MS = 5829.6  # fallback when trial_stop is missing
 
@@ -56,9 +55,9 @@ def _parse_details(raw: Any) -> dict:
         return {}
 
 
-def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict]]:
+def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict], dict[Any, float]]:
     """
-    Load events CSV. Extract trial time windows and metadata.
+    Load events CSV. Extract trial time windows, metadata, and TTC anchors.
 
     Returns
     -------
@@ -67,6 +66,9 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict]]:
     trial_windows : list of dict
         Each dict has keys: global_trial_id, t_start, t_stop.
         t_stop falls back to t_start + LEGACY_TRIAL_DURATION_MS if trial_stop missing.
+    ttc_anchors : dict
+        Mapping global_trial_id → absolute system timestamp of Collision_TTC0
+        extracted from phase_transition events.
     """
     df = pd.read_csv(path)
     required = {"event_name", "timestamp", "global_trial_id", "details"}
@@ -78,11 +80,11 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict]]:
     if starts.empty:
         log.warning("No 'trial_start' events found — stimulus metadata unavailable.")
         empty_meta = pd.DataFrame(columns=["global_trial_id", *DETAILS_KEYS])
-        return empty_meta, []
+        return empty_meta, [], {}
 
     stops = df[df["event_name"] == "trial_stop"].copy()
 
-    # Build lookup: global_trial_id → t_stop timestamp
+    # ── Trial boundaries: strict pairing via global_trial_id ──
     stop_lookup: dict[Any, float] = {}
     if not stops.empty:
         stop_lookup = dict(zip(stops["global_trial_id"], stops["timestamp"]))
@@ -103,7 +105,18 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict]]:
             "t_stop": t_stop,
         })
 
-    # Extract metadata from details JSON
+    # ── TTC anchors from phase_transition → Collision_TTC0 ──
+    ttc_anchors: dict[Any, float] = {}
+    transitions = df[df["event_name"] == "phase_transition"].copy()
+    for _, row in transitions.iterrows():
+        details = _parse_details(row["details"])
+        if details.get("to_phase") == "Collision_TTC0":
+            tid = row["global_trial_id"]
+            ttc_anchors[tid] = float(row["timestamp"])
+    log.info("Extracted %d Collision_TTC0 anchors from phase_transition events.",
+             len(ttc_anchors))
+
+    # ── Metadata from trial_start details ──
     parsed = starts["details"].apply(_parse_details)
     details_df = pd.DataFrame(parsed.tolist(), index=starts.index)
     for k in DETAILS_KEYS:
@@ -112,7 +125,7 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict]]:
 
     trial_meta = starts[["global_trial_id"]].join(details_df[list(DETAILS_KEYS)])
     trial_meta = trial_meta.drop_duplicates(subset="global_trial_id", keep="first")
-    return trial_meta.reset_index(drop=True), trial_windows
+    return trial_meta.reset_index(drop=True), trial_windows, ttc_anchors
 
 
 def load_kinematics(path: str | Path) -> pd.DataFrame:
@@ -128,14 +141,6 @@ def load_kinematics(path: str | Path) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════════
 # L0 — Preprocessing: Timestamp-Based Slicing & Integration
 # ══════════════════════════════════════════════════════════════════════
-
-def compute_t_col(lv_ratio_ms: float, init_half_angle_deg: float) -> float:
-    """
-    Compute theoretical time from trial start to visual collision (ms).
-    t_col = (lv_ratio_ms / 1000) / tan(radians(init_half_angle_deg)) * 1000
-    """
-    return (lv_ratio_ms / 1000.0) / np.tan(np.radians(init_half_angle_deg)) * 1000.0
-
 
 def _slice_kinematics_by_window(
     kin: pd.DataFrame,
@@ -171,12 +176,14 @@ def _slice_kinematics_by_window(
     return trial_kin
 
 
-def _integrate_trial(grp: pd.DataFrame, t_col_ms: float) -> pd.DataFrame:
+def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     """
-    Per-trial integration with TTC-aligned time axis and denoised speed.
+    Per-trial integration with lifecycle-anchored TTC time axis and denoised speed.
 
-    Time axis zero-point is the visual TTC: t_rel = (sys_time - sys_time[0]) - t_col.
-    This means t_rel < 0 is before collision, t_rel = 0 is collision moment.
+    Time axis zero-point is the absolute Collision_TTC0 system timestamp
+    (or a lv_ratio-derived fallback for control trials):
+        t_rel = (sys_time - t_zero_sys) * 1000
+    t_rel < 0 is before collision, t_rel = 0 is collision moment.
 
     Speed denoising:
       1. cumsum dx/dy → absolute position, origin at (0,0)
@@ -187,25 +194,24 @@ def _integrate_trial(grp: pd.DataFrame, t_col_ms: float) -> pd.DataFrame:
     df = grp.copy()
 
     if len(df) < 2:
-        df["t_rel"] = -t_col_ms
+        df["t_rel"] = 0.0
         df["x"] = 0.0
         df["y"] = 0.0
         df["speed"] = np.nan
         return df
 
-    # Time: zero-point aligned to visual TTC
-    df["t_rel"] = (df["sys_time"] - df["sys_time"].iloc[0]) * 1000.0 - t_col_ms
+    # Time: zero-point anchored to lifecycle-derived TTC
+    df["t_rel"] = (df["sys_time"] - t_zero_sys) * 1000.0
 
     # Position: cumulative sum of displacements, origin at (0,0)
-    # 强制清空前两帧的残余位移 (防止 ITI 期间的传感器漂移引发瞬移)
     df.loc[df.index[:2], "dx"] = 0.0
     df.loc[df.index[:2], "dy"] = 0.0
 
-    # 强制翻转硬件 X 轴读数以对齐真实左右空间
+    # Force-flip hardware X axis to align with real left-right space
     df["x"] = (-df["dx"]).cumsum()
     df["y"] = df["dy"].cumsum()
 
-    # Real frame-to-frame dt (ms)
+    # Real frame-to-frame dt (seconds → ms)
     dt = df["sys_time"].diff()
     dt = dt.replace(0, np.nan)
 
@@ -227,19 +233,38 @@ def _integrate_trial(grp: pd.DataFrame, t_col_ms: float) -> pd.DataFrame:
     return df
 
 
+def _compute_theoretical_ttc_ms(lv_ratio_ms: float, init_half_angle_deg: float) -> float:
+    """
+    Compute theoretical TTC (ms) from looming parameters for control trials
+    that never triggered a Collision_TTC0 phase_transition.
+
+    TTC = lv_ratio_ms / (1 - sin(init_half_angle_deg * π / 180))
+    """
+    import math
+    rad = math.radians(init_half_angle_deg)
+    denom = 1.0 - math.sin(rad)
+    if denom <= 0:
+        log.warning("init_half_angle_deg=%.1f yields sin≥1; TTC undefined, returning lv_ratio_ms.",
+                     init_half_angle_deg)
+        return lv_ratio_ms
+    return lv_ratio_ms / denom
+
+
 def preprocess(
     trials_meta: pd.DataFrame,
     trial_windows: list[dict],
+    ttc_anchors: dict[Any, float],
     kin: pd.DataFrame,
-    t_col_ms: float,
 ) -> pd.DataFrame:
     """
-    Slice kinematics by trial time windows, merge metadata, and integrate.
+    Per-trial integration anchored to lifecycle-derived TTC timestamps.
 
     For each trial:
-      1. Boolean-mask kinematics using [t_start, t_stop] from events.
-      2. Attach trial metadata (type, screen_side, etc.).
-      3. Compute t_rel, position, and denoised speed.
+        • If global_trial_id is in ttc_anchors → use the Collision_TTC0
+          system timestamp directly as t_zero_sys.
+        • Otherwise (control / baseline trials) → compute theoretical
+          t_col_ms from lv_ratio_ms + init_half_angle_deg, then set
+          t_zero_sys = t_start + t_col_ms / 1000.
     """
     parts: list[pd.DataFrame] = []
     for window in trial_windows:
@@ -254,8 +279,29 @@ def preprocess(
             for col in DETAILS_KEYS:
                 trial_kin[col] = meta_row[col].iloc[0]
 
+        # ── Determine t_zero_sys ──
+        if tid in ttc_anchors:
+            t_zero_sys = ttc_anchors[tid]
+        else:
+            # Fallback: derive theoretical TTC from looming parameters
+            lv_ratio = np.nan
+            init_angle = np.nan
+            if not meta_row.empty:
+                lv_ratio = meta_row["lv_ratio_ms"].iloc[0] if "lv_ratio_ms" in meta_row.columns else np.nan
+                init_angle = meta_row["init_half_angle_deg"].iloc[0] if "init_half_angle_deg" in meta_row.columns else np.nan
+
+            if pd.notna(lv_ratio) and pd.notna(init_angle):
+                t_col_ms = _compute_theoretical_ttc_ms(float(lv_ratio), float(init_angle))
+                t_zero_sys = window["t_start"] + (t_col_ms / 1000.0)
+                log.debug("Trial %s: no TTC anchor, fallback t_col_ms=%.1f ms", tid, t_col_ms)
+            else:
+                # Last resort: use trial midpoint
+                t_zero_sys = (window["t_start"] + window["t_stop"]) / 2.0
+                log.warning("Trial %s: no TTC anchor and no lv_ratio/init_angle; "
+                            "using trial midpoint as zero.", tid)
+
         try:
-            parts.append(_integrate_trial(trial_kin, t_col_ms))
+            parts.append(_integrate_trial(trial_kin, t_zero_sys))
         except Exception as exc:
             log.warning("Skipping trial %s during integration: %s", tid, exc)
 
@@ -378,7 +424,6 @@ def plot_trajectory_overlay(
 
 def plot_speed_kinetics(
     df: pd.DataFrame,
-    t_col_ms: float,
     control_type: str = "baseline_visual",
     stim_type: str = "looming_wind",
     figsize: tuple[float, float] = (10, 6),
@@ -388,7 +433,7 @@ def plot_speed_kinetics(
 
     Upper panel (80%): Escape speed (mean ± SEM) per condition.
     Lower panel (20%): Oscilloscope-style dual-channel waveforms:
-        • Channel 1 — Visual looming (light blue): high pulse in [-t_col, 0]
+        • Channel 1 — Visual looming (light blue): adaptive coverage ending at t=0
         • Channel 2 — Wind stim_state (orange-red): real hardware timing via fill_between
     """
     fig = plt.figure(figsize=figsize)
@@ -430,8 +475,11 @@ def plot_speed_kinetics(
     vis_baseline = 1.0
     wind_baseline = 3.0
 
-    # Channel 1: Visual looming — high pulse in [-t_col, 0]
-    t_loom = np.array([-t_col_ms, 0.0])
+    # Channel 1: Visual looming — high pulse from condition trial start to TTC
+    # Use stim_type trials' t_rel min (t_start relative to zero, typically negative)
+    stim_t_rel = df.loc[df["type"] == stim_type, "t_rel"]
+    t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
+    t_loom = np.array([t_loom_start, 0.0])
     ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
                          step="mid", color=loom_color, alpha=0.8,
                          label="Visual (looming)")
@@ -459,7 +507,7 @@ def plot_speed_kinetics(
     ax_stim.set_ylim(0, 5)
     ax_stim.set_yticks([])
     ax_stim.set_ylabel("")
-    ax_stim.set_xlabel("Time relative to visual TTC (ms)")
+    ax_stim.set_xlabel("Time relative to TTC (ms)")
     ax_stim.legend(loc="upper right", fontsize=7, ncol=2)
 
     # Remove lower panel background grid
@@ -485,10 +533,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Trial type for control condition (default: baseline_visual)")
     p.add_argument("--stim-type", default="looming_wind",
                    help="Trial type for stimulus condition (default: looming_wind)")
-    p.add_argument("--lv-ratio-ms", type=float, default=DEFAULT_LV_RATIO_MS,
-                   help="Looming expansion ratio in ms (default: 100)")
-    p.add_argument("--init-angle", type=float, default=DEFAULT_INIT_ANGLE_DEG,
-                   help="Initial looming half-angle in degrees (default: 2.0)")
     p.add_argument("--save", default=None,
                    help="Directory to save PNG figures. Omit to show interactively.")
     return p
@@ -497,22 +541,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None):
     args = build_parser().parse_args(argv)
 
-    # ── Load events (extract trial windows + metadata) ──
+    # ── Load events (extract trial windows, metadata, TTC anchors) ──
     log.info("Loading events: %s", args.events)
-    meta, trial_windows = load_events(args.events)
-    log.info("  → %d trials with metadata, %d time windows extracted",
-             len(meta), len(trial_windows))
+    meta, trial_windows, ttc_anchors = load_events(args.events)
+    log.info("  → %d trials with metadata, %d time windows, %d TTC anchors",
+             len(meta), len(trial_windows), len(ttc_anchors))
 
     log.info("Loading kinematics: %s", args.kinematics)
     kin = load_kinematics(args.kinematics)
     log.info("  → %d frames total", len(kin))
 
-    # ── Compute TTC ──
-    t_col_ms = compute_t_col(args.lv_ratio_ms, args.init_angle)
-    log.info("Visual collision time: t_col = %.1f ms", t_col_ms)
-
-    # ── Preprocess: slice by timestamps, integrate per-trial ──
-    df = preprocess(meta, trial_windows, kin, t_col_ms)
+    # ── Preprocess: lifecycle-anchored TTC integration ──
+    df = preprocess(meta, trial_windows, ttc_anchors, kin)
 
     types_present = set(df["type"].dropna().unique())
     log.info("Trial types in data: %s", types_present)
@@ -522,7 +562,6 @@ def main(argv: list[str] | None = None):
 
     fig_speed = plot_speed_kinetics(
         df,
-        t_col_ms=t_col_ms,
         control_type=args.control_type,
         stim_type=args.stim_type,
     )
