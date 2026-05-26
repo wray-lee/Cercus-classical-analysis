@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
+from scipy.signal import savgol_filter
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -239,9 +240,9 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
 
     Speed denoising:
       1. cumsum dx/dy → absolute position, origin at (0,0)
-      2. v = sqrt(dx² + dy²) / dt  (real frame-to-frame dt)
-      3. First 2 frames forced to NaN (residual displacement from prior phase)
-      4. Rolling 100ms center-smoothed mean
+      2. Savitzky-Golay filter on accumulated x and y positions
+      3. Speed via central finite differences on smoothed positions
+      4. Leading/trailing edge frames trimmed by half the S-G window
     """
     df = grp.copy()
 
@@ -260,27 +261,50 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     df.loc[df.index[:2], "dy"] = 0.0
 
     # Force-flip hardware X axis to align with real left-right space
-    df["x"] = (-df["dx"]).cumsum()
-    df["y"] = df["dy"].cumsum()
+    x_raw = (-df["dx"]).cumsum().values
+    y_raw = df["dy"].cumsum().values
 
-    # Real frame-to-frame dt (seconds → ms)
-    dt = df["sys_time"].diff()
-    dt = dt.replace(0, np.nan)
-
-    # Euclidean displacement per frame
-    dist = np.sqrt(df["dx"] ** 2 + df["dy"] ** 2)
-    raw_speed = dist / dt  # mm/s
-
-    # First 2 frames: force NaN to kill residual displacement artifacts
-    raw_speed.iloc[:2] = np.nan
-
-    # Rolling mean smoothing — adaptive window → ~100 ms
-    median_dt = dt.median()
+    # Savitzky-Golay smoothing on accumulated positions
+    median_dt = df["sys_time"].diff().replace(0, np.nan).median()
     if pd.notna(median_dt) and median_dt > 0:
-        win = max(1, int(round((SPEED_WINDOW_MS / 1000.0) / median_dt)))
+        win = max(5, int(round((SPEED_WINDOW_MS / 1000.0) / median_dt)))
     else:
-        win = 5
-    df["speed"] = raw_speed.rolling(window=win, min_periods=1, center=True).mean()
+        win = 11
+    # Window must be odd and >= 3
+    if win % 2 == 0:
+        win += 1
+    poly_order = min(3, win - 1)
+
+    n = len(x_raw)
+    if n >= win:
+        x_smooth = savgol_filter(x_raw, window_length=win, polyorder=poly_order, deriv=0)
+        y_smooth = savgol_filter(y_raw, window_length=win, polyorder=poly_order, deriv=0)
+    else:
+        # Too few points for S-G filter; fall back to raw positions
+        x_smooth = x_raw
+        y_smooth = y_raw
+
+    df["x"] = x_smooth
+    df["y"] = y_smooth
+
+    # Speed via central finite differences on smoothed positions
+    dt_sec = df["sys_time"].diff().values  # seconds
+    dx_smooth = np.diff(x_smooth, prepend=x_smooth[0])
+    dy_smooth = np.diff(y_smooth, prepend=y_smooth[0])
+    # For index 0 the prepend gives 0 displacement; use actual first diff instead
+    if n > 1:
+        dx_smooth[0] = x_smooth[1] - x_smooth[0]
+        dy_smooth[0] = y_smooth[1] - y_smooth[0]
+    speed = np.sqrt(dx_smooth ** 2 + dy_smooth ** 2) / dt_sec  # mm/s
+    speed[0] = np.nan  # dt[0] is NaN from diff()
+
+    # Trim unstable boundary frames (half-window on each side)
+    half_win = win // 2
+    if half_win > 0:
+        speed[:half_win] = np.nan
+        speed[-half_win:] = np.nan
+
+    df["speed"] = speed
 
     return df
 
@@ -494,7 +518,7 @@ def plot_speed_kinetics(
     ax_main = fig.add_subplot(gs[0])
     ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
 
-    # ── Upper panel: speed mean ± SEM ──
+    # ── Upper panel: speed mean ± SEM (two-step aggregation) ──
     t_bin = 5.0  # ms
     t_min = df["t_rel"].min()
     t_max = df["t_rel"].max()
@@ -509,9 +533,14 @@ def plot_speed_kinetics(
         subset = df_binned[df_binned["type"] == cond]
         if subset.empty:
             continue
-        grp = subset.groupby("t_bin")["speed"]
-        mean = grp.mean()
-        sem = grp.sem()
+        # Step 1: per-trial mean within each time bin
+        trial_means = (subset.groupby(["global_trial_id", "t_bin"])["speed"]
+                       .mean()
+                       .reset_index())
+        # Step 2: cross-trial mean and SEM
+        agg = trial_means.groupby("t_bin")["speed"]
+        mean = agg.mean()
+        sem = agg.sem()
         t_vals = mean.index.values
         ax_main.plot(t_vals, mean.values, color=color, lw=1.0, label=cond)
         ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
@@ -543,6 +572,103 @@ def plot_speed_kinetics(
         stim = grp["stim_state"].values.astype(float)
 
         # Append trailing point to fix step truncation
+        if len(t_wind) > 1:
+            dt_last = t_wind[-1] - t_wind[-2]
+        else:
+            dt_last = 1.0
+        t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
+        stim_ext = np.append(stim, stim[-1])
+
+        ax_stim.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
+                             step="post", color=COLOR_OSCI_HW, alpha=0.6,
+                             label="Wind (stim_state)")
+
+    ax_stim.set_ylim(0, 5)
+    ax_stim.set_yticks([])
+    ax_stim.set_ylabel("")
+    ax_stim.set_xlabel("Time relative to TTC (ms)")
+    ax_stim.legend(loc="upper right", frameon=False, ncol=2)
+    ax_stim.grid(False)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+def plot_spaghetti_kinetics(
+    df: pd.DataFrame,
+    control_type: str = "baseline_visual",
+    stim_type: str = "looming_wind",
+    figsize: tuple[float, float] = (10, 6),
+):
+    """
+    Two-panel figure (4:1 height ratio) with shared X axis.
+
+    Upper panel: Single-trial speed traces (spaghetti) with population mean ± SEM.
+    Lower panel: Oscilloscope-style dual-channel stimulus waveforms.
+    """
+    fig = plt.figure(figsize=figsize)
+    gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
+    ax_main = fig.add_subplot(gs[0])
+    ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
+
+    # ── Upper panel: spaghetti + mean ± SEM ──
+    cond_colors = {control_type: COLOR_CONTROL, stim_type: COLOR_LEFT}
+    for cond, color in cond_colors.items():
+        subset = df[df["type"] == cond]
+        if subset.empty:
+            continue
+
+        # Background layer: individual trial traces
+        for _tid, grp in subset.groupby("global_trial_id"):
+            grp_sorted = grp.sort_values("t_rel")
+            ax_main.plot(grp_sorted["t_rel"], grp_sorted["speed"],
+                         color=color, lw=0.3, alpha=0.15)
+
+        # Foreground layer: population mean ± SEM (binned two-step aggregation)
+        t_bin = 5.0
+        t_min = subset["t_rel"].min()
+        t_max = subset["t_rel"].max()
+        bins = np.arange(t_min, t_max + t_bin, t_bin)
+        binned = subset.copy()
+        binned["t_bin"] = pd.cut(binned["t_rel"], bins=bins,
+                                 labels=bins[:-1], include_lowest=True)
+        binned["t_bin"] = binned["t_bin"].astype(float)
+
+        trial_means = (binned.groupby(["global_trial_id", "t_bin"])["speed"]
+                       .mean()
+                       .reset_index())
+        agg = trial_means.groupby("t_bin")["speed"]
+        mean = agg.mean()
+        sem = agg.sem()
+        t_vals = mean.index.values
+
+        ax_main.plot(t_vals, mean.values, color=color, lw=1.5, alpha=1.0, label=cond)
+        ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
+                             color=color, alpha=0.2, edgecolor="none")
+
+    ax_main.set_ylabel("Escape Speed (mm/s)")
+    ax_main.legend(loc="upper right", frameon=False)
+    ax_main.set_xlabel("")
+    plt.setp(ax_main.get_xticklabels(), visible=False)
+
+    # ── Lower panel: oscilloscope waveforms ──
+    vis_baseline = 1.0
+    wind_baseline = 3.0
+
+    stim_t_rel = df.loc[df["type"] == stim_type, "t_rel"]
+    t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
+    t_loom = np.array([t_loom_start, 0.0])
+    ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
+                         step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
+                         label="Visual (looming)")
+
+    stim_subset = df[df["type"] == stim_type]
+    if not stim_subset.empty:
+        first_tid = stim_subset["global_trial_id"].iloc[0]
+        grp = stim_subset[stim_subset["global_trial_id"] == first_tid].sort_values("t_rel")
+        t_wind = grp["t_rel"].values
+        stim = grp["stim_state"].values.astype(float)
+
         if len(t_wind) > 1:
             dt_last = t_wind[-1] - t_wind[-2]
         else:
@@ -613,17 +739,24 @@ def main(argv: list[str] | None = None):
         stim_type=args.stim_type,
     )
 
+    fig_spaghetti = plot_spaghetti_kinetics(
+        df,
+        control_type=args.control_type,
+        stim_type=args.stim_type,
+    )
+
     # ── Save or show ──
     if args.save:
         out = Path(args.save)
         out.mkdir(parents=True, exist_ok=True)
         fig_traj.savefig(out / "trajectory_overlay.png", dpi=300, bbox_inches="tight")
         fig_speed.savefig(out / "speed_kinetics.png", dpi=300, bbox_inches="tight")
+        fig_spaghetti.savefig(out / "spaghetti_kinetics.png", dpi=300, bbox_inches="tight")
         log.info("Figures saved to %s", out)
     else:
         plt.show()
 
-    return df, fig_traj, fig_speed
+    return df, fig_traj, fig_speed, fig_spaghetti
 
 
 if __name__ == "__main__":
