@@ -267,13 +267,14 @@ def plot_population_speed_kinetics(
     vis_baseline = 1.0
     wind_baseline = 3.0
 
-    # Channel 1: Visual looming
-    stim_t_rel = ts.loc[ts["type"] == stim_type, "t_rel"]
-    t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else ts["t_rel"].min()
-    t_loom = np.array([t_loom_start, 0.0])
-    ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
-                         step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
-                         label="Visual (looming)")
+    # Channel 1: Visual looming — 仅在刺激类型包含 visual 或 looming 时绘制
+    if "visual" in stim_type.lower() or "looming" in stim_type.lower():
+        stim_t_rel = ts.loc[ts["type"] == stim_type, "t_rel"]
+        t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else ts["t_rel"].min()
+        t_loom = np.array([t_loom_start, 0.0])
+        ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
+                             step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
+                             label="Visual (looming)")
 
     # Channel 2: Wind stim_state from first trial of stim_type
     stim_subset = ts[ts["type"] == stim_type]
@@ -415,13 +416,16 @@ def plot_population_spaghetti_kinetics(
     vis_baseline = 1.0
     wind_baseline = 3.0
 
-    stim_t_rel = ts.loc[ts["type"] == stim_type, "t_rel"]
-    t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else ts["t_rel"].min()
-    t_loom = np.array([t_loom_start, 0.0])
-    ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
-                         step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
-                         label="Visual (looming)")
+    # Channel 1: Visual looming — 仅在刺激类型包含 visual 或 looming 时绘制
+    if "visual" in stim_type.lower() or "looming" in stim_type.lower():
+        stim_t_rel = ts.loc[ts["type"] == stim_type, "t_rel"]
+        t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else ts["t_rel"].min()
+        t_loom = np.array([t_loom_start, 0.0])
+        ax_stim.fill_between(t_loom, vis_baseline, vis_baseline + 1.0,
+                             step="mid", color=COLOR_OSCI_VIS, alpha=0.6,
+                             label="Visual (looming)")
 
+    # Channel 2: Wind stim_state — 仅在包含 wind/puff 或硬件触发值大于0时绘制
     stim_subset = ts[ts["type"] == stim_type]
     if not stim_subset.empty:
         trial_key = ["subject_id", "global_trial_id"] if "subject_id" in stim_subset.columns \
@@ -433,19 +437,21 @@ def plot_population_spaghetti_kinetics(
         else:
             grp = stim_subset[stim_subset["global_trial_id"] == first_trial]
         grp = grp.sort_values("t_rel")
-        t_wind = grp["t_rel"].values
-        stim = grp["stim_state"].values.astype(float)
 
-        if len(t_wind) > 1:
-            dt_last = t_wind[-1] - t_wind[-2]
-        else:
-            dt_last = 1.0
-        t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
-        stim_ext = np.append(stim, stim[-1])
+        if "wind" in stim_type.lower() or "puff" in stim_type.lower() or grp["stim_state"].max() > 0:
+            t_wind = grp["t_rel"].values
+            stim = grp["stim_state"].values.astype(float)
 
-        ax_stim.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
-                             step="post", color=COLOR_OSCI_HW, alpha=0.6,
-                             label="Wind (stim_state)")
+            if len(t_wind) > 1:
+                dt_last = t_wind[-1] - t_wind[-2]
+            else:
+                dt_last = 1.0
+            t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
+            stim_ext = np.append(stim, stim[-1])
+
+            ax_stim.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
+                                 step="post", color=COLOR_OSCI_HW, alpha=0.6,
+                                 label="Wind (stim_state)")
 
     ax_stim.set_ylim(0, 5)
     ax_stim.set_yticks([])
@@ -485,6 +491,13 @@ def run_visualization_pipeline(
     ts = pd.read_parquet(timeseries_path)
     log.info("Loaded population_timeseries.parquet: %d frames, %d subjects",
              len(ts), ts["subject_id"].nunique() if "subject_id" in ts.columns else 0)
+
+    # Filter to responded trials only (aligned with escape detection criteria)
+    if "is_escaped" in ts.columns:
+        n_trials_before = ts["global_trial_id"].nunique() if "global_trial_id" in ts.columns else len(ts)
+        ts = ts[ts["is_escaped"] == True].copy()
+        n_trials_after = ts["global_trial_id"].nunique() if "global_trial_id" in ts.columns else len(ts)
+        log.info("Filtered to responded trials: %d → %d trials", n_trials_before, n_trials_after)
 
     fig_traj = plot_population_trajectory_overlay(ts, control_type=control_type)
     fig_speed = plot_population_speed_kinetics(ts, control_type=control_type, stim_type=stim_type)

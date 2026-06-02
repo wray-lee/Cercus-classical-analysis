@@ -34,20 +34,26 @@ from trial_analysis import (
     preprocess,
     _apply_publication_style,
     DETAILS_KEYS,
+    EVOKED_WALK_THRESHOLD,
+    STARTLE_ESCAPE_THRESHOLD,
+    ESCAPE_SPEED_THRESHOLD,
+    ESCAPE_CONSECUTIVE_K,
+    ESCAPE_WINDOW_MS,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
-# Escape Detection Parameters
+# Escape Detection Parameters (imported from trial_analysis)
 # ──────────────────────────────────────────────────────────────────────
-ESCAPE_SPEED_THRESHOLD = 10.0      # mm/s — sustained speed threshold
-ESCAPE_V_MAX_THRESHOLD = 50.0      # mm/s — peak speed within escape window
-ESCAPE_CONSECUTIVE_K = 3           # frames above threshold to qualify
-ESCAPE_WINDOW_MS = 250.0           # post-stimulus window to search (ms)
+# EVOKED_WALK_THRESHOLD = 15.0     — imported
+# STARTLE_ESCAPE_THRESHOLD = 30.0  — imported
+# ESCAPE_SPEED_THRESHOLD = 10.0    — imported
+# ESCAPE_CONSECUTIVE_K = 3         — imported
+# ESCAPE_WINDOW_MS = 250.0         — imported
 
-# Behavior Classification Parameters
+# Behavior Classification Parameters (legacy — kept for backward compat)
 JUMP_ACCEL_THRESHOLD = 500.0       # mm/s² — peak acceleration for Jump classification
 JUMP_DAMPING_RATIO = 0.3           # ratio of second peak to first peak (< this → Jump)
 
@@ -58,46 +64,58 @@ JUMP_DAMPING_RATIO = 0.3           # ratio of second peak to first peak (< this 
 
 def _detect_escape(trial: pd.DataFrame) -> dict:
     """
-    Escape detection for a single trial.
+    Escape detection for a single trial using dual-threshold ternary classification.
 
-    Criteria (post-stimulus, t_rel > 0):
-        - speed > ESCAPE_SPEED_THRESHOLD for ESCAPE_CONSECUTIVE_K consecutive frames
-        - max speed within the escape window > ESCAPE_V_MAX_THRESHOLD
+    Criteria (post-stimulus, 0 < t_rel ≤ 250 ms):
+        1. Consecutive-frame gate: ≥ ESCAPE_CONSECUTIVE_K frames > ESCAPE_SPEED_THRESHOLD
+        2. If gate passes and V_max ≥ STARTLE_ESCAPE_THRESHOLD (30.0) → "Startle"
+        3. If gate passes and EVOKED_WALK_THRESHOLD (15.0) ≤ V_max < 30.0 → "Walk"
+        4. Otherwise → "NoResponse"
 
-    Returns dict with: is_escaped (bool), latency_ms (float or NaN)
+    Returns dict with: is_escaped (bool), response_type (str), v_max (float), latency_ms (float or NaN)
     """
     post = trial[trial["t_rel"] > 0].copy()
     if post.empty:
-        return {"is_escaped": False, "latency_ms": np.nan}
+        return {"is_escaped": False, "response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
 
-    # Restrict to escape window
-    window_end = ESCAPE_WINDOW_MS
-    in_window = post[post["t_rel"] <= window_end]
+    in_window = post[post["t_rel"] <= ESCAPE_WINDOW_MS]
     if in_window.empty:
-        return {"is_escaped": False, "latency_ms": np.nan}
+        return {"is_escaped": False, "response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
 
     speed_vals = in_window["speed"].values
     t_vals = in_window["t_rel"].values
 
-    # Check max speed
     v_max = np.nanmax(speed_vals)
-    if np.isnan(v_max) or v_max <= ESCAPE_V_MAX_THRESHOLD:
-        return {"is_escaped": False, "latency_ms": np.nan}
+    if np.isnan(v_max):
+        return {"is_escaped": False, "response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
 
-    # Find consecutive frames above threshold
+    # Consecutive-frame gate
     above = speed_vals > ESCAPE_SPEED_THRESHOLD
     consec = 0
+    gate_passed = False
+    latency_ms = np.nan
     for i, val in enumerate(above):
         if val:
             consec += 1
-            if consec >= ESCAPE_CONSECUTIVE_K:
-                # Latency = time of the first frame in this consecutive run
-                latency_idx = i - ESCAPE_CONSECUTIVE_K + 1
-                return {"is_escaped": True, "latency_ms": float(t_vals[latency_idx])}
+            if consec >= ESCAPE_CONSECUTIVE_K and not gate_passed:
+                gate_passed = True
+                latency_ms = float(t_vals[i - ESCAPE_CONSECUTIVE_K + 1])
         else:
             consec = 0
 
-    return {"is_escaped": False, "latency_ms": np.nan}
+    if not gate_passed:
+        return {"is_escaped": False, "response_type": "NoResponse", "v_max": float(v_max), "latency_ms": np.nan}
+
+    # Ternary classification
+    if v_max >= STARTLE_ESCAPE_THRESHOLD:
+        response_type = "Startle"
+    elif v_max >= EVOKED_WALK_THRESHOLD:
+        response_type = "Walk"
+    else:
+        response_type = "NoResponse"
+
+    is_escaped = response_type in ("Startle", "Walk")
+    return {"is_escaped": is_escaped, "response_type": response_type, "v_max": float(v_max), "latency_ms": latency_ms}
 
 
 def _classify_behavior(trial: pd.DataFrame) -> str:
@@ -191,10 +209,10 @@ def extract_trial_features(trial: pd.DataFrame) -> dict:
     trial_type = trial["type"].iloc[0] if "type" in trial.columns else np.nan
     screen_side = trial["screen_side"].iloc[0] if "screen_side" in trial.columns else np.nan
 
-    # Escape detection
+    # Escape detection (now uses dual-threshold ternary classification)
     esc = _detect_escape(trial)
 
-    # Behavior classification (only for escaped trials)
+    # Behavior classification (only for responded trials)
     if esc["is_escaped"]:
         behavior = _classify_behavior(trial)
         direction = _extract_escape_direction(trial)
@@ -207,6 +225,8 @@ def extract_trial_features(trial: pd.DataFrame) -> dict:
         "type": trial_type,
         "screen_side": screen_side,
         "is_escaped": esc["is_escaped"],
+        "response_type": esc["response_type"],
+        "v_max": esc["v_max"],
         "latency_ms": esc["latency_ms"],
         "behavior_type": behavior,
         "escape_direction_rad": direction,
@@ -259,13 +279,23 @@ def extract_session(
         records.append(features)
 
     summary = pd.DataFrame(records)
-    escaped_n = summary["is_escaped"].sum()
-    log.info("  Escaped: %d / %d trials (%.1f%%)",
-             escaped_n, len(summary), 100 * escaped_n / len(summary) if len(summary) > 0 else 0)
+    n_startle = (summary["response_type"] == "Startle").sum()
+    n_walk = (summary["response_type"] == "Walk").sum()
+    n_none = (summary["response_type"] == "NoResponse").sum()
+    log.info("  Classification: Startle=%d, Walk=%d, NoResponse=%d (total=%d)",
+             n_startle, n_walk, n_none, len(summary))
 
     # Add session_id to timeseries
     timeseries = df.copy()
     timeseries["session_id"] = session_id
+
+    # Merge classification results into timeseries for downstream filtering
+    is_escaped_map = dict(zip(summary["global_trial_id"], summary["is_escaped"]))
+    response_type_map = dict(zip(summary["global_trial_id"], summary["response_type"]))
+    v_max_map = dict(zip(summary["global_trial_id"], summary["v_max"]))
+    timeseries["is_escaped"] = timeseries["global_trial_id"].map(is_escaped_map)
+    timeseries["response_type"] = timeseries["global_trial_id"].map(response_type_map)
+    timeseries["v_max"] = timeseries["global_trial_id"].map(v_max_map)
 
     # Save outputs
     if output_dir is not None:
