@@ -73,6 +73,7 @@ COLOR_OSCI_VIS = "#8491B4"
 COLOR_OSCI_HW = "#F39B7F"
 COLOR_STARTLE = "#E64B35"
 COLOR_WALK = "#4DBBD5"
+COLOR_PRE_ACTIVE = "#CCCCCC"
 COLOR_NO_RESPONSE = "#999999"
 
 _apply_publication_style()
@@ -465,26 +466,28 @@ def preprocess(
             for col in DETAILS_KEYS:
                 trial_kin[col] = meta_row[col].iloc[0]
 
+        # ── Determine t_zero_sys ──
+        wind_active = trial_kin[trial_kin["stim_state"] > 0]
+
         if tid in ttc_anchors:
             t_zero_sys = ttc_anchors[tid]
         else:
-            lv_ratio = np.nan
-            init_angle = np.nan
-            if not meta_row.empty:
-                lv_ratio = meta_row["lv_ratio_ms"].iloc[0] if "lv_ratio_ms" in meta_row.columns else np.nan
-                init_angle = meta_row["init_half_angle_deg"].iloc[0] if "init_half_angle_deg" in meta_row.columns else np.nan
+            # Fallback: derive theoretical TTC from looming parameters
+            lv_ratio = meta_row.get("lv_ratio_ms", pd.Series([np.nan])).iloc[0] if not meta_row.empty else np.nan
+            init_angle = meta_row.get("init_half_angle_deg", pd.Series([np.nan])).iloc[0] if not meta_row.empty else np.nan
 
             if pd.notna(lv_ratio) and pd.notna(init_angle):
                 t_col_ms = _compute_theoretical_ttc_ms(float(lv_ratio), float(init_angle))
                 t_zero_sys = window["t_start"] + (t_col_ms / 1000.0)
+                log.debug("Trial %s: no TTC anchor, fallback t_col_ms=%.1f ms", tid, t_col_ms)
+            elif not wind_active.empty:
+                # 纯风刺激/触觉刺激兜底：优先锚定硬件真实吹风的瞬间
+                t_zero_sys = float(wind_active.iloc[0]["sys_time"])
+                log.debug("Trial %s: aligned to hardware wind onset.", tid)
             else:
-                # 纯风或触觉刺激：以硬件 stim_state 激活的第一帧作为时间零点
-                wind_active = trial_kin[trial_kin["stim_state"] > 0]
-                if not wind_active.empty:
-                    t_zero_sys = float(wind_active.iloc[0]["sys_time"])
-                else:
-                    t_zero_sys = (window["t_start"] + window["t_stop"]) / 2.0
-                    log.warning("Trial %s: no TTC anchor and no wind; using midpoint.", tid)
+                # 极端兜底：既无视觉碰撞也无风刺激（如绝对空白对照）
+                t_zero_sys = (window["t_start"] + window["t_stop"]) / 2.0
+                log.warning("Trial %s: absolute baseline (no visual, no wind); using trial midpoint as zero.", tid)
 
         try:
             parts.append(_integrate_trial(trial_kin, t_zero_sys))
@@ -513,6 +516,22 @@ def _classify_trial(trial: pd.DataFrame) -> dict:
 
     Returns dict with: response_type, v_max, latency_ms
     """
+    # ── Pre-stimulus rest period guard ──
+    # Flag trials where the animal was already moving before stimulus onset,
+    # to prevent residual momentum from triggering false Startle/Walk classifications.
+    pre_stim = trial[(trial["t_rel"] >= -500.0) & (trial["t_rel"] < 0)]
+    if not pre_stim.empty:
+        pre_v_max = np.nanmax(pre_stim["speed"].values)
+        if not np.isnan(pre_v_max) and pre_v_max >= EVOKED_WALK_THRESHOLD:
+            # Extract v_max from the 0-250ms post-stimulus window; fallback to pre_v_max
+            post_window = trial[(trial["t_rel"] > 0) & (trial["t_rel"] <= ESCAPE_WINDOW_MS)]
+            if not post_window.empty:
+                v_max_post = np.nanmax(post_window["speed"].values)
+                v_max = v_max_post if not np.isnan(v_max_post) else float(pre_v_max)
+            else:
+                v_max = float(pre_v_max)
+            return {"response_type": "Pre_Active", "v_max": float(v_max), "latency_ms": np.nan}
+
     post = trial[trial["t_rel"] > 0].copy()
     if post.empty:
         return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
@@ -578,11 +597,12 @@ def _label_trials(df: pd.DataFrame) -> pd.DataFrame:
 
     n_startle = sum(1 for v in classify_map.values() if v == "Startle")
     n_walk = sum(1 for v in classify_map.values() if v == "Walk")
+    n_pre = sum(1 for v in classify_map.values() if v == "Pre_Active")
     n_none = sum(1 for v in classify_map.values() if v == "NoResponse")
     n_total = len(classify_map)
     log.info(
-        "Ternary classification: Startle=%d, Walk=%d, NoResponse=%d (total=%d)",
-        n_startle, n_walk, n_none, n_total,
+        "Quaternary classification: Startle=%d, Walk=%d, Pre_Active=%d, NoResponse=%d (total=%d)",
+        n_startle, n_walk, n_pre, n_none, n_total,
     )
     return df
 
@@ -971,9 +991,9 @@ def plot_behavior_probability(df: pd.DataFrame) -> plt.Figure:
     counts = df.groupby("global_trial_id")["response_type"].first().value_counts()
     total = counts.sum()
 
-    categories = ["Startle", "Walk", "NoResponse"]
+    categories = ["Startle", "Walk", "Pre_Active", "NoResponse"]
     values = [counts.get(c, 0) / total if total > 0 else 0.0 for c in categories]
-    colors = [COLOR_STARTLE, COLOR_WALK, COLOR_NO_RESPONSE]
+    colors = [COLOR_STARTLE, COLOR_WALK, COLOR_PRE_ACTIVE, COLOR_NO_RESPONSE]
 
     fig, ax = plt.subplots(figsize=(3.5, 3.0))
     bars = ax.bar(categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85)
@@ -1020,7 +1040,7 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
     y = trial_agg["v_max"].values
 
     # Color each point by its response_type
-    color_map = {"Startle": COLOR_STARTLE, "Walk": COLOR_WALK, "NoResponse": COLOR_NO_RESPONSE}
+    color_map = {"Startle": COLOR_STARTLE, "Walk": COLOR_WALK, "Pre_Active": COLOR_PRE_ACTIVE, "NoResponse": COLOR_NO_RESPONSE}
     point_colors = [color_map.get(rt, COLOR_NO_RESPONSE) for rt in trial_agg["response_type"].values]
 
     fig, ax = plt.subplots(figsize=(8, 3.5))
@@ -1032,10 +1052,10 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
 
     # Threshold anchors
     ax.axhline(y=STARTLE_ESCAPE_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.7)
-    ax.text(x[-1] + 0.3, STARTLE_ESCAPE_THRESHOLD, "30", ha="left", va="center", fontsize=6, color="k", alpha=0.7)
+    ax.text(x[-1] + 0.3, STARTLE_ESCAPE_THRESHOLD, f"{STARTLE_ESCAPE_THRESHOLD:.0f}", ha="left", va="center", fontsize=6, color="k", alpha=0.7)
 
     ax.axhline(y=EVOKED_WALK_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.5)
-    ax.text(x[-1] + 0.3, EVOKED_WALK_THRESHOLD, "15", ha="left", va="center", fontsize=6, color="0.5", alpha=0.5)
+    ax.text(x[-1] + 0.3, EVOKED_WALK_THRESHOLD, f"{EVOKED_WALK_THRESHOLD:.0f}", ha="left", va="center", fontsize=6, color="0.5", alpha=0.5)
 
     ax.set_xlabel("Global Trial Index")
     ax.set_ylabel("V$_{max}$ (mm/s)")
@@ -1045,7 +1065,7 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
     # Minimalist legend for response types
     from matplotlib.lines import Line2D
     handles = [Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=5, label=l)
-               for l, c in [("Startle", COLOR_STARTLE), ("Walk", COLOR_WALK), ("NoResponse", COLOR_NO_RESPONSE)]]
+               for l, c in [("Startle", COLOR_STARTLE), ("Walk", COLOR_WALK), ("Pre_Active", COLOR_PRE_ACTIVE), ("NoResponse", COLOR_NO_RESPONSE)]]
     ax.legend(handles=handles, loc="upper right", frameon=False, fontsize=6)
 
     fig.tight_layout(pad=1.0)
