@@ -87,7 +87,19 @@ DETAILS_KEYS = (
     "screen_side",
     "lv_ratio_ms",
     "init_half_angle_deg",
+    "direction",
 )
+
+
+def _get_unified_side(data: pd.Series | pd.DataFrame) -> str:
+    """Extract and normalize direction identifier to 'left' or 'right'."""
+    row = data.iloc[0] if isinstance(data, pd.DataFrame) else data
+    for col in ["screen_side", "wind_dir", "direction"]:
+        if col in row and pd.notna(row[col]):
+            val = str(row[col]).strip().lower()
+            if val in ["left", "l"]: return "left"
+            if val in ["right", "r"]: return "right"
+    return ""
 SPEED_WINDOW_MS = 100
 SCALE_BAR_MM = 5.0
 LEGACY_TRIAL_DURATION_MS = 5829.6
@@ -684,7 +696,7 @@ def plot_trajectory_overlay(
                 burst = burst.loc[:end_idx]
 
             # 4. 获取颜色并绘图
-            ss = str(burst["screen_side"].iloc[0]).strip().lower() if pd.notna(burst["screen_side"].iloc[0]) else ""
+            ss = _get_unified_side(burst)
             if ttype == control_type:
                 color = COLOR_CONTROL
             elif ss == "left":
@@ -752,7 +764,7 @@ def plot_speed_kinetics(
             cond_colors[ttype] = COLOR_CONTROL
         else:
             sample = df[df["type"] == ttype].iloc[0]
-            ss = str(sample.get("screen_side", "")).strip().lower()
+            ss = _get_unified_side(sample)
             cond_colors[ttype] = COLOR_LEFT if ss == "left" else COLOR_RIGHT if ss == "right" else COLOR_LEFT
 
     for cond, color in cond_colors.items():
@@ -853,7 +865,7 @@ def plot_spaghetti_kinetics(
             cond_color_map[ttype] = COLOR_CONTROL
         else:
             sample = df[df["type"] == ttype].iloc[0]
-            ss = str(sample.get("screen_side", "")).strip().lower()
+            ss = _get_unified_side(sample)
             cond_color_map[ttype] = COLOR_LEFT if ss == "left" else COLOR_RIGHT if ss == "right" else COLOR_LEFT
 
     conditions = sorted(cond_color_map.keys())
