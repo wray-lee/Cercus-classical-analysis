@@ -3,7 +3,7 @@ Cercus Framework — Behavioral Neuroscience Data Analysis & Visualization
 =========================================================================
 Cross-session unified analysis pipeline. Scans a directory for per-session
 event/kinematics CSV pairs, concatenates them by subject, and generates
-publication-grade figures with dual-threshold escape classification.
+publication-grade figures with physical-threshold escape classification.
 
 Usage:
     python trial_analysis.py --input-dir path/to/data/ --save figures/
@@ -71,9 +71,8 @@ COLOR_RIGHT = "#E64B35"
 COLOR_CONTROL = "#999999"
 COLOR_OSCI_VIS = "#8491B4"
 COLOR_OSCI_HW = "#F39B7F"
-COLOR_STARTLE = "#E64B35"
-COLOR_WALK = "#4DBBD5"
-COLOR_PRE_ACTIVE = "#CCCCCC"
+COLOR_ESCAPE = "#E64B35"
+COLOR_PREWALK = "#4DBBD5"
 COLOR_NO_RESPONSE = "#999999"
 
 _apply_publication_style()
@@ -95,13 +94,13 @@ LEGACY_TRIAL_DURATION_MS = 5829.6
 RADIUS_MM = 30.0
 
 # ──────────────────────────────────────────────────────────────────────
-# Dual-Threshold Escape Detection (Module 2)
+# Physical-Threshold Escape Detection (Module 2)
 # ──────────────────────────────────────────────────────────────────────
-EVOKED_WALK_THRESHOLD = 15.0       # mm/s — evoked crawl baseline
-STARTLE_ESCAPE_THRESHOLD = 100.0    # mm/s — explosive startle baseline
-ESCAPE_SPEED_THRESHOLD = 10.0      # mm/s — sustained speed for consecutive-frame check
-ESCAPE_CONSECUTIVE_K = 3           # frames above threshold to qualify
-ESCAPE_WINDOW_MS = 250.0           # post-stimulus window (ms)
+ESCAPE_VMAX_THRESHOLD = 50.0       # mm/s — absolute peak floor for valid escape response
+ESCAPE_START_THRESHOLD = 10.0      # mm/s — latency onset anchor
+PREWALK_THRESHOLD = 10.0           # mm/s — pre-stimulus spontaneous activity threshold
+PREWALK_WINDOW_MS = 1000.0         # ms — pre-stimulus validation window (1 s)
+POST_STIM_BUFFER_MS = 50.0         # ms — post-stimulus tail extension buffer
 
 # ══════════════════════════════════════════════════════════════════════
 # Module 1 — Cross-Session Auto-Pairing & Concatenation
@@ -500,79 +499,73 @@ def preprocess(
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Module 2 — Dual-Threshold Ternary Classifier
+# Module 2 — Physical-Threshold Ternary Classifier
 # ══════════════════════════════════════════════════════════════════════
 
 
 def _classify_trial(trial: pd.DataFrame) -> dict:
     """
-    Ternary classification for a single trial using dual velocity thresholds.
+    Ternary classification based on physical hardware state.
 
-    Criteria (post-stimulus, 0 < t_rel ≤ 250 ms):
-        1. Consecutive-frame gate: ≥ ESCAPE_CONSECUTIVE_K frames > ESCAPE_SPEED_THRESHOLD (10 mm/s)
-        2. If gate passes and V_max ≥ STARTLE_ESCAPE_THRESHOLD (30.0) → "Startle"
-        3. If gate passes and EVOKED_WALK_THRESHOLD (15.0) ≤ V_max < 30.0 → "Walk"
-        4. Otherwise → "NoResponse"
+    Priority order:
+        1. PreWalk intercept  — pre-stimulus spontaneous activity vetoes the trial.
+        2. Escape detection   — post-stimulus peak with reverse latency search.
+        3. NoResponse fallback.
 
     Returns dict with: response_type, v_max, latency_ms
     """
-    # ── Pre-stimulus rest period guard ──
-    # Flag trials where the animal was already moving before stimulus onset,
-    # to prevent residual momentum from triggering false Startle/Walk classifications.
-    pre_stim = trial[(trial["t_rel"] >= -500.0) & (trial["t_rel"] < 0)]
-    if not pre_stim.empty:
-        pre_v_max = np.nanmax(pre_stim["speed"].values)
-        if not np.isnan(pre_v_max) and pre_v_max >= EVOKED_WALK_THRESHOLD:
-            # Extract v_max from the 0-250ms post-stimulus window; fallback to pre_v_max
-            post_window = trial[(trial["t_rel"] > 0) & (trial["t_rel"] <= ESCAPE_WINDOW_MS)]
-            if not post_window.empty:
-                v_max_post = np.nanmax(post_window["speed"].values)
-                v_max = v_max_post if not np.isnan(v_max_post) else float(pre_v_max)
-            else:
-                v_max = float(pre_v_max)
-            return {"response_type": "Pre_Active", "v_max": float(v_max), "latency_ms": np.nan}
-
-    post = trial[trial["t_rel"] > 0].copy()
-    if post.empty:
+    if trial.empty:
         return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
 
-    in_window = post[post["t_rel"] <= ESCAPE_WINDOW_MS]
-    if in_window.empty:
-        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
+    speed_vals = trial["speed"].values
+    t_vals = trial["t_rel"].values
 
-    speed_vals = in_window["speed"].values
-    t_vals = in_window["t_rel"].values
-
-    v_max = np.nanmax(speed_vals)
-    if np.isnan(v_max):
-        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
-
-    # Consecutive-frame gate
-    above = speed_vals > ESCAPE_SPEED_THRESHOLD
-    consec = 0
-    gate_passed = False
-    latency_ms = np.nan
-    for i, val in enumerate(above):
-        if val:
-            consec += 1
-            if consec >= ESCAPE_CONSECUTIVE_K and not gate_passed:
-                gate_passed = True
-                latency_ms = float(t_vals[i - ESCAPE_CONSECUTIVE_K + 1])
-        else:
-            consec = 0
-
-    if not gate_passed:
-        return {"response_type": "NoResponse", "v_max": float(v_max), "latency_ms": np.nan}
-
-    # Ternary classification by V_max
-    if v_max >= STARTLE_ESCAPE_THRESHOLD:
-        response_type = "Startle"
-    elif v_max >= EVOKED_WALK_THRESHOLD:
-        response_type = "Walk"
+    # ── 1. Temporal anchoring via hardware stim_state ──
+    stim_active = trial[trial["stim_state"] > 0]
+    if not stim_active.empty:
+        t_onset = float(stim_active["t_rel"].iloc[0])
+        t_term = float(stim_active["t_rel"].iloc[-1])
     else:
-        response_type = "NoResponse"
+        t_onset = 0.0
+        t_term = 0.0
 
-    return {"response_type": response_type, "v_max": float(v_max), "latency_ms": latency_ms}
+    # ── 2. Highest priority: PreWalk intercept ──
+    pre_start = t_onset - PREWALK_WINDOW_MS
+    pre_mask = (t_vals >= pre_start) & (t_vals < t_onset)
+    if np.any(pre_mask):
+        pre_v_max = float(np.nanmax(speed_vals[pre_mask]))
+        if not np.isnan(pre_v_max) and pre_v_max > PREWALK_THRESHOLD:
+            return {"response_type": "PreWalk", "v_max": pre_v_max, "latency_ms": np.nan}
+
+    # ── 3. Escape detection with non-greedy (reverse) latency search ──
+    window_end = t_term + POST_STIM_BUFFER_MS
+    win_mask = (t_vals >= t_onset) & (t_vals <= window_end)
+    if not np.any(win_mask):
+        v_max_all = float(np.nanmax(speed_vals)) if len(speed_vals) > 0 else np.nan
+        return {"response_type": "NoResponse", "v_max": v_max_all, "latency_ms": np.nan}
+
+    win_speed = speed_vals[win_mask]
+    win_t = t_vals[win_mask]
+    v_max = float(np.nanmax(win_speed))
+
+    if np.isnan(v_max) or v_max <= ESCAPE_VMAX_THRESHOLD:
+        return {"response_type": "NoResponse", "v_max": v_max if not np.isnan(v_max) else np.nan, "latency_ms": np.nan}
+
+    # Peak index within window
+    peak_idx = int(np.nanargmax(win_speed))
+
+    # Reverse search: from peak leftward, find last point <= ESCAPE_START_THRESHOLD
+    search_speed = win_speed[:peak_idx + 1]
+    below_indices = np.where(search_speed <= ESCAPE_START_THRESHOLD)[0]
+
+    if len(below_indices) > 0:
+        onset_idx = below_indices[-1] + 1  # frame after last below-threshold point
+    else:
+        onset_idx = 0  # entire pre-peak region is above threshold
+
+    latency_ms = float(win_t[onset_idx])
+
+    return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms}
 
 
 def _label_trials(df: pd.DataFrame) -> pd.DataFrame:
@@ -595,14 +588,13 @@ def _label_trials(df: pd.DataFrame) -> pd.DataFrame:
     df["v_max"] = df["global_trial_id"].map(v_max_map)
     df["latency_ms"] = df["global_trial_id"].map(latency_map)
 
-    n_startle = sum(1 for v in classify_map.values() if v == "Startle")
-    n_walk = sum(1 for v in classify_map.values() if v == "Walk")
-    n_pre = sum(1 for v in classify_map.values() if v == "Pre_Active")
+    n_escape = sum(1 for v in classify_map.values() if v == "Escape")
+    n_prewalk = sum(1 for v in classify_map.values() if v == "PreWalk")
     n_none = sum(1 for v in classify_map.values() if v == "NoResponse")
     n_total = len(classify_map)
     log.info(
-        "Quaternary classification: Startle=%d, Walk=%d, Pre_Active=%d, NoResponse=%d (total=%d)",
-        n_startle, n_walk, n_pre, n_none, n_total,
+        "Ternary classification: Escape=%d, PreWalk=%d, NoResponse=%d (total=%d)",
+        n_escape, n_prewalk, n_none, n_total,
     )
     return df
 
@@ -683,9 +675,9 @@ def plot_trajectory_overlay(
             if pd.isna(peak_idx):
                 continue
 
-            # 3. 动态截断：从峰值点向后寻找，一旦速度跌破 EVOKED_WALK_THRESHOLD (15.0)，即视为爆发动作结束
+            # 3. 动态截断：从峰值点向后寻找，一旦速度跌破 ESCAPE_START_THRESHOLD (10.0)，即视为爆发动作结束
             post_peak = burst.loc[peak_idx:]
-            stop_frames = post_peak[post_peak["speed"] < EVOKED_WALK_THRESHOLD]
+            stop_frames = post_peak[post_peak["speed"] < ESCAPE_START_THRESHOLD]
 
             if not stop_frames.empty:
                 end_idx = stop_frames.index[0]
@@ -720,14 +712,14 @@ def plot_trajectory_overlay(
 
 
 def _add_threshold_lines(ax: plt.Axes):
-    """Draw horizontal threshold lines at 30 mm/s (startle) and 15 mm/s (walk)."""
-    ax.axhline(y=STARTLE_ESCAPE_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.7)
-    ax.text(ax.get_xlim()[1] * 0.98, STARTLE_ESCAPE_THRESHOLD + 1.0,
-            "Startle/Jump Threshold", ha="right", va="bottom", fontsize=6, color="k", alpha=0.7)
+    """Draw horizontal threshold lines at ESCAPE_VMAX (50 mm/s) and ESCAPE_START (10 mm/s)."""
+    ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.7)
+    ax.text(ax.get_xlim()[1] * 0.98, ESCAPE_VMAX_THRESHOLD + 1.0,
+            f"Vmax Threshold ({ESCAPE_VMAX_THRESHOLD:.0f})", ha="right", va="bottom", fontsize=6, color="k", alpha=0.7)
 
-    ax.axhline(y=EVOKED_WALK_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.5)
-    ax.text(ax.get_xlim()[1] * 0.98, EVOKED_WALK_THRESHOLD + 1.0,
-            "Walk Threshold", ha="right", va="bottom", fontsize=6, color="0.5", alpha=0.5)
+    ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.5)
+    ax.text(ax.get_xlim()[1] * 0.98, ESCAPE_START_THRESHOLD + 1.0,
+            f"Start Threshold ({ESCAPE_START_THRESHOLD:.0f})", ha="right", va="bottom", fontsize=6, color="0.5", alpha=0.5)
 
 
 def plot_speed_kinetics(
@@ -983,7 +975,7 @@ def plot_spaghetti_kinetics(
 
 def plot_behavior_probability(df: pd.DataFrame) -> plt.Figure:
     """
-    Bar chart showing the proportion of Startle / Walk / NoResponse across
+    Bar chart showing the proportion of Escape / PreWalk / NoResponse across
     all trials for this subject.
 
     Returns the matplotlib Figure.
@@ -991,9 +983,9 @@ def plot_behavior_probability(df: pd.DataFrame) -> plt.Figure:
     counts = df.groupby("global_trial_id")["response_type"].first().value_counts()
     total = counts.sum()
 
-    categories = ["Startle", "Walk", "Pre_Active", "NoResponse"]
+    categories = ["Escape", "PreWalk", "NoResponse"]
     values = [counts.get(c, 0) / total if total > 0 else 0.0 for c in categories]
-    colors = [COLOR_STARTLE, COLOR_WALK, COLOR_PRE_ACTIVE, COLOR_NO_RESPONSE]
+    colors = [COLOR_ESCAPE, COLOR_PREWALK, COLOR_NO_RESPONSE]
 
     fig, ax = plt.subplots(figsize=(3.5, 3.0))
     bars = ax.bar(categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85)
@@ -1024,8 +1016,8 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
     showing habituation (neural desensitisation) slope.
 
     X-axis: global_trial_index (1 … N)
-    Y-axis: V_max (mm/s) within 0–250 ms response window
-    Horizontal anchors at Y=30.0 (black dashed) and Y=15.0 (gray dashed).
+    Y-axis: V_max (mm/s)
+    Horizontal anchors at ESCAPE_VMAX_THRESHOLD (50 mm/s) and ESCAPE_START_THRESHOLD (10 mm/s).
 
     Returns the matplotlib Figure.
     """
@@ -1040,7 +1032,7 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
     y = trial_agg["v_max"].values
 
     # Color each point by its response_type
-    color_map = {"Startle": COLOR_STARTLE, "Walk": COLOR_WALK, "Pre_Active": COLOR_PRE_ACTIVE, "NoResponse": COLOR_NO_RESPONSE}
+    color_map = {"Escape": COLOR_ESCAPE, "PreWalk": COLOR_PREWALK, "NoResponse": COLOR_NO_RESPONSE}
     point_colors = [color_map.get(rt, COLOR_NO_RESPONSE) for rt in trial_agg["response_type"].values]
 
     fig, ax = plt.subplots(figsize=(8, 3.5))
@@ -1051,11 +1043,11 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
     ax.scatter(x, y, c=point_colors, s=28, edgecolors="white", linewidths=0.4, zorder=2)
 
     # Threshold anchors
-    ax.axhline(y=STARTLE_ESCAPE_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.7)
-    ax.text(x[-1] + 0.3, STARTLE_ESCAPE_THRESHOLD, f"{STARTLE_ESCAPE_THRESHOLD:.0f}", ha="left", va="center", fontsize=6, color="k", alpha=0.7)
+    ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.7)
+    ax.text(x[-1] + 0.3, ESCAPE_VMAX_THRESHOLD, f"{ESCAPE_VMAX_THRESHOLD:.0f}", ha="left", va="center", fontsize=6, color="k", alpha=0.7)
 
-    ax.axhline(y=EVOKED_WALK_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.5)
-    ax.text(x[-1] + 0.3, EVOKED_WALK_THRESHOLD, f"{EVOKED_WALK_THRESHOLD:.0f}", ha="left", va="center", fontsize=6, color="0.5", alpha=0.5)
+    ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.5)
+    ax.text(x[-1] + 0.3, ESCAPE_START_THRESHOLD, f"{ESCAPE_START_THRESHOLD:.0f}", ha="left", va="center", fontsize=6, color="0.5", alpha=0.5)
 
     ax.set_xlabel("Global Trial Index")
     ax.set_ylabel("V$_{max}$ (mm/s)")
@@ -1065,7 +1057,7 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
     # Minimalist legend for response types
     from matplotlib.lines import Line2D
     handles = [Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=5, label=l)
-               for l, c in [("Startle", COLOR_STARTLE), ("Walk", COLOR_WALK), ("Pre_Active", COLOR_PRE_ACTIVE), ("NoResponse", COLOR_NO_RESPONSE)]]
+               for l, c in [("Escape", COLOR_ESCAPE), ("PreWalk", COLOR_PREWALK), ("NoResponse", COLOR_NO_RESPONSE)]]
     ax.legend(handles=handles, loc="upper right", frameon=False, fontsize=6)
 
     fig.tight_layout(pad=1.0)
@@ -1079,19 +1071,19 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
 
 def plot_vmax_distribution(df: pd.DataFrame, figsize: tuple[float, float] = (5.0, 3.5)) -> plt.Figure:
     """
-    Histogram + KDE of per-trial V_max for response trials (Startle + Walk).
+    Histogram + KDE of per-trial V_max for Escape trials.
 
-    Used to visually identify the bimodal distribution valley that separates
-    evoked walk from startle/jump, enabling objective threshold refinement.
+    Used to visually verify the escape threshold placement relative to the
+    observed V_max distribution.
 
     Returns the matplotlib Figure.
     """
-    # Only keep trials with an actual response (exclude NoResponse)
-    df_resp = df[df["response_type"].isin(["Startle", "Walk"])].copy()
+    # Only keep Escape trials
+    df_resp = df[df["response_type"] == "Escape"].copy()
     if df_resp.empty:
-        log.warning("No response trials for V_max distribution plot.")
+        log.warning("No Escape trials for V_max distribution plot.")
         fig, ax = plt.subplots(figsize=figsize)
-        ax.text(0.5, 0.5, "No response trials", ha="center", va="center", transform=ax.transAxes)
+        ax.text(0.5, 0.5, "No Escape trials", ha="center", va="center", transform=ax.transAxes)
         return fig
 
     # One v_max per trial (first value per global_trial_id is identical)
@@ -1116,13 +1108,13 @@ def plot_vmax_distribution(df: pd.DataFrame, figsize: tuple[float, float] = (5.0
     ax.plot(x_kde, kde(x_kde), color="black", lw=1.2, alpha=0.9, label="KDE", zorder=3)
 
     # ── Threshold reference lines ──
-    ax.axvline(EVOKED_WALK_THRESHOLD, color="0.5", ls="--", lw=0.75, alpha=0.7, zorder=4)
-    ax.text(EVOKED_WALK_THRESHOLD + 3, ax.get_ylim()[1] * 0.92,
-            f"Walk\n{EVOKED_WALK_THRESHOLD:.0f}", fontsize=6, color="0.5", va="top")
+    ax.axvline(ESCAPE_VMAX_THRESHOLD, color="black", ls="--", lw=0.75, alpha=0.7, zorder=4)
+    ax.text(ESCAPE_VMAX_THRESHOLD + 3, ax.get_ylim()[1] * 0.92,
+            f"Vmax\n{ESCAPE_VMAX_THRESHOLD:.0f}", fontsize=6, color="black", va="top")
 
-    ax.axvline(STARTLE_ESCAPE_THRESHOLD, color="black", ls="--", lw=0.75, alpha=0.7, zorder=4)
-    ax.text(STARTLE_ESCAPE_THRESHOLD + 3, ax.get_ylim()[1] * 0.92,
-            f"Startle\n{STARTLE_ESCAPE_THRESHOLD:.0f}", fontsize=6, color="black", va="top")
+    ax.axvline(ESCAPE_START_THRESHOLD, color="0.5", ls="--", lw=0.75, alpha=0.7, zorder=4)
+    ax.text(ESCAPE_START_THRESHOLD + 3, ax.get_ylim()[1] * 0.92,
+            f"Start\n{ESCAPE_START_THRESHOLD:.0f}", fontsize=6, color="0.5", va="top")
 
     ax.set_xlim(0, 400)
     ax.set_xlabel("$V_{max}$ (mm/s)")
@@ -1130,6 +1122,79 @@ def plot_vmax_distribution(df: pd.DataFrame, figsize: tuple[float, float] = (5.0
     ax.set_title("$V_{max}$ Distribution — Threshold Diagnostic", fontweight="bold")
     ax.legend(loc="upper right", frameon=False, fontsize=6)
 
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Module 5 — Individual Escape Trial Export
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_single_escape_trial(
+    trial: pd.DataFrame,
+    latency_ms: float,
+    v_max: float,
+    global_trial_index: int,
+    figsize: tuple[float, float] = (6.0, 3.5),
+) -> plt.Figure:
+    """
+    Speed kinetics for a single Escape trial with latency marker and threshold lines.
+
+    Parameters
+    ----------
+    trial : DataFrame
+        Kinematics rows for one trial (must contain ``t_rel`` and ``speed``).
+    latency_ms : float
+        System-computed response latency (ms).
+    v_max : float
+        Peak speed (mm/s) within the escape window.
+    global_trial_index : int
+        Trial index used in the figure title and filename.
+    figsize : tuple
+        Figure dimensions.
+
+    Returns
+    -------
+    fig : matplotlib Figure
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    t = trial["t_rel"].values
+    spd = trial["speed"].values
+
+    # ── Speed curve ──
+    ax.plot(t, spd, color=COLOR_ESCAPE, lw=1.0, alpha=0.85, label="Speed")
+
+    # ── Latency marker ──
+    if not np.isnan(latency_ms):
+        ax.axvline(x=latency_ms, color="#3C5488", ls="--", lw=0.9, alpha=0.9, label=f"Latency = {latency_ms:.1f} ms")
+        # Scatter at the latency point — interpolate speed at that time
+        lat_idx = np.argmin(np.abs(t - latency_ms))
+        ax.scatter([latency_ms], [spd[lat_idx]], c="#3C5488", s=30, zorder=5, edgecolors="white", linewidths=0.5)
+
+    # ── Threshold reference lines ──
+    ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.6)
+    ax.text(ax.get_xlim()[0] + (ax.get_xlim()[1] - ax.get_xlim()[0]) * 0.02,
+            ESCAPE_VMAX_THRESHOLD + 1.5,
+            f"Vmax ({ESCAPE_VMAX_THRESHOLD:.0f})", fontsize=6, color="k", alpha=0.6)
+
+    ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
+    ax.text(ax.get_xlim()[0] + (ax.get_xlim()[1] - ax.get_xlim()[0]) * 0.02,
+            ESCAPE_START_THRESHOLD + 1.5,
+            f"Start ({ESCAPE_START_THRESHOLD:.0f})", fontsize=6, color="0.5", alpha=0.4)
+
+    # ── Labels & annotation ──
+    ax.set_xlabel("Time relative to TTC (ms)")
+    ax.set_ylabel("Escape Speed (mm/s)")
+    ax.set_title(f"Trial {global_trial_index} — Escape  (V$_{{max}}$={v_max:.1f} mm/s)", fontweight="bold")
+
+    # Text box with key metrics
+    info_text = f"Latency: {latency_ms:.1f} ms\nV$_{{max}}$: {v_max:.1f} mm/s"
+    ax.text(0.98, 0.95, info_text, transform=ax.transAxes, fontsize=6,
+            ha="right", va="top", bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8", alpha=0.9))
+
+    ax.legend(loc="upper left", frameon=False, fontsize=6)
     fig.tight_layout(pad=1.0)
     return fig
 
@@ -1185,19 +1250,19 @@ def main(argv: list[str] | None = None):
         log.info("Trial types in data: %s", types_present)
 
         # ── Module 3: output routing ──
-        df_response = df[df["response_type"].isin(["Startle", "Walk"])].copy()
+        df_response = df[df["response_type"] == "Escape"].copy()
         df_no_response = df[df["response_type"] == "NoResponse"].copy()
 
         n_resp = df_response["global_trial_id"].nunique()
         n_nr = df_no_response["global_trial_id"].nunique()
-        log.info("Split: %d response (Startle+Walk), %d no-response", n_resp, n_nr)
+        log.info("Split: %d Escape, %d NoResponse", n_resp, n_nr)
 
         # Peak diagnostic for discarded trials
         if not df_no_response.empty:
-            diag_window = df_no_response[(df_no_response["t_rel"] > 0) & (df_no_response["t_rel"] <= ESCAPE_WINDOW_MS)]
+            diag_window = df_no_response[(df_no_response["t_rel"] > 0) & (df_no_response["t_rel"] <= POST_STIM_BUFFER_MS)]
             if not diag_window.empty:
                 peaks = diag_window.groupby("global_trial_id")["speed"].max()
-                log.info("====== NoResponse peak diagnostic (0–250 ms) ======")
+                log.info("====== NoResponse peak diagnostic (0–%.0f ms) ======", POST_STIM_BUFFER_MS)
                 for tid, pmax in peaks.items():
                     log.info("  Trial %s peak: %.1f mm/s", tid, pmax)
                 log.info("  Mean peak: %.1f mm/s", peaks.mean())
@@ -1262,6 +1327,24 @@ def main(argv: list[str] | None = None):
             fig_vmax.savefig(subject_dir / "vmax_distribution_diagnostic.png", dpi=300, bbox_inches="tight")
             plt.close(fig_vmax)
             log.info("V_max distribution diagnostic saved to %s", subject_dir)
+
+            # ── Module 5: Individual Escape trial export ──
+            if not df_response.empty:
+                indiv_dir = subject_dir / "individual_escapes"
+                indiv_dir.mkdir(parents=True, exist_ok=True)
+
+                for tid, grp in df_response.groupby("global_trial_index"):
+                    trial_data = grp.sort_values("t_rel")
+                    row = grp.iloc[0]
+                    lat = float(row["latency_ms"])
+                    vmax = float(row["v_max"])
+
+                    fig_trial = plot_single_escape_trial(trial_data, lat, vmax, int(tid))
+                    fig_trial.savefig(indiv_dir / f"trial_{int(tid)}_escape.png", dpi=300, bbox_inches="tight")
+                    plt.close(fig_trial)
+
+                n_exported = df_response["global_trial_index"].nunique()
+                log.info("Exported %d individual Escape trial figures to %s", n_exported, indiv_dir)
 
         else:
             plt.show()
