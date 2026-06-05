@@ -88,13 +88,14 @@ DETAILS_KEYS = (
     "lv_ratio_ms",
     "init_half_angle_deg",
     "direction",
+    "side",
 )
 
 
 def _get_unified_side(data: pd.Series | pd.DataFrame) -> str:
     """Extract and normalize direction identifier to 'left' or 'right'."""
     row = data.iloc[0] if isinstance(data, pd.DataFrame) else data
-    for col in ["screen_side", "wind_dir", "direction"]:
+    for col in ["screen_side", "wind_dir", "direction", "side"]:
         if col in row and pd.notna(row[col]):
             val = str(row[col]).strip().lower()
             if val in ["left", "l"]: return "left"
@@ -677,25 +678,30 @@ def plot_trajectory_overlay(
         subset = df[df["type"] == ttype]
 
         for _tid, grp in subset.groupby("global_trial_id"):
-            # 1. 提取物理意义上的有效反应段 (t_rel ≥ 0，且硬上限限制在 300 ms 内)
-            burst = grp[(grp["t_rel"] >= 0) & (grp["t_rel"] <= 300)].copy()
-            if burst.empty:
+            # 1. 划定初始反应搜索区 (0~500 ms)，确保只锁定初级应激反射的峰值，排除后期随机爬行的干扰
+            initial_window = grp[(grp["t_rel"] >= 0) & (grp["t_rel"] <= 500)]
+            if initial_window.empty:
                 continue
 
-            # 2. 锁定爆发峰值点
-            peak_idx = burst["speed"].idxmax()
+            # 2. 锁定该窗口内的初级爆发峰值点
+            peak_idx = initial_window["speed"].idxmax()
             if pd.isna(peak_idx):
                 continue
 
-            # 3. 动态截断：从峰值点向后寻找，一旦速度跌破 ESCAPE_START_THRESHOLD (10.0)，即视为爆发动作结束
-            post_peak = burst.loc[peak_idx:]
+            # 3. 尾部动态追踪：从峰值点开始，在全量数据中向后无限期扫描，直到速度跌破 ESCAPE_START_THRESHOLD
+            post_peak = grp.loc[peak_idx:]
             stop_frames = post_peak[post_peak["speed"] < ESCAPE_START_THRESHOLD]
 
             if not stop_frames.empty:
                 end_idx = stop_frames.index[0]
-                burst = burst.loc[:end_idx]
+            else:
+                end_idx = grp.index[-1]  # 兜底：若直到录制结束仍未完全静止，则取到数据末尾
 
-            # 4. 获取颜色并绘图
+            # 4. 截取单次完整物理逃避窗口 (从刺激起点 -> 刹车至基线的终点)
+            start_idx = initial_window.index[0]
+            burst = grp.loc[start_idx:end_idx].copy()
+
+            # 5. 获取颜色并绘图
             ss = _get_unified_side(burst)
             if ttype == control_type:
                 color = COLOR_CONTROL
