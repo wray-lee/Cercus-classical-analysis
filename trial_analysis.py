@@ -65,15 +65,27 @@ def _apply_publication_style():
     rc["savefig.transparent"] = True
 
 
-# NPG (Nature Publishing Group) palette
-COLOR_LEFT = "#4DBBD5"
-COLOR_RIGHT = "#E64B35"
-COLOR_CONTROL = "#999999"
-COLOR_OSCI_VIS = "#8491B4"
-COLOR_OSCI_HW = "#F39B7F"
-COLOR_ESCAPE = "#E64B35"
-COLOR_PREWALK = "#4DBBD5"
-COLOR_NO_RESPONSE = "#999999"
+# Lancet / Cell 风格（展示）
+COLOR_LEFT = "#00468B"        # Navy Blue (深海军蓝)
+COLOR_RIGHT = "#ED0000"       # Crimson Red (深绛红)
+COLOR_CONTROL = "#7C878E"     # Slate Grey (石板灰)
+COLOR_OSCI_VIS = "#ADB6B6"    # Cool Grey (冷灰底色)
+# COLOR_OSCI_HW = "#F2B880"     # Sand Orange (沙橙色底色)
+COLOR_OSCI_HW = "#E69F00"
+COLOR_ESCAPE = "#ED0000"      
+COLOR_PREWALK = "#00468B"     
+COLOR_NO_RESPONSE = "#7C878E"
+
+# Neuron 风格 （文章）
+# COLOR_LEFT = "#008B8B"        # Dark Cyan / Teal (深青色，冷静且深邃)
+# COLOR_RIGHT = "#E05A47"       # Coral Red (珊瑚红，醒目但不刺眼)
+# COLOR_CONTROL = "#8A9A9A"     # Cool Ash Grey (冷灰，降低控制组的视觉存在感)
+# COLOR_OSCI_VIS = "#A5C8C8"    # Pale Teal (极浅青色，用作底部示波器背景，防粘连)
+# # COLOR_OSCI_HW = "#F4C4B7"     # Pale Coral (极浅珊瑚色，用作背景)
+# COLOR_OSCI_HW = "#E69F00"
+# COLOR_ESCAPE = "#E05A47"
+# COLOR_PREWALK = "#008B8B"
+# COLOR_NO_RESPONSE = "#8A9A9A"
 
 _apply_publication_style()
 
@@ -617,25 +629,29 @@ def _label_trials(df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════════
 
 
-def _draw_cross_axes(ax: plt.Axes, scale_bar_val: float = SCALE_BAR_MM):
-    """Draw cross-shaped origin axes with arrowheads and a minimalist scale bar."""
+def _draw_standardized_grid(ax: plt.Axes, max_radius: float = 50.0, step: float = 10.0):
+    """绘制统一尺度的物理坐标系与同心距离环"""
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
 
-    xlim = ax.get_xlim()
-    ylim = ax.get_ylim()
+    # 锁定物理坐标范围
+    ax.set_xlim(-max_radius, max_radius)
+    ax.set_ylim(-max_radius, max_radius)
+    ax.set_aspect("equal")
 
-    ax.annotate("", xy=(xlim[1], 0), xytext=(xlim[0], 0),
-                arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75))
-    ax.annotate("", xy=(0, ylim[1]), xytext=(0, ylim[0]),
-                arrowprops=dict(arrowstyle="-|>", color="black", lw=0.75))
+    # 绘制原点十字准星
+    ax.axhline(0, color="black", lw=0.6, alpha=0.5, zorder=1)
+    ax.axvline(0, color="black", lw=0.6, alpha=0.5, zorder=1)
 
-    sb_x = xlim[1] * 0.65
-    sb_y = ylim[0] * 0.85
-    ax.plot([sb_x, sb_x + scale_bar_val], [sb_y, sb_y], "k-", lw=1.0, solid_capstyle="butt")
-    ax.text(sb_x + scale_bar_val / 2, sb_y - (ylim[1] - ylim[0]) * 0.02,
-            f"{scale_bar_val:.0f} mm", ha="center", va="top", fontsize=7)
+    # 绘制同心距离环与标尺文本
+    for r in np.arange(step, max_radius + step, step):
+        circle = plt.Circle((0, 0), r, color="gray", fill=False, ls="--", lw=0.5, alpha=0.5, zorder=1)
+        ax.add_patch(circle)
+        ax.text(r * 0.707, r * 0.707, f"{int(r)} mm", color="gray", fontsize=6,
+                ha="left", va="bottom", alpha=0.8)
+
+    ax.set_xticks([])
+    ax.set_yticks([])
 
 
 def _draw_side_arrows(ax: plt.Axes, left_color: str = COLOR_LEFT, right_color: str = COLOR_RIGHT):
@@ -715,9 +731,8 @@ def plot_trajectory_overlay(
             # 调整线宽与透明度，使有效轨迹更清晰
             ax.plot(burst["x"], burst["y"], color=color, alpha=0.4, lw=0.8)
 
-        ax.set_aspect("equal")
         ax.set_title(ttype, fontweight="bold")
-        _draw_cross_axes(ax)
+        _draw_standardized_grid(ax, max_radius=50.0, step=10.0)
         _draw_side_arrows(ax, left_color=left_color, right_color=right_color)
 
     fig.tight_layout(pad=1.0)
@@ -880,9 +895,6 @@ def plot_spaghetti_kinetics(
         fig, ax = plt.subplots()
         return fig
 
-    cmap = plt.cm.get_cmap("tab20")
-    trial_idx = 0
-
     fig = plt.figure(figsize=(figsize_per_col * n_conds, row_height * 2))
     gs = gridspec.GridSpec(2, n_conds, height_ratios=[4, 1], hspace=0.1, wspace=0.15, figure=fig)
 
@@ -906,9 +918,8 @@ def plot_spaghetti_kinetics(
 
         for _tid, grp in subset.groupby("global_trial_id"):
             grp_sorted = grp.sort_values("t_rel")
-            trial_color = cmap(trial_idx % 20)
-            trial_idx += 1
-            ax.plot(grp_sorted["t_rel"], grp_sorted["speed"], color=trial_color, lw=0.75, alpha=0.6)
+            # 统一使用条件主色，降维线宽至 0.5，透明度至 0.25 形成背景数据云
+            ax.plot(grp_sorted["t_rel"], grp_sorted["speed"], color=cond_color, lw=0.5, alpha=0.25)
 
         t_bin = 5.0
         t_min = subset["t_rel"].min()
