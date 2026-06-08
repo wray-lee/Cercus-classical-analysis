@@ -137,8 +137,10 @@ def compute_escape_latency(t_rel: np.ndarray, speed: np.ndarray) -> dict:
 
     1. Baseline check: speed at t=0 must be < ESCAPE_START_THRESHOLD (10 mm/s).
     2. Burst check: max speed in [0, ESCAPE_WINDOW_MS] must be > ESCAPE_VMAX_THRESHOLD (50 mm/s).
-    3. Latency: find first frame exceeding 50 mm/s, then search backwards for last
-       frame below 10 mm/s. The frame immediately following is the true latency.
+    3. Latency: locate the first frame exceeding 50 mm/s within [0, ESCAPE_WINDOW_MS],
+       then search backwards through the **full** time series (including negative time)
+       for the last frame below 10 mm/s.  The frame immediately following is the true
+       latency — which may be negative relative to stimulus onset.
 
     Returns dict: is_escaped (bool), v_max (float), latency_ms (float or NaN)
     """
@@ -154,26 +156,28 @@ def compute_escape_latency(t_rel: np.ndarray, speed: np.ndarray) -> dict:
         return {"is_escaped": False, "v_max": np.nan, "latency_ms": np.nan}
 
     burst_speed = speed[burst_mask]
-    burst_t = t_rel[burst_mask]
+    if np.all(np.isnan(burst_speed)):
+        return {"is_escaped": False, "v_max": np.nan, "latency_ms": np.nan}
     v_max = float(np.nanmax(burst_speed))
 
     if np.isnan(v_max) or v_max <= ESCAPE_VMAX_THRESHOLD:
         return {"is_escaped": False, "v_max": v_max, "latency_ms": np.nan}
 
-    # ── Backward-search latency ──
-    # Find first frame exceeding ESCAPE_VMAX_THRESHOLD
-    exceed_mask = burst_speed > ESCAPE_VMAX_THRESHOLD
-    first_exceed_idx = int(np.argmax(exceed_mask))
+    # ── Backward-search latency (full-history, pierces t=0) ──
+    # Global index of the first frame in [0, ESCAPE_WINDOW_MS] exceeding 50 mm/s
+    burst_indices = np.where(burst_mask)[0]
+    first_exceed_local = int(np.argmax(burst_speed > ESCAPE_VMAX_THRESHOLD))
+    first_exceed_global = burst_indices[first_exceed_local]
 
-    # Search backwards from first exceedance for last frame below ESCAPE_START_THRESHOLD
-    search_speed = burst_speed[:first_exceed_idx + 1]
+    # Search backwards from this point through the ENTIRE array (including t < 0)
+    search_speed = speed[:first_exceed_global + 1]
     below_mask = search_speed < ESCAPE_START_THRESHOLD
 
     if np.any(below_mask):
         last_below_idx = int(np.where(below_mask)[0][-1])
-        latency_ms = float(burst_t[last_below_idx + 1])
+        latency_ms = float(t_rel[last_below_idx + 1])
     else:
-        latency_ms = float(burst_t[0])
+        latency_ms = float(t_rel[0])
 
     return {"is_escaped": True, "v_max": v_max, "latency_ms": latency_ms}
 
@@ -285,10 +289,10 @@ def load_and_concat_sessions(
             global_index += 1
             trial_to_global[(sid, tid)] = global_index
 
-        # Remap meta
+        # Remap meta to ensure downstream preprocess matches correctly
         if not meta.empty:
             meta = meta.copy()
-            meta["global_trial_index"] = meta["global_trial_id"].map(
+            meta["global_trial_id"] = meta["global_trial_id"].map(
                 lambda t, _s=sid: trial_to_global.get((_s, t), t)
             )
             meta["session_id"] = sid
@@ -462,12 +466,8 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
 
     heading_rad = df["dz"].cumsum().values / RADIUS_MM
 
-    # Egocentric anchoring: zero heading at stimulus onset (t_rel == 0)
-    stim_idx = int(np.argmin(np.abs(df["t_rel"].values)))
-    heading_rad -= heading_rad[stim_idx]
-
-    dx_global = dx_body * np.cos(heading_rad) + dy_body * np.sin(heading_rad)
-    dy_global = -dx_body * np.sin(heading_rad) + dy_body * np.cos(heading_rad)
+    dx_global = dx_body * np.cos(heading_rad) - dy_body * np.sin(heading_rad)
+    dy_global = dx_body * np.sin(heading_rad) + dy_body * np.cos(heading_rad)
 
     x_raw = np.cumsum(dx_global)
     y_raw = np.cumsum(dy_global)
@@ -605,9 +605,11 @@ def _classify_trial(trial: pd.DataFrame) -> dict:
     # ── 1. PreWalk intercept: pre-stimulus spontaneous activity ──
     pre_mask = (t_vals >= -PREWALK_WINDOW_MS) & (t_vals < 0)
     if np.any(pre_mask):
-        pre_v_max = float(np.nanmax(speed_vals[pre_mask]))
-        if not np.isnan(pre_v_max) and pre_v_max > PREWALK_THRESHOLD:
-            return {"response_type": "PreWalk", "v_max": pre_v_max, "latency_ms": np.nan}
+        pre_slice = speed_vals[pre_mask]
+        if not np.all(np.isnan(pre_slice)):
+            pre_v_max = float(np.nanmax(pre_slice))
+            if pre_v_max > PREWALK_THRESHOLD:
+                return {"response_type": "PreWalk", "v_max": pre_v_max, "latency_ms": np.nan}
 
     # ── 2–4. Escape detection via backward-search latency ──
     result = compute_escape_latency(t_vals, speed_vals)
@@ -732,22 +734,28 @@ def plot_trajectory_overlay(
             # Backward-search latency for this trial
             esc = compute_escape_latency(t_vals, speed_vals)
 
-            if not esc["is_escaped"] or np.isnan(esc["latency_ms"]):
-                continue
+            # ── Determine render window ──
+            if esc["is_escaped"] and not np.isnan(esc["latency_ms"]):
+                # Escape trial: expand 250 ms before latency to capture pre-sprint pivot
+                latency_ms = esc["latency_ms"]
+                render_start_ms = latency_ms - 250.0
+                render_start_idx = int(np.argmin(np.abs(t_vals - render_start_ms)))
+                actual_start_ms = t_vals[render_start_idx]
+                burst_end_ms = latency_ms + 500.0
+            else:
+                # NoResponse fallback: standard baseline window [0, 500] ms
+                render_start_idx = int(np.argmin(np.abs(t_vals - 0.0)))
+                actual_start_ms = 0.0
+                burst_end_ms = 500.0
 
-            latency_ms = esc["latency_ms"]
-
-            # Frame index closest to latency_ms
-            lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-
-            # Burst window: latency_ms → +500 ms or first resting-speed drop
-            burst_end_ms = latency_ms + 500.0
-            burst_mask = (t_vals >= latency_ms) & (t_vals <= burst_end_ms)
+            burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
 
             # Trim at first sub-threshold drop after the burst peak
             if np.any(burst_mask):
                 burst_speed = speed_vals[burst_mask]
                 burst_t = t_vals[burst_mask]
+                if np.all(np.isnan(burst_speed)):
+                    continue
                 peak_in_burst = int(np.nanargmax(burst_speed))
                 post_peak_speed = burst_speed[peak_in_burst:]
                 post_peak_t = burst_t[peak_in_burst:]
@@ -755,20 +763,28 @@ def plot_trajectory_overlay(
                 if np.any(below_rest):
                     rest_idx = int(np.argmax(below_rest))
                     actual_end_ms = post_peak_t[rest_idx]
-                    burst_mask = (t_vals >= latency_ms) & (t_vals <= actual_end_ms)
+                    burst_mask = (t_vals >= actual_start_ms) & (t_vals <= actual_end_ms)
 
             if not np.any(burst_mask):
                 continue
 
             burst = grp[burst_mask]
 
-            # Dynamic origin: position at latency_ms → (0, 0)
-            x_origin = grp["x"].iloc[lat_idx]
-            y_origin = grp["y"].iloc[lat_idx]
+            # ── 2. Dynamic Origin Translation ──
+            # Center at the first frame of the expanded burst
+            x_origin = burst["x"].iloc[0]
+            y_origin = burst["y"].iloc[0]
             burst_x = burst["x"].values - x_origin
             burst_y = burst["y"].values - y_origin
 
-            # Color by stimulus side
+            # ── 3. Dynamic Vector Alignment (Reverse Rotation) ──
+            # Rotate so the heading at the render start frame points North (0 rad)
+            raw_heading = grp["dz"].cumsum().values / RADIUS_MM
+            theta = -raw_heading[render_start_idx]
+            rot_x = burst_x * np.cos(theta) - burst_y * np.sin(theta)
+            rot_y = burst_x * np.sin(theta) + burst_y * np.cos(theta)
+
+            # ── 4. Color & Plot ──
             ss = _get_unified_side(burst)
             if ttype == control_type:
                 color = COLOR_CONTROL
@@ -779,7 +795,7 @@ def plot_trajectory_overlay(
             else:
                 color = COLOR_CONTROL
 
-            ax.plot(burst_x, burst_y, color=color, alpha=0.4, lw=0.8)
+            ax.plot(rot_x, rot_y, color=color, alpha=0.4, lw=0.8)
 
         ax.set_title(ttype, fontweight="bold")
         _draw_standardized_grid(ax, max_radius=TRAJECTORY_MAX_RADIUS_MM, step=TRAJECTORY_STEP_MM)
