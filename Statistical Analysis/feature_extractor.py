@@ -34,11 +34,10 @@ from trial_analysis import (
     preprocess,
     _apply_publication_style,
     DETAILS_KEYS,
-    EVOKED_WALK_THRESHOLD,
-    STARTLE_ESCAPE_THRESHOLD,
-    ESCAPE_SPEED_THRESHOLD,
-    ESCAPE_CONSECUTIVE_K,
+    ESCAPE_VMAX_THRESHOLD,
+    ESCAPE_START_THRESHOLD,
     ESCAPE_WINDOW_MS,
+    compute_escape_latency,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -47,11 +46,9 @@ log = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────
 # Escape Detection Parameters (imported from trial_analysis)
 # ──────────────────────────────────────────────────────────────────────
-# EVOKED_WALK_THRESHOLD = 15.0     — imported
-# STARTLE_ESCAPE_THRESHOLD = 30.0  — imported
-# ESCAPE_SPEED_THRESHOLD = 10.0    — imported
-# ESCAPE_CONSECUTIVE_K = 3         — imported
-# ESCAPE_WINDOW_MS = 250.0         — imported
+# ESCAPE_VMAX_THRESHOLD = 50.0     — imported (burst floor)
+# ESCAPE_START_THRESHOLD = 10.0    — imported (baseline / latency anchor)
+# ESCAPE_WINDOW_MS = 250.0         — imported (post-stimulus burst window)
 
 # Behavior Classification Parameters (legacy — kept for backward compat)
 JUMP_ACCEL_THRESHOLD = 500.0       # mm/s² — peak acceleration for Jump classification
@@ -64,58 +61,26 @@ JUMP_DAMPING_RATIO = 0.3           # ratio of second peak to first peak (< this 
 
 def _detect_escape(trial: pd.DataFrame) -> dict:
     """
-    Escape detection for a single trial using dual-threshold ternary classification.
+    Escape detection using backward-search latency algorithm (literature standard).
 
-    Criteria (post-stimulus, 0 < t_rel ≤ 250 ms):
-        1. Consecutive-frame gate: ≥ ESCAPE_CONSECUTIVE_K frames > ESCAPE_SPEED_THRESHOLD
-        2. If gate passes and V_max ≥ STARTLE_ESCAPE_THRESHOLD (30.0) → "Startle"
-        3. If gate passes and EVOKED_WALK_THRESHOLD (15.0) ≤ V_max < 30.0 → "Walk"
-        4. Otherwise → "NoResponse"
+    Criteria:
+        1. Baseline check: speed at t=0 must be < 10 mm/s.
+        2. Burst threshold: max speed in [0, 250] ms must be > 50 mm/s.
+        3. Backward-search latency: first frame > 50 mm/s, then search backwards
+           for last frame < 10 mm/s. The frame immediately following is the true latency.
 
     Returns dict with: is_escaped (bool), response_type (str), v_max (float), latency_ms (float or NaN)
     """
-    post = trial[trial["t_rel"] > 0].copy()
-    if post.empty:
-        return {"is_escaped": False, "response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
-
-    in_window = post[post["t_rel"] <= ESCAPE_WINDOW_MS]
-    if in_window.empty:
-        return {"is_escaped": False, "response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
-
-    speed_vals = in_window["speed"].values
-    t_vals = in_window["t_rel"].values
-
-    v_max = np.nanmax(speed_vals)
-    if np.isnan(v_max):
-        return {"is_escaped": False, "response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan}
-
-    # Consecutive-frame gate
-    above = speed_vals > ESCAPE_SPEED_THRESHOLD
-    consec = 0
-    gate_passed = False
-    latency_ms = np.nan
-    for i, val in enumerate(above):
-        if val:
-            consec += 1
-            if consec >= ESCAPE_CONSECUTIVE_K and not gate_passed:
-                gate_passed = True
-                latency_ms = float(t_vals[i - ESCAPE_CONSECUTIVE_K + 1])
-        else:
-            consec = 0
-
-    if not gate_passed:
-        return {"is_escaped": False, "response_type": "NoResponse", "v_max": float(v_max), "latency_ms": np.nan}
-
-    # Ternary classification
-    if v_max >= STARTLE_ESCAPE_THRESHOLD:
-        response_type = "Startle"
-    elif v_max >= EVOKED_WALK_THRESHOLD:
-        response_type = "Walk"
-    else:
-        response_type = "NoResponse"
-
-    is_escaped = response_type in ("Startle", "Walk")
-    return {"is_escaped": is_escaped, "response_type": response_type, "v_max": float(v_max), "latency_ms": latency_ms}
+    result = compute_escape_latency(
+        trial["t_rel"].values,
+        trial["speed"].values,
+    )
+    return {
+        "is_escaped": result["is_escaped"],
+        "response_type": "Escape" if result["is_escaped"] else "NoResponse",
+        "v_max": result["v_max"],
+        "latency_ms": result["latency_ms"],
+    }
 
 
 def _classify_behavior(trial: pd.DataFrame) -> str:
