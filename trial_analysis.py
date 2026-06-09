@@ -86,9 +86,13 @@ def compute_escape_latency(t_rel: np.ndarray, speed: np.ndarray) -> dict:
     ``latency_ms`` is not NaN, which matches the original semantics
     (baseline veto removed — the classifier now handles that).
     """
+    
     result = _compute_escape_latency_raw(t_rel, speed)
+    zero_idx = int(np.argmin(np.abs(t_rel)))
+    is_baseline_static = not np.isnan(speed[zero_idx]) and speed[zero_idx] < ESCAPE_START_THRESHOLD
+    has_burst = not np.isnan(result["latency_ms"])
     return {
-        "is_escaped": not np.isnan(result["latency_ms"]),
+        "is_escaped": is_baseline_static and has_burst,
         "v_max": result["v_max"],
         "latency_ms": result["latency_ms"],
     }

@@ -297,7 +297,8 @@ def export_summary_metrics(df: pd.DataFrame, output_path: Path) -> Path:
             trial_agg[col] = pd.to_numeric(trial_agg[col], errors="coerce")
 
     # Round floats to 2 decimal places; NaN stays as NaN
-    trial_agg[float_cols] = trial_agg[float_cols].round(2)
+    present_float_cols = [c for c in float_cols if c in trial_agg.columns]
+    trial_agg[present_float_cols] = trial_agg[present_float_cols].round(2)
 
     trial_agg = trial_agg.sort_values("global_trial_index").reset_index(drop=True)
 
