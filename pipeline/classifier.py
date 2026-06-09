@@ -30,17 +30,23 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     """
     Ternary classification with **orthogonal** physical measurement.
 
-    Priority order:
+    Priority order (orthogonal routing):
 
-    1. **PreWalk intercept** — pre-stimulus spontaneous activity.
-       If any speed in ``[-PREWALK_WINDOW_MS, 0)`` exceeds ``PREWALK_THRESHOLD``,
-       the trial is PreWalk.  ``v_max`` and ``latency_ms`` are always populated
-       from the burst measurement (never vetoed).
+    1. **No-burst intercept** — no valid escape burst detected (``v_max`` ≤ 50
+       or ``latency_ms`` is NaN).  Returns ``NoResponse`` with measured ``v_max``
+       but ``latency_ms`` forced to NaN.  This is the *absolute veto*: regardless
+       of pre-stimulus baseline speed, failing to reach 50 mm/s in [0, 250 ms]
+       is always NoResponse.
 
-    2. **Escape** — baseline quiescent at t=0 (speed < 10 mm/s) **and** a valid
-       burst detected (``latency_ms`` is not NaN).
+    2. **PreWalk intercept** — a valid burst exists **and** pre-stimulus
+       spontaneous activity exceeds ``PREWALK_THRESHOLD`` in the 1-s window
+       before stimulus onset.
 
-    3. **NoResponse** — fallback.
+    3. **Escape** — a valid burst exists **and** baseline speed at t=0 is
+       quiescent (< ``ESCAPE_START_THRESHOLD``).
+
+    4. **Fallback** — NoResponse (e.g. burst exists but baseline ≥ 10 mm/s
+       and no pre-walk activity).
 
     Returns
     -------
@@ -57,24 +63,29 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     v_max: float = result["v_max"]  # type: ignore[assignment]
     latency_ms: float = result["latency_ms"]  # type: ignore[assignment]
 
-    # ── 2. PreWalk intercept: pre-stimulus spontaneous activity ──
+    has_burst: bool = not np.isnan(latency_ms)
+
+    # ── 2. Priority 1 — No-burst absolute veto ──
+    if not has_burst:
+        return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan}
+
+    # ── 3. Priority 2 — PreWalk intercept: pre-stimulus spontaneous activity ──
     pre_mask = (t_vals >= -PREWALK_WINDOW_MS) & (t_vals < 0)
     if np.any(pre_mask):
         pre_slice = speed_vals[pre_mask]
         if not np.all(np.isnan(pre_slice)):
             pre_v_max = float(np.nanmax(pre_slice))
             if pre_v_max > PREWALK_THRESHOLD:
-                # PreWalk — but still propagate the burst measurement
                 return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms}
 
-    # ── 3. Escape: baseline quiescent + valid burst ──
+    # ── 4. Priority 3 — Escape: baseline quiescent at t=0 ──
     zero_idx = int(np.argmin(np.abs(t_vals)))
     baseline_speed = speed_vals[zero_idx]
-    if (not np.isnan(baseline_speed)) and (baseline_speed < ESCAPE_START_THRESHOLD) and (not np.isnan(latency_ms)):
+    if (not np.isnan(baseline_speed)) and (baseline_speed < ESCAPE_START_THRESHOLD):
         return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms}
 
-    # ── 4. Fallback ──
-    return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": latency_ms}
+    # ── 5. Fallback ──
+    return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan}
 
 
 def label_trials(df: pd.DataFrame) -> pd.DataFrame:
