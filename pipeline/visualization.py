@@ -35,6 +35,8 @@ from .kinematics import compute_escape_latency
 log = logging.getLogger(__name__)
 
 
+USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False  # Set to True to use cumulative heading (dz) for trajectory rotation, False to use raw x/y only
+
 # ══════════════════════════════════════════════════════════════════════
 # Shared Drawing Helpers
 # ══════════════════════════════════════════════════════════════════════
@@ -175,17 +177,27 @@ def plot_trajectory_overlay(
 
             burst = grp[burst_mask]
 
+
+# --------------------------- Way for drawing trajectory -----------
+
             # ── Dynamic Origin Translation ──
             x_origin = burst["x"].iloc[0]
             y_origin = burst["y"].iloc[0]
             burst_x = burst["x"].values - x_origin
             burst_y = burst["y"].values - y_origin
 
-            # ── Dynamic Vector Alignment (Reverse Rotation) ──
-            raw_heading = grp["dz"].cumsum().values / RADIUS_MM
-            theta = -raw_heading[render_start_idx]
-            rot_x = burst_x * np.cos(theta) - burst_y * np.sin(theta)
-            rot_y = burst_x * np.sin(theta) + burst_y * np.cos(theta)
+            if not USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
+                # ── Dynamic Vector Alignment (Reverse Rotation) ──
+                raw_heading = grp["dz"].cumsum().values / RADIUS_MM
+                theta = -raw_heading[render_start_idx]
+                rot_x = burst_x * np.cos(theta) - burst_y * np.sin(theta)
+                rot_y = burst_x * np.sin(theta) + burst_y * np.cos(theta)
+            
+            if USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
+                rot_x = burst_x 
+                rot_y = burst_y
+
+# --------------------------------------------------------------------
 
             # ── Color & Plot ──
             ss = _get_unified_side(burst)
