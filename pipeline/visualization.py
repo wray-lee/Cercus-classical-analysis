@@ -111,7 +111,7 @@ def _add_threshold_lines(ax: plt.Axes) -> None:
 
 def plot_trajectory_overlay(
     df: pd.DataFrame,
-    control_type: str = "baseline_visual",
+    control_type: str = "baseline_visual_test",
     left_color: str = COLOR_LEFT,
     right_color: str = COLOR_RIGHT,
     figsize_per_ax: tuple[float, float] = (4.0, 4.0),

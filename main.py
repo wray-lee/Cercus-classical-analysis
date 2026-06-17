@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-dir", required=True,
         help="Directory containing *_session_*_events.csv and *_session_*_kinematics.csv files.",
     )
-    p.add_argument("--control-type", default="baseline_visual", help="Trial type for control condition.")
+    p.add_argument("--control-type", default="baseline_visual_test", help="Trial type for control condition.")
     p.add_argument("--stim-type", default="looming_wind", help="Trial type for stimulus condition.")
     p.add_argument("--save", default=None, help="Directory to save PNG figures. Omit to show interactively.")
     return p
