@@ -35,7 +35,7 @@ from .kinematics import compute_escape_latency
 log = logging.getLogger(__name__)
 
 
-USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False  # Set to True to use cumulative heading (dz) for trajectory rotation, False to use raw x/y only
+USE_Z_DEGREE_TO_DRAW_TRAJECTORY = True  # Set to True to use cumulative heading (dz) for trajectory rotation, False to use raw x/y only
 
 # ══════════════════════════════════════════════════════════════════════
 # Shared Drawing Helpers
