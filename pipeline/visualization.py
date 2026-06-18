@@ -546,7 +546,7 @@ def plot_vmax_distribution(df: pd.DataFrame, figsize: tuple[float, float] = (5.0
 
     trial_vmax = df_resp.groupby("global_trial_id")["v_max"].first().dropna().values
 
-    if len(trial_vmax) == 0:
+    if len(trial_vmax) < 2:
         log.warning("All V_max values are NaN — skipping distribution plot.")
         fig, ax = plt.subplots(figsize=figsize)
         ax.text(0.5, 0.5, "No valid V_max", ha="center", va="center", transform=ax.transAxes)
