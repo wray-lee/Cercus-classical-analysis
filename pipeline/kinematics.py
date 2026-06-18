@@ -102,13 +102,25 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     df["x"] = x_smooth - x_smooth[zero_idx]
     df["y"] = y_smooth - y_smooth[zero_idx]
 
-    dt_sec = df["sys_time"].diff().values
+    # dt_sec = df["sys_time"].diff().values
+    # dx_smooth = np.diff(x_smooth, prepend=x_smooth[0])
+    # dy_smooth = np.diff(y_smooth, prepend=y_smooth[0])
+    # if n > 1:
+    #     dx_smooth[0] = x_smooth[1] - x_smooth[0]
+    #     dy_smooth[0] = y_smooth[1] - y_smooth[0]
+    # speed = np.sqrt(dx_smooth**2 + dy_smooth**2) / dt_sec
+    # speed[0] = np.nan
+    
+    valid_dt = median_dt if (pd.notna(median_dt) and median_dt > 0) else 0.005
+    
     dx_smooth = np.diff(x_smooth, prepend=x_smooth[0])
     dy_smooth = np.diff(y_smooth, prepend=y_smooth[0])
     if n > 1:
         dx_smooth[0] = x_smooth[1] - x_smooth[0]
         dy_smooth[0] = y_smooth[1] - y_smooth[0]
-    speed = np.sqrt(dx_smooth**2 + dy_smooth**2) / dt_sec
+        
+    # 分母由波动数组替换为常数
+    speed = np.sqrt(dx_smooth**2 + dy_smooth**2) / valid_dt
     speed[0] = np.nan
 
     half_win = win // 2
