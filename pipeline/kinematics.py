@@ -110,15 +110,15 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     #     dy_smooth[0] = y_smooth[1] - y_smooth[0]
     # speed = np.sqrt(dx_smooth**2 + dy_smooth**2) / dt_sec
     # speed[0] = np.nan
-    
+
     valid_dt = median_dt if (pd.notna(median_dt) and median_dt > 0) else 0.005
-    
+
     dx_smooth = np.diff(x_smooth, prepend=x_smooth[0])
     dy_smooth = np.diff(y_smooth, prepend=y_smooth[0])
     if n > 1:
         dx_smooth[0] = x_smooth[1] - x_smooth[0]
         dy_smooth[0] = y_smooth[1] - y_smooth[0]
-        
+
     # 分母由波动数组替换为常数
     speed = np.sqrt(dx_smooth**2 + dy_smooth**2) / valid_dt
     speed[0] = np.nan
@@ -222,23 +222,53 @@ def preprocess(
 
         # ── Determine t_zero_sys ──
         wind_active = trial_kin[trial_kin["stim_state"] > 0]
+        has_wind = not wind_active.empty
 
-        if tid in ttc_anchors:
+        # Fetch trial metadata for multimodal detection.
+        # NOTE: these are already in trial_kin via DETAILS_KEYS (line 221).
+        lv_ratio = meta_row.get("lv_ratio_ms", pd.Series([np.nan])).iloc[0] if not meta_row.empty else np.nan
+        init_angle = meta_row.get("init_half_angle_deg", pd.Series([np.nan])).iloc[0] if not meta_row.empty else np.nan
+        trial_type = meta_row.get("type", pd.Series([None])).iloc[0] if not meta_row.empty else None
+        target_ttc = meta_row.get("target_ttc_ms", pd.Series([np.nan])).iloc[0] if not meta_row.empty else np.nan
+
+        # Broad multimodal detection — catch all trials that carry both wind
+        # and looming stimuli, even when init_half_angle_deg is missing.
+        # Criteria (any one suffices):
+        #   1. trial_type == "looming_wind"   (explicit type tag)
+        #   2. has_wind AND lv_ratio present  (looming params partially present)
+        #   3. has_wind AND target_ttc_ms != 0 (non-zero TTC delay implies looming)
+        _is_multimodal = has_wind and (
+            (trial_type is not None and "looming" in str(trial_type))
+            or pd.notna(lv_ratio)
+            or (pd.notna(target_ttc) and target_ttc != 0)
+        )
+
+        # Strict looming flag — both params present, needed for theoretical TTC.
+        has_full_looming = pd.notna(lv_ratio) and pd.notna(init_angle)
+
+        # Multimodal priority: when both looming and wind are present, align
+        # t=0 to the actual wind hardware onset (stim_state > 0).  The escape
+        # response in looming+wind trials is driven by the wind stimulus, not
+        # the visual TTC.  Using theoretical t_col or TTC anchors would shift
+        # the [0, 250 ms] detection window away from the real wind trigger,
+        # causing delayed-wind trials (e.g. target_ttc_ms = +200) to miss
+        # genuine evasive responses and be misclassified as NoResponse.
+        if _is_multimodal:
+            t_zero_sys = float(wind_active.iloc[0]["sys_time"])
+            log.info("Trial %s: MULTIMODAL (wind priority), aligned to stim_state onset.", tid)
+        elif tid in ttc_anchors:
             t_zero_sys = ttc_anchors[tid]
+            log.debug("Trial %s: using ttc_anchor=%.4f", tid, t_zero_sys)
+        elif has_full_looming:
+            t_col_ms = _compute_theoretical_ttc_ms(float(lv_ratio), float(init_angle))
+            t_zero_sys = window["t_start"] + (t_col_ms / 1000.0)
+            log.debug("Trial %s: pure looming, t_col_ms=%.1f ms", tid, t_col_ms)
+        elif has_wind:
+            t_zero_sys = float(wind_active.iloc[0]["sys_time"])
+            log.info("Trial %s: pure wind, aligned to stim_state onset.", tid)
         else:
-            lv_ratio = meta_row.get("lv_ratio_ms", pd.Series([np.nan])).iloc[0] if not meta_row.empty else np.nan
-            init_angle = meta_row.get("init_half_angle_deg", pd.Series([np.nan])).iloc[0] if not meta_row.empty else np.nan
-
-            if pd.notna(lv_ratio) and pd.notna(init_angle):
-                t_col_ms = _compute_theoretical_ttc_ms(float(lv_ratio), float(init_angle))
-                t_zero_sys = window["t_start"] + (t_col_ms / 1000.0)
-                log.debug("Trial %s: no TTC anchor, fallback t_col_ms=%.1f ms", tid, t_col_ms)
-            elif not wind_active.empty:
-                t_zero_sys = float(wind_active.iloc[0]["sys_time"])
-                log.debug("Trial %s: aligned to hardware wind onset.", tid)
-            else:
-                t_zero_sys = (window["t_start"] + window["t_stop"]) / 2.0
-                log.warning("Trial %s: absolute baseline (no visual, no wind); using trial midpoint as zero.", tid)
+            t_zero_sys = (window["t_start"] + window["t_stop"]) / 2.0
+            log.warning("Trial %s: absolute baseline (no visual, no wind); using trial midpoint as zero.", tid)
 
         try:
             parts.append(_integrate_trial(trial_kin, t_zero_sys))

@@ -192,9 +192,9 @@ def plot_trajectory_overlay(
                 theta = -raw_heading[render_start_idx]
                 rot_x = burst_x * np.cos(theta) - burst_y * np.sin(theta)
                 rot_y = burst_x * np.sin(theta) + burst_y * np.cos(theta)
-            
+
             if USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
-                rot_x = burst_x 
+                rot_x = burst_x
                 rot_y = burst_y
 
 # --------------------------------------------------------------------

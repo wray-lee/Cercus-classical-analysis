@@ -103,8 +103,8 @@ ESCAPE_WINDOW_MS: float = 250.0           # ms — post-stimulus burst detection
 # Trajectory Plot Constants
 # ──────────────────────────────────────────────────────────────────────
 
-TRAJECTORY_MAX_RADIUS_MM: float = 30.0
-TRAJECTORY_STEP_MM: float = 5.0
+TRAJECTORY_MAX_RADIUS_MM: float = 80.0
+TRAJECTORY_STEP_MM: float = 10.0
 
 
 # ──────────────────────────────────────────────────────────────────────
