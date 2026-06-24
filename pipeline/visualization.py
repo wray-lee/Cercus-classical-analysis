@@ -35,8 +35,7 @@ from .kinematics import compute_escape_latency
 log = logging.getLogger(__name__)
 
 
-# USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False
-USE_Z_DEGREE_TO_DRAW_TRAJECTORY = True
+
 # ══════════════════════════════════════════════════════════════════════
 # Shared Drawing Helpers
 # ══════════════════════════════════════════════════════════════════════
@@ -115,6 +114,12 @@ def plot_trajectory_overlay(
     left_color: str = COLOR_LEFT,
     right_color: str = COLOR_RIGHT,
     figsize_per_ax: tuple[float, float] = (4.0, 4.0),
+
+
+    #------------- Trajectory Drawing Options -------------
+    # USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False
+    USE_Z_DEGREE_TO_DRAW_TRAJECTORY = True
+    # -------------------------------------------------
 ) -> plt.Figure:
     """
     One subplot per trial type. Left stimuli in NPG blue, right in NPG red.
