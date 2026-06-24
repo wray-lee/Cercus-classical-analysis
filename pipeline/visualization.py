@@ -151,7 +151,9 @@ def plot_trajectory_overlay(
             # ── Determine render window ──
             if not np.isnan(esc["latency_ms"]):
                 latency_ms = esc["latency_ms"]
-                render_start_ms = latency_ms - 250.0
+                # render_start_ms = latency_ms - 5000.0
+                # use all trial as trajectory analysis
+                render_start_ms = float(t_vals.min())
                 render_start_idx = int(np.argmin(np.abs(t_vals - render_start_ms)))
                 actual_start_ms = t_vals[render_start_idx]
                 burst_end_ms = latency_ms + 500.0
