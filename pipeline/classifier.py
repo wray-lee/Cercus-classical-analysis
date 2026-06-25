@@ -58,8 +58,16 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     speed_vals = trial["speed"].values
     t_vals = trial["t_rel"].values
 
+    # ── Determine stimulus onset in t_rel coordinates ──
+    # For multimodal trials t_rel=0 is TTC; wind onset = target_ttc_ms on the
+    # t_rel axis.  Passing this to compute_escape_latency shifts the burst
+    # detection window to the real wind trigger so early-wind escapes are found.
+    _ttc = trial["target_ttc_ms"].iloc[0] if "target_ttc_ms" in trial.columns else np.nan
+    stim_onset: float | None = float(_ttc) if pd.notna(_ttc) else None
+    onset = stim_onset if stim_onset is not None else 0.0
+
     # ── 1. Physical measurement (always runs, never vetoed) ──
-    result = compute_escape_latency(t_vals, speed_vals)
+    result = compute_escape_latency(t_vals, speed_vals, stim_onset_t_rel=stim_onset)
     v_max: float = result["v_max"]  # type: ignore[assignment]
     latency_ms: float = result["latency_ms"]  # type: ignore[assignment]
 
@@ -70,7 +78,8 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
         return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan}
 
     # ── 3. Priority 2 — PreWalk intercept: pre-stimulus spontaneous activity ──
-    pre_mask = (t_vals >= -PREWALK_WINDOW_MS) & (t_vals < 0)
+    # Window is relative to stimulus onset (wind for multimodal, TTC otherwise).
+    pre_mask = (t_vals >= onset - PREWALK_WINDOW_MS) & (t_vals < onset)
     if np.any(pre_mask):
         pre_slice = speed_vals[pre_mask]
         if not np.all(np.isnan(pre_slice)):
@@ -78,8 +87,8 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
             if pre_v_max > PREWALK_THRESHOLD:
                 return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms}
 
-    # ── 4. Priority 3 — Escape: baseline quiescent at t=0 ──
-    zero_idx = int(np.argmin(np.abs(t_vals)))
+    # ── 4. Priority 3 — Escape: baseline quiescent at stimulus onset ──
+    zero_idx = int(np.argmin(np.abs(t_vals - onset)))
     baseline_speed = speed_vals[zero_idx]
     if (not np.isnan(baseline_speed)) and (baseline_speed < ESCAPE_START_THRESHOLD):
         return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms}

@@ -137,23 +137,43 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════════
 
 
-def compute_escape_latency(t_rel: np.ndarray, speed: np.ndarray) -> dict[str, float | bool]:
+def compute_escape_latency(
+    t_rel: np.ndarray,
+    speed: np.ndarray,
+    stim_onset_t_rel: float | None = None,
+) -> dict[str, float | bool]:
     """
     Pure geometric burst-feature extraction — **no baseline veto**.
 
-    1. Measure ``v_max`` in ``[0, ESCAPE_WINDOW_MS]``.
+    1. Measure ``v_max`` in ``[onset, onset + ESCAPE_WINDOW_MS]`` where
+       ``onset = stim_onset_t_rel`` (defaults to 0 when *None*).
     2. If ``v_max > ESCAPE_VMAX_THRESHOLD``: locate the first frame exceeding
        50 mm/s, then search **backwards** through the full time series for the
        last frame below 10 mm/s.  The frame immediately following is the true
-       latency (may be negative relative to stimulus onset).
+       latency (in t_rel coordinates, relative to TTC).
     3. Otherwise return ``latency_ms = NaN``.
+
+    Parameters
+    ----------
+    t_rel : np.ndarray
+        Time axis in ms, relative to TTC (t_rel=0 → TTC).
+    speed : np.ndarray
+        Instantaneous speed in mm/s.
+    stim_onset_t_rel : float or None
+        Stimulus onset on the t_rel axis (ms).  For multimodal trials this
+        equals ``target_ttc_ms`` (the wind-vs-TTC signed offset); for pure
+        visual or pure wind trials leave as *None* to default to 0.
 
     Returns
     -------
     dict with keys: ``v_max`` (float), ``latency_ms`` (float or NaN)
     """
-    # ── Burst window [0, ESCAPE_WINDOW_MS] ──
-    burst_mask = (t_rel >= 0) & (t_rel <= ESCAPE_WINDOW_MS)
+    # ── Burst window [onset, onset + ESCAPE_WINDOW_MS] ──
+    # For multimodal trials, stim_onset_t_rel shifts the window to match the
+    # actual wind onset (e.g. -373 ms for the 30-degree paradigm), so
+    # wind-triggered escapes before TTC are still detected.
+    onset = 0.0 if stim_onset_t_rel is None else stim_onset_t_rel
+    burst_mask = (t_rel >= onset) & (t_rel <= onset + ESCAPE_WINDOW_MS)
     if not np.any(burst_mask):
         return {"v_max": np.nan, "latency_ms": np.nan}
 
@@ -246,16 +266,28 @@ def preprocess(
         # Strict looming flag — both params present, needed for theoretical TTC.
         has_full_looming = pd.notna(lv_ratio) and pd.notna(init_angle)
 
-        # Multimodal priority: when both looming and wind are present, align
-        # t=0 to the actual wind hardware onset (stim_state > 0).  The escape
-        # response in looming+wind trials is driven by the wind stimulus, not
-        # the visual TTC.  Using theoretical t_col or TTC anchors would shift
-        # the [0, 250 ms] detection window away from the real wind trigger,
-        # causing delayed-wind trials (e.g. target_ttc_ms = +200) to miss
-        # genuine evasive responses and be misclassified as NoResponse.
+        # Multimodal (looming + wind): align t=0 to TTC, NOT wind onset.
+        # `target_ttc_ms` is the signed wind-vs-TTC offset (negative = wind before TTC).
+        # Setting t_zero_sys = wind_onset - target_ttc_ms/1000 places:
+        #   t_rel = 0               → TTC moment
+        #   t_rel = -target_ttc_ms  → wind hardware onset (stim_state > 0)
+        # Examples: target_ttc_ms = -373 → wind at ~-373 ms;
+        #           target_ttc_ms =    0 → wind at ~0 ms;
+        #           target_ttc_ms = +200 → wind at ~+200 ms.
         if _is_multimodal:
-            t_zero_sys = float(wind_active.iloc[0]["sys_time"])
-            log.info("Trial %s: MULTIMODAL (wind priority), aligned to stim_state onset.", tid)
+            wind_onset_sys = float(wind_active.iloc[0]["sys_time"])
+            if pd.notna(target_ttc):
+                t_zero_sys = wind_onset_sys - (float(target_ttc) / 1000.0)
+                log.info(
+                    "Trial %s: MULTIMODAL, aligned to TTC (wind onset shifted by %+.0f ms).",
+                    tid, -float(target_ttc),
+                )
+            else:
+                # target_ttc_ms missing — fall back to wind onset
+                t_zero_sys = wind_onset_sys
+                log.warning(
+                    "Trial %s: MULTIMODAL but target_ttc_ms is NaN; falling back to wind onset.", tid,
+                )
         elif tid in ttc_anchors:
             t_zero_sys = ttc_anchors[tid]
             log.debug("Trial %s: using ttc_anchor=%.4f", tid, t_zero_sys)

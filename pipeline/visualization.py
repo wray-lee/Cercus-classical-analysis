@@ -146,7 +146,13 @@ def plot_trajectory_overlay(
             t_vals = grp["t_rel"].values
             speed_vals = grp["speed"].values
 
-            esc = compute_escape_latency(t_vals, speed_vals)
+            # Pass wind-onset offset so burst detection uses the correct window
+            # for multimodal trials (t_rel=0 is TTC, not wind onset).
+            _ttc = grp["target_ttc_ms"].iloc[0] if "target_ttc_ms" in grp.columns else np.nan
+            esc = compute_escape_latency(
+                t_vals, speed_vals,
+                stim_onset_t_rel=float(_ttc) if pd.notna(_ttc) else None,
+            )
 
             # ── Determine render window ──
             if not np.isnan(esc["latency_ms"]):
