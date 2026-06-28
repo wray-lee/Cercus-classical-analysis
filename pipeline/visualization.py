@@ -163,14 +163,15 @@ def plot_trajectory_overlay(
                 render_start_ms = float(t_vals.min())
                 render_start_idx = int(np.argmin(np.abs(t_vals - render_start_ms)))
                 actual_start_ms = t_vals[render_start_idx]
-                burst_end_ms = latency_ms + 500.0
+                burst_end_ms = float(t_vals.max())
             else:
                 render_start_idx = int(np.argmin(np.abs(t_vals - 0.0)))
                 actual_start_ms = 0.0
-                burst_end_ms = 500.0
+                burst_end_ms = float(t_vals.max())
 
             burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
 
+            '''
             # Trim at first sub-threshold drop after the burst peak
             if np.any(burst_mask):
                 burst_speed = speed_vals[burst_mask]
@@ -185,11 +186,13 @@ def plot_trajectory_overlay(
                     rest_idx = int(np.argmax(below_rest))
                     actual_end_ms = post_peak_t[rest_idx]
                     burst_mask = (t_vals >= actual_start_ms) & (t_vals <= actual_end_ms)
+            '''
 
             if not np.any(burst_mask):
                 continue
 
             burst = grp[burst_mask]
+
 
 
 # --------------------------- Way for drawing trajectory -----------
