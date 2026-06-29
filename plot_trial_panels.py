@@ -136,9 +136,9 @@ def plot_trial_panel(
     use_z_heading: bool = True,
 ) -> plt.Figure:
     """Single composite figure for one trial: speed, angular velocity, stimulus, trajectory."""
-    fig = plt.figure(figsize=(12, 8))
-    gs = gridspec.GridSpec(3, 2, height_ratios=[3, 3, 1], width_ratios=[3, 1],
-                           hspace=0.25, wspace=0.25)
+    fig = plt.figure(figsize=(16, 8))
+    gs = gridspec.GridSpec(3, 2, height_ratios=[3, 3, 1], width_ratios=[2, 1.5],
+                           hspace=0.25, wspace=0.3)
 
     ax_speed = fig.add_subplot(gs[0, 0])
     ax_angvel = fig.add_subplot(gs[1, 0], sharex=ax_speed)
