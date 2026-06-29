@@ -62,7 +62,7 @@ def _draw_standardized_grid(ax: plt.Axes, max_radius: float = 50.0, step: float 
             color="gray", fontsize=6, ha="left", va="bottom", alpha=1,fontweight="regular",
         )
         radius_dis.set_path_effects([
-            path_effects.withStroke(linewidth=0.5, foreground="gray", alpha=1)
+            path_effects.withStroke(linewidth=0.5, foreground="#0F172A", alpha=1)
         ])
 
     ax.set_xticks([])
@@ -671,6 +671,8 @@ def plot_single_trial_kinetics(
 
 def plot_global_trajectory_overlay_fixed(
     df: pd.DataFrame,
+    TRAJECTORY_MAX_RADIUS_MM: float = 120.0,
+    TRAJECTORY_STEP_MM: float = 10.0,
     figsize: tuple[float, float] = (5.0, 5.0),
     alpha: float = 1.0,
     lw: float = 0.3,
