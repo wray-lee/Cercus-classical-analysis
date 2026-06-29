@@ -131,7 +131,9 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
     df["speed"] = speed
 
     # ── Angular velocity (rad/s) from dz ──
-    heading_raw = df["dz"].cumsum().values / RADIUS_MM
+    # Sign convention: positive = rightward turn, negative = leftward turn.
+    # The raw dz integration yields the opposite sign, so we negate.
+    heading_raw = -df["dz"].cumsum().values / RADIUS_MM
     angular_velocity = np.diff(heading_raw, prepend=heading_raw[0]) / valid_dt
     angular_velocity[0] = np.nan
     if half_win > 0:
