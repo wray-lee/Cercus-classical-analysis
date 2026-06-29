@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 import matplotlib.gridspec as gridspec
+import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -54,12 +55,15 @@ def _draw_standardized_grid(ax: plt.Axes, max_radius: float = 50.0, step: float 
     ax.axvline(0, color="black", lw=0.6, alpha=0.5, zorder=1)
 
     for r in np.arange(step, max_radius + step, step):
-        circle = plt.Circle((0, 0), r, color="gray", fill=False, ls="--", lw=0.5, alpha=0.5, zorder=1)
+        circle = plt.Circle((0, 0), r, color="gray", fill=False, ls="--", lw=0.5, alpha=1, zorder=1)
         ax.add_patch(circle)
-        ax.text(
+        radius_dis = ax.text(
             r * 0.707, r * 0.707, f"{int(r)} mm",
-            color="gray", fontsize=6, ha="left", va="bottom", alpha=0.8,
+            color="gray", fontsize=6, ha="left", va="bottom", alpha=1,fontweight="regular",
         )
+        radius_dis.set_path_effects([
+            path_effects.withStroke(linewidth=0.5, foreground="gray", alpha=1)
+        ])
 
     ax.set_xticks([])
     ax.set_yticks([])
@@ -67,14 +71,14 @@ def _draw_standardized_grid(ax: plt.Axes, max_radius: float = 50.0, step: float 
 
 def _draw_side_arrows(ax: plt.Axes, left_color: str = COLOR_LEFT, right_color: str = COLOR_RIGHT) -> None:
     """Draw minimalist vector arrows on LEFT and RIGHT edges."""
-    arrow_style = dict(arrowstyle="-|>", color=None, lw=1.0, mutation_scale=8)
+    arrow_style = dict(arrowstyle="]->, lengthA=0.01, widthA=10", color=None, lw=1.0, mutation_scale=8)
 
     ax.annotate(
         "", xy=(0.04, 0.5), xytext=(-0.02, 0.5),
         xycoords="axes fraction", textcoords="axes fraction",
         arrowprops={**arrow_style, "color": left_color},
     )
-    ax.text(0.01, 0.45, "Left Stimulus", transform=ax.transAxes,
+    ax.text(0.09, 0.45, "Left Stimulus", transform=ax.transAxes,
             ha="center", va="top", fontsize=7, color=left_color)
 
     ax.annotate(
@@ -82,7 +86,7 @@ def _draw_side_arrows(ax: plt.Axes, left_color: str = COLOR_LEFT, right_color: s
         xycoords="axes fraction", textcoords="axes fraction",
         arrowprops={**arrow_style, "color": right_color},
     )
-    ax.text(0.99, 0.45, "Right Stimulus", transform=ax.transAxes,
+    ax.text(0.91, 0.45, "Right Stimulus", transform=ax.transAxes,
             ha="center", va="top", fontsize=7, color=right_color)
 
 
@@ -110,6 +114,7 @@ def _add_threshold_lines(ax: plt.Axes) -> None:
 
 def plot_trajectory_overlay(
     df: pd.DataFrame,
+    alpha: float = 0.7,
     control_type: str = "baseline_visual_test",
     left_color: str = COLOR_LEFT,
     right_color: str = COLOR_RIGHT,
@@ -227,7 +232,7 @@ def plot_trajectory_overlay(
             else:
                 color = COLOR_CONTROL
 
-            ax.plot(rot_x, rot_y, color=color, alpha=0.4, lw=0.8)
+            ax.plot(rot_x, rot_y, color=color, alpha=alpha, lw=0.8)
 
         ax.set_title(ttype, fontweight="bold")
         _draw_standardized_grid(ax, max_radius=TRAJECTORY_MAX_RADIUS_MM, step=TRAJECTORY_STEP_MM)
@@ -656,5 +661,111 @@ def plot_single_trial_kinetics(
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8", alpha=0.9))
 
     ax.legend(loc="upper left", frameon=False, fontsize=6)
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 9 — Global Unified Trajectory Overlay (Fixed Local Coordinates)
+# ══════════════════════════════════════════════════════════════════════
+
+def plot_global_trajectory_overlay_fixed(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (5.0, 5.0),
+    alpha: float = 1.0,
+    lw: float = 0.3,
+    left_color: str = COLOR_LEFT,
+    right_color: str = COLOR_RIGHT,
+    #------------- Trajectory Drawing Options -------------
+    # USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False
+    USE_Z_DEGREE_TO_DRAW_TRAJECTORY = True
+    # -------------------------------------------------
+) -> plt.Figure:
+    """
+    Unified trajectory overlay — all paradigms on one axes, with left/right
+    stimulus-side colouring and local heading alignment.
+
+    [修复版]:
+    1. 引入 subject_id 隔离跨动物的 global_trial_id 碰撞（修复放射状色块）。
+    2. 丢弃全局 x/y 累计坐标，每次起步强制使用 dx, dy, dz 重新积分，确保局部 0 rad 起步。
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # 修复1: 加入 subject_id 分组条件，防止不同动物的同名 Trial 互相串台导致坐标剧烈跳跃
+    group_cols = ["subject_id", "global_trial_id"] if "subject_id" in df.columns else ["global_trial_id"]
+
+    for _keys, grp in df.groupby(group_cols):
+        grp = grp.sort_values("t_rel")
+        t_vals = grp["t_rel"].values
+        speed_vals = grp["speed"].values
+
+        # 获取 TTC 以对齐窗口
+        _ttc = grp["target_ttc_ms"].iloc[0] if "target_ttc_ms" in grp.columns else np.nan
+        esc = compute_escape_latency(
+            t_vals, speed_vals,
+            stim_onset_t_rel=float(_ttc) if pd.notna(_ttc) else None,
+        )
+
+        # ── 确定有效数据窗口 ──
+        if not np.isnan(esc["latency_ms"]):
+            render_start_ms = float(t_vals.min())
+            render_start_idx = int(np.argmin(np.abs(t_vals - render_start_ms)))
+            actual_start_ms = t_vals[render_start_idx]
+            burst_end_ms = float(t_vals.max())
+        else:
+            render_start_idx = int(np.argmin(np.abs(t_vals - 0.0)))
+            actual_start_ms = 0.0
+            burst_end_ms = float(t_vals.max())
+
+        burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
+
+        if not np.any(burst_mask):
+            continue
+
+        burst = grp[burst_mask]
+
+        # 修复2: 绝对丢弃 DataFrame 中自带的全局 x 和 y
+        # 提取身体坐标系下的微小位移（根据现有逻辑，原始dx,dy需取反）
+        dx_body = -np.nan_to_num(burst["dx"].values)
+        dy_body = -np.nan_to_num(burst["dy"].values)
+        dz_body = np.nan_to_num(burst["dz"].values)
+
+        if USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
+            # 独立航向校准：局部累加 dz，强制第一帧朝向 0 rad
+            local_heading = np.cumsum(dz_body) / RADIUS_MM
+            local_heading -= local_heading[0]
+
+            # 局部坐标系旋转重构
+            dx_global = dx_body * np.cos(local_heading) - dy_body * np.sin(local_heading)
+            dy_global = dx_body * np.sin(local_heading) + dy_body * np.cos(local_heading)
+
+            traj_x = np.cumsum(dx_global)
+            traj_y = np.cumsum(dy_global)
+        else:
+            # 若不开启动态 dz 校准，直接对 body 进行干净积分（同样不会产生全局偏移）
+            traj_x = np.cumsum(dx_body)
+            traj_y = np.cumsum(dy_body)
+
+        # ── 颜色分配与绘图 ──
+        ss = _get_unified_side(burst)
+        if ss == "left":
+            color = left_color
+        elif ss == "right":
+            color = right_color
+        else:
+            color = COLOR_CONTROL
+
+        ax.plot(traj_x, traj_y, color=color, alpha=alpha, lw=lw)
+
+    # 绘制背景和参考图例
+    _draw_standardized_grid(ax, max_radius=TRAJECTORY_MAX_RADIUS_MM, step=TRAJECTORY_STEP_MM)
+    _draw_side_arrows(ax)
+
+    n_trials = df.groupby(group_cols).ngroups
+    ax.set_title(
+        f"Unified Trajectory Overlay (fixed)  (n={n_trials} trials)",
+        fontweight="bold",
+    )
+
     fig.tight_layout(pad=1.0)
     return fig

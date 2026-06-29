@@ -29,8 +29,11 @@ from pipeline.visualization import (
     plot_behavior_probability,
     plot_habituation_curve,
     plot_single_trial_kinetics,
+    plot_single_trial_kinetics_rad,
     plot_spaghetti_kinetics,
+    plot_spaghetti_kinetics_rad,
     plot_speed_kinetics,
+    plot_speed_kinetics_rad,
     plot_trajectory_overlay,
     plot_vmax_distribution,
 )
@@ -91,6 +94,14 @@ def _generate_response_figures(
     fig_spaghetti.savefig(output_dir / "spaghetti_kinetics.png", dpi=300, bbox_inches="tight")
     plt.close(fig_spaghetti)
 
+    fig_speed_rad = plot_speed_kinetics_rad(df_slice, control_type=control_type, stim_type=stim_type)
+    fig_speed_rad.savefig(output_dir / "speed_kinetics_rad.png", dpi=300, bbox_inches="tight")
+    plt.close(fig_speed_rad)
+
+    fig_spaghetti_rad = plot_spaghetti_kinetics_rad(df_slice, control_type=control_type, stim_type=stim_type)
+    fig_spaghetti_rad.savefig(output_dir / "spaghetti_kinetics_rad.png", dpi=300, bbox_inches="tight")
+    plt.close(fig_spaghetti_rad)
+
     log.info("%s figures saved to %s", label, output_dir)
 
 
@@ -98,6 +109,7 @@ def _generate_individual_trial_figures(
     df_slice: pd.DataFrame,
     output_dir: Path,
     response_type: str,
+    plot_fn: str = "speed",
 ) -> None:
     """Generate per-trial speed kinetics figures for a response-type slice."""
     if df_slice.empty:
@@ -111,10 +123,16 @@ def _generate_individual_trial_figures(
         lat = float(row["latency_ms"])
         vmax = float(row["v_max"])
 
-        fig_trial = plot_single_trial_kinetics(
-            trial_data, lat, vmax, int(tid), response_type=response_type,
-        )
-        fig_trial.savefig(output_dir / f"trial_{int(tid)}_{response_type.lower()}.png",
+        if plot_fn == "rad":
+            fig_trial = plot_single_trial_kinetics_rad(
+                trial_data, lat, vmax, int(tid), response_type=response_type,
+            )
+        else:
+            fig_trial = plot_single_trial_kinetics(
+                trial_data, lat, vmax, int(tid), response_type=response_type,
+            )
+        suffix = f"_{response_type.lower()}" if plot_fn != "rad" else f"_{response_type.lower()}_rad"
+        fig_trial.savefig(output_dir / f"trial_{int(tid)}{suffix}.png",
                           dpi=300, bbox_inches="tight")
         plt.close(fig_trial)
 
@@ -226,6 +244,16 @@ def main(argv: list[str] | None = None) -> None:
             # ── Individual PreWalk trial export (NEW) ──
             _generate_individual_trial_figures(
                 df_prewalk, subject_dir / "individual_escapes_prewalk", "PreWalk",
+            )
+
+            # ── Individual Escape Angular Velocity trial export ──
+            _generate_individual_trial_figures(
+                df_escape, subject_dir / "individual_escapes_rad", "Escape", plot_fn="rad",
+            )
+
+            # ── Individual PreWalk Angular Velocity trial export ──
+            _generate_individual_trial_figures(
+                df_prewalk, subject_dir / "individual_escapes_prewalk_rad", "PreWalk", plot_fn="rad",
             )
 
         else:

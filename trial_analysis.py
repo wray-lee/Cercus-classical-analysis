@@ -62,8 +62,11 @@ from pipeline.visualization import (
     plot_behavior_probability,
     plot_habituation_curve,
     plot_single_trial_kinetics as plot_single_escape_trial,
+    plot_single_trial_kinetics_rad as plot_single_escape_trial_rad,
     plot_spaghetti_kinetics,
+    plot_spaghetti_kinetics_rad,
     plot_speed_kinetics,
+    plot_speed_kinetics_rad,
     plot_trajectory_overlay,
     plot_vmax_distribution,
 )
@@ -133,4 +136,6 @@ __all__ = [
     "plot_trajectory_overlay", "plot_speed_kinetics", "plot_spaghetti_kinetics",
     "plot_behavior_probability", "plot_habituation_curve",
     "plot_vmax_distribution", "plot_single_escape_trial",
+    "plot_speed_kinetics_rad", "plot_spaghetti_kinetics_rad",
+    "plot_single_escape_trial_rad",
 ]

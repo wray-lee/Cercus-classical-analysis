@@ -129,6 +129,16 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
         speed[-half_win:] = np.nan
 
     df["speed"] = speed
+
+    # ── Angular velocity (rad/s) from dz ──
+    heading_raw = df["dz"].cumsum().values / RADIUS_MM
+    angular_velocity = np.diff(heading_raw, prepend=heading_raw[0]) / valid_dt
+    angular_velocity[0] = np.nan
+    if half_win > 0:
+        angular_velocity[:half_win] = np.nan
+        angular_velocity[-half_win:] = np.nan
+    df["angular_velocity"] = angular_velocity
+
     return df
 
 
