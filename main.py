@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--control-type", default="baseline_visual_test", help="Trial type for control condition.")
     p.add_argument("--stim-type", default="looming_wind", help="Trial type for stimulus condition.")
-    p.add_argument("--save", default=None, help="Directory to save PNG figures. Omit to show interactively.")
+    p.add_argument("--save", default=None, help="Directory to save SVG figures. Omit to show interactively.")
     return p
 
 
@@ -83,23 +83,23 @@ def _generate_response_figures(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fig_traj = plot_trajectory_overlay(df_slice, control_type=control_type)
-    fig_traj.savefig(output_dir / "trajectory_overlay.png", dpi=300, bbox_inches="tight")
+    fig_traj.savefig(output_dir / "trajectory_overlay.svg", bbox_inches="tight")
     plt.close(fig_traj)
 
     fig_speed = plot_speed_kinetics(df_slice, control_type=control_type, stim_type=stim_type)
-    fig_speed.savefig(output_dir / "speed_kinetics.png", dpi=300, bbox_inches="tight")
+    fig_speed.savefig(output_dir / "speed_kinetics.svg", bbox_inches="tight")
     plt.close(fig_speed)
 
     fig_spaghetti = plot_spaghetti_kinetics(df_slice, control_type=control_type, stim_type=stim_type)
-    fig_spaghetti.savefig(output_dir / "spaghetti_kinetics.png", dpi=300, bbox_inches="tight")
+    fig_spaghetti.savefig(output_dir / "spaghetti_kinetics.svg", bbox_inches="tight")
     plt.close(fig_spaghetti)
 
     fig_speed_rad = plot_speed_kinetics_rad(df_slice, control_type=control_type, stim_type=stim_type)
-    fig_speed_rad.savefig(output_dir / "speed_kinetics_rad.png", dpi=300, bbox_inches="tight")
+    fig_speed_rad.savefig(output_dir / "speed_kinetics_rad.svg", bbox_inches="tight")
     plt.close(fig_speed_rad)
 
     fig_spaghetti_rad = plot_spaghetti_kinetics_rad(df_slice, control_type=control_type, stim_type=stim_type)
-    fig_spaghetti_rad.savefig(output_dir / "spaghetti_kinetics_rad.png", dpi=300, bbox_inches="tight")
+    fig_spaghetti_rad.savefig(output_dir / "spaghetti_kinetics_rad.svg", bbox_inches="tight")
     plt.close(fig_spaghetti_rad)
 
     log.info("%s figures saved to %s", label, output_dir)
@@ -132,8 +132,8 @@ def _generate_individual_trial_figures(
                 trial_data, lat, vmax, int(tid), response_type=response_type,
             )
         suffix = f"_{response_type.lower()}" if plot_fn != "rad" else f"_{response_type.lower()}_rad"
-        fig_trial.savefig(output_dir / f"trial_{int(tid)}{suffix}.png",
-                          dpi=300, bbox_inches="tight")
+        fig_trial.savefig(output_dir / f"trial_{int(tid)}{suffix}.svg",
+                          bbox_inches="tight")
         plt.close(fig_trial)
 
     n_exported = df_slice["global_trial_index"].nunique()
@@ -220,19 +220,19 @@ def main(argv: list[str] | None = None) -> None:
 
             # ── Behavior probability distribution ──
             fig_prob = plot_behavior_probability(df)
-            fig_prob.savefig(subject_dir / "behavior_probability_distribution.png", dpi=300, bbox_inches="tight")
+            fig_prob.savefig(subject_dir / "behavior_probability_distribution.svg", bbox_inches="tight")
             plt.close(fig_prob)
             log.info("Behavior probability saved to %s", subject_dir)
 
             # ── Habituation curve ──
             fig_hab = plot_habituation_curve(df)
-            fig_hab.savefig(subject_dir / "habituation_curve.png", dpi=300, bbox_inches="tight")
+            fig_hab.savefig(subject_dir / "habituation_curve.svg", bbox_inches="tight")
             plt.close(fig_hab)
             log.info("Habituation curve saved to %s", subject_dir)
 
             # ── Diagnostic: V_max distribution ──
             fig_vmax = plot_vmax_distribution(df)
-            fig_vmax.savefig(subject_dir / "vmax_distribution_diagnostic.png", dpi=300, bbox_inches="tight")
+            fig_vmax.savefig(subject_dir / "vmax_distribution_diagnostic.svg", bbox_inches="tight")
             plt.close(fig_vmax)
             log.info("V_max distribution diagnostic saved to %s", subject_dir)
 

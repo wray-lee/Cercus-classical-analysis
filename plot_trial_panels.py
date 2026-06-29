@@ -5,9 +5,9 @@ Standalone script: for each trial, draw a single figure containing
 linear speed, angular velocity, escape trajectory, and stimulus paradigm.
 
 Output structure:
-    <save>/response/   trial_<N>_escape.png
-    <save>/prewalk/    trial_<N>_prewalk.png
-    <save>/no_response/ trial_<N>_noresponse.png
+    <save>/response/   trial_<N>_escape.svg
+    <save>/prewalk/    trial_<N>_prewalk.svg
+    <save>/no_response/ trial_<N>_noresponse.svg
 
 Usage:
     python plot_trial_panels.py --input-dir path/to/data/ --save figures/
@@ -303,8 +303,8 @@ def _export_trials(
             trial_data, lat, vmax, int(tid), response_type=response_type,
         )
         fig.savefig(
-            output_dir / f"trial_{int(tid)}_{response_type.lower()}.png",
-            dpi=300, bbox_inches="tight",
+            output_dir / f"trial_{int(tid)}_{response_type.lower()}.svg",
+            bbox_inches="tight",
         )
         plt.close(fig)
 

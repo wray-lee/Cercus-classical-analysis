@@ -10,7 +10,7 @@ distortion caused by global cumulative heading drift in the pre-computed
 x/y columns.
 
 Usage:
-    python plot_all_trajectories_fixed.py --input-dir path/to/data/ --save fixed_trajectories.png
+    python plot_all_trajectories_fixed.py --input-dir path/to/data/ --save fixed_trajectories.svg
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--save", required=True,
-        help="Path to save the output figure (e.g. fixed_trajectories.png).",
+        help="Path to save the output figure (e.g. fixed_trajectories.svg).",
     )
     return p
 
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # ── Save ──
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    fig.savefig(save_path, bbox_inches="tight")
     plt.close(fig)
     log.info("Figure saved to %s", save_path)
 
