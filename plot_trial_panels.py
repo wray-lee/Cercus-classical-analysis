@@ -41,7 +41,7 @@ from pipeline.constants import (
     _get_unified_side,
 )
 from pipeline.io import load_and_concat_sessions, scan_and_pair_sessions
-from pipeline.kinematics import compute_escape_latency, preprocess
+from pipeline.kinematics import preprocess
 from pipeline.visualization import (
     _add_threshold_lines,
     _draw_side_arrows,

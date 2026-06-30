@@ -123,7 +123,6 @@ DETAILS_KEYS: tuple[str, ...] = (
 # ──────────────────────────────────────────────────────────────────────
 
 SPEED_WINDOW_MS: float = 100.0
-SCALE_BAR_MM: float = 5.0
 LEGACY_TRIAL_DURATION_MS: float = 5829.6
 RADIUS_MM: float = 30.0
 
@@ -146,13 +145,6 @@ ESCAPE_WINDOW_MS: float = 250.0           # ms — post-stimulus burst detection
 
 TRAJECTORY_MAX_RADIUS_MM: float = 80.0
 TRAJECTORY_STEP_MM: float = 10.0
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Angular Velocity Constants
-# ──────────────────────────────────────────────────────────────────────
-
-ANGULAR_VELOCITY_WINDOW_MS: float = 100.0   # smoothing window for angular velocity
 
 
 # ──────────────────────────────────────────────────────────────────────

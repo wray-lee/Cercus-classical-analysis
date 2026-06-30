@@ -17,11 +17,10 @@ import argparse
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from pipeline.classifier import label_trials
-from pipeline.io import load_and_concat_sessions, scan_and_pair_sessions
+from pipeline.io import export_summary_metrics, load_and_concat_sessions, scan_and_pair_sessions
 from pipeline.kinematics import preprocess
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -47,62 +46,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path for the global summary CSV (e.g. population_summary.csv).",
     )
     return p
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Population Summary Export
-# ══════════════════════════════════════════════════════════════════════
-
-
-def _export_population_summary(df: pd.DataFrame, output_path: Path) -> Path:
-    """
-    Export per-trial summary metrics for the entire population.
-
-    Groups by ``(subject_id, global_trial_index)`` to prevent cross-subject
-    index collisions.  One row per trial with classification results and
-    stimulus parameters.
-
-    Parameters
-    ----------
-    df : DataFrame
-        Concatenated, labelled DataFrame from all subjects (must contain
-        ``subject_id`` and ``global_trial_index``).
-    output_path : Path
-        Destination CSV path.
-
-    Returns
-    -------
-    Path to the written CSV file.
-    """
-    # Build aggregation spec dynamically
-    agg_spec: dict[str, tuple[str, str]] = {
-        "global_trial_id": ("global_trial_id", "first"),
-        "session_id": ("session_id", "first"),
-        "type": ("type", "first"),
-        "response_type": ("response_type", "first"),
-        "latency_ms": ("latency_ms", "first"),
-        "v_max": ("v_max", "first"),
-    }
-    for col in ("wind_dir", "screen_side", "direction", "side",
-                "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"):
-        if col in df.columns:
-            agg_spec[col] = (col, "first")
-
-    trial_agg = df.groupby(["subject_id", "global_trial_index"]).agg(**agg_spec).reset_index()
-
-    # Ensure numeric columns are float
-    float_cols = ["latency_ms", "v_max", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"]
-    for col in float_cols:
-        if col in trial_agg.columns:
-            trial_agg[col] = pd.to_numeric(trial_agg[col], errors="coerce")
-
-    present_float_cols = [c for c in float_cols if c in trial_agg.columns]
-    trial_agg[present_float_cols] = trial_agg[present_float_cols].round(2)
-    trial_agg = trial_agg.sort_values(["subject_id", "global_trial_index"]).reset_index(drop=True)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    trial_agg.to_csv(output_path, index=False, float_format="%.2f")
-    return output_path
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -152,7 +95,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # ── Global concatenation & export ──
     all_data = pd.concat(population_parts, ignore_index=True)
-    _export_population_summary(all_data, output_path)
+    export_summary_metrics(all_data, output_path, groupby=["subject_id", "global_trial_index"])
 
     n_subjects = all_data["subject_id"].nunique()
     n_trials = all_data.groupby(["subject_id", "global_trial_index"]).ngroups

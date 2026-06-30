@@ -39,13 +39,20 @@ from .constants import NPG_PALETTE, _apply_publication_style
 from .io import load_and_concat_sessions, scan_and_pair_sessions
 from .kinematics import preprocess
 
+# ── JAX / numpyro CPU multi-device setup (must run before JAX initializes) ──
+try:
+    import numpyro
+    numpyro.set_host_device_count(8)
+except ImportError:
+    pass
+
 log = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
 # MCMC Sampling Parameters (defaults; overridable via CLI)
 # ──────────────────────────────────────────────────────────────────────
 
-N_CHAINS: int = 4
+N_CHAINS: int = 8
 N_DRAWS: int = 2000
 N_TUNE: int = 3000
 TARGET_ACCEPT: float = 0.9
@@ -439,17 +446,22 @@ def run_mcmc(
              n_chains, n_draws, n_tune, TARGET_ACCEPT)
 
     try:
+        import jax
         import numpyro  # noqa: F401
+
+        n_devices = jax.device_count()
         sampler = "numpyro"
-        log.info("Using numpyro (JAX) sampler for fast inference")
+        log.info("Using numpyro (JAX) sampler: cpu, %d device(s)", n_devices)
     except ImportError:
         sampler = "pymc"
+        n_devices = 0
         log.info("numpyro not found, using default PyMC sampler")
 
     with model:
         trace = pm.sample(
             draws=n_draws,
             chains=n_chains,
+            cores=n_chains,
             tune=n_tune,
             target_accept=TARGET_ACCEPT,
             random_seed=random_seed,
@@ -1670,34 +1682,31 @@ def _extract_delay_from_condition(cond_name: str) -> float | None:
     return None
 
 
-def _make_json_serializable(obj: Any) -> Any:
-    """Recursively convert numpy types for JSON export."""
-    if isinstance(obj, dict):
-        return {k: _make_json_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_make_json_serializable(v) for v in obj]
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    return obj
+class _NumpyEncoder(json.JSONEncoder):
+    """ponytail: stdlib JSONEncoder replaces recursive _make_json_serializable."""
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 
 def generate_summary(
     trace: az.InferenceData,
     bi_conditions: list[str],
     uni_conditions: list[str],
-    ttc50_differences: Dict,
-    variance_reduction: Dict,
+    ttc50_differences: dict,
+    variance_reduction: dict,
     convergence: dict[str, Any],
     output_path: Path,
     n_chains: int = N_CHAINS,
     n_draws: int = N_DRAWS,
     n_tune: int = N_TUNE,
     ppc_results: dict[str, Any] | None = None,
-) -> Dict:
+) -> dict:
     """Generate JSON summary with full diagnostic metrics.
 
     Includes actual R-hat and ESS values (not just booleans), ROPE-based
@@ -1784,11 +1793,9 @@ def generate_summary(
     if ppc_results:
         summary["posterior_predictive"] = ppc_results
 
-    summary = _make_json_serializable(summary)
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
-        json.dump(summary, f, indent=2)
+        json.dump(summary, f, indent=2, cls=_NumpyEncoder)
 
     return summary
 

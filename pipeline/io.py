@@ -167,15 +167,6 @@ def scan_and_pair_sessions(input_dir: Path) -> dict[str, list[dict]]:
     return subjects
 
 
-def _load_single_session(
-    events_path: Path, kinematics_path: Path
-) -> tuple[pd.DataFrame, list[dict], dict[Any, float], pd.DataFrame]:
-    """Load one session's events + kinematics."""
-    meta, trial_windows, ttc_anchors = load_events(events_path)
-    kin = load_kinematics(kinematics_path)
-    return meta, trial_windows, ttc_anchors, kin
-
-
 def load_and_concat_sessions(
     sessions: list[dict],
 ) -> tuple[pd.DataFrame, list[dict], dict[Any, float], pd.DataFrame, dict[Any, int]]:
@@ -202,7 +193,8 @@ def load_and_concat_sessions(
     for sess in sessions:
         sid = sess["session_id"]
         log.info("  Loading session %d: %s / %s", sid, sess["events"].name, sess["kinematics"].name)
-        meta, windows, ttc_anchors, kin = _load_single_session(sess["events"], sess["kinematics"])
+        meta, windows, ttc_anchors = load_events(sess["events"])
+        kin = load_kinematics(sess["kinematics"])
 
         session_tids = sorted(meta["global_trial_id"].unique()) if not meta.empty else []
         for tid in session_tids:
@@ -256,12 +248,13 @@ def load_and_concat_sessions(
 # ══════════════════════════════════════════════════════════════════════
 
 
-def export_summary_metrics(df: pd.DataFrame, output_path: Path) -> Path:
+def export_summary_metrics(
+    df: pd.DataFrame,
+    output_path: Path,
+    groupby: str | list[str] = "global_trial_index",
+) -> Path:
     """
     Export per-trial summary metrics to a CSV file for downstream statistical analysis.
-
-    One row per trial (``global_trial_index``), with classification results and
-    stimulus parameters extracted from the ``details`` columns.
 
     Parameters
     ----------
@@ -269,12 +262,14 @@ def export_summary_metrics(df: pd.DataFrame, output_path: Path) -> Path:
         Fully labelled preprocessed DataFrame (after ``label_trials``).
     output_path : Path
         Full path for the output CSV file.
+    groupby : str or list of str
+        Column(s) to group by. Default ``"global_trial_index"``;
+        pass ``["subject_id", "global_trial_index"]`` for population export.
 
     Returns
     -------
     Path to the written CSV file.
     """
-    # Build aggregation spec dynamically — only include columns that exist
     agg_spec: dict[str, tuple[str, str] | tuple[str, Any]] = {
         "global_trial_id": ("global_trial_id", "first"),
         "session_id": ("session_id", "first"),
@@ -283,24 +278,22 @@ def export_summary_metrics(df: pd.DataFrame, output_path: Path) -> Path:
         "latency_ms": ("latency_ms", "first"),
         "v_max": ("v_max", "first"),
     }
-    # Optional detail columns
     for col in ("wind_dir", "screen_side", "direction", "side", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"):
         if col in df.columns:
             agg_spec[col] = (col, "first")
 
-    trial_agg = df.groupby("global_trial_index").agg(**agg_spec).reset_index()
+    trial_agg = df.groupby(groupby).agg(**agg_spec).reset_index()
 
-    # Ensure numeric columns are float for clean CSV output
     float_cols = ["latency_ms", "v_max", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"]
     for col in float_cols:
         if col in trial_agg.columns:
             trial_agg[col] = pd.to_numeric(trial_agg[col], errors="coerce")
 
-    # Round floats to 2 decimal places; NaN stays as NaN
     present_float_cols = [c for c in float_cols if c in trial_agg.columns]
     trial_agg[present_float_cols] = trial_agg[present_float_cols].round(2)
 
-    trial_agg = trial_agg.sort_values("global_trial_index").reset_index(drop=True)
+    sort_cols = groupby if isinstance(groupby, list) else [groupby]
+    trial_agg = trial_agg.sort_values(sort_cols).reset_index(drop=True)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     trial_agg.to_csv(output_path, index=False, float_format="%.2f")
