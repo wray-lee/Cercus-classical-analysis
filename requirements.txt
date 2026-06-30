@@ -2,7 +2,6 @@ numpy
 pandas
 matplotlib
 scipy
-seaborn
 pymc
 arviz
 numpyro

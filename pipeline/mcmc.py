@@ -23,15 +23,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import arviz as az
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pymc as pm
-import seaborn as sns
 from lifelines import KaplanMeierFitter
 
 from .classifier import label_trials
@@ -56,11 +56,7 @@ MAX_TTC_BINS: int = 10
 # ── Physical Stimulus Parameters for Angle Mapping ──
 # l_v_ratio (ms) = (Object Half-Size / Approach Speed).
 # For example, a 10cm radius object approaching at 50cm/s -> l/v = 0.2s = 200ms.
-L_V_RATIOS: Dict[str, float] = {
-    "visual_only": 120.0,
-    # 用户可以在此添加其他条件的特定 l/v ratio
-    "default": 120.0,
-}
+L_V_RATIO_DEFAULT: float = 120.0
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -80,8 +76,6 @@ def load_and_classify(input_dir: str | Path) -> pd.DataFrame:
     df : DataFrame
         Fully preprocessed and classified trial data with ``delay_sec`` column.
     """
-    import re
-
     input_dir = Path(input_dir)
     if not input_dir.is_dir():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
@@ -123,7 +117,7 @@ def load_and_classify(input_dir: str | Path) -> pd.DataFrame:
 def prepare_mcmc_data(
     df: pd.DataFrame,
     binary_mode: str = "escape_only",
-) -> Tuple[np.ndarray, np.ndarray, List[str], np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
     """
     Aggregate frame-level data to trial level and extract MCMC arrays.
 
@@ -283,9 +277,9 @@ def _compute_effective_ttc(df: pd.DataFrame) -> pd.Series:
 def split_bimodal_unimodal(
     ttc: np.ndarray,
     escape: np.ndarray,
-    conditions: List[str],
+    conditions: list[str],
     condition_idx: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, List[str], np.ndarray, np.ndarray, List[str], np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray, np.ndarray, list[str], np.ndarray]:
     """Split data into bimodal (looming_wind_*) and unimodal groups.
 
     Returns
@@ -332,10 +326,10 @@ def build_psychometric_model(
     bi_ttc: np.ndarray,
     bi_escape: np.ndarray,
     bi_condition_idx: np.ndarray,
-    bi_condition_names: List[str],
+    bi_condition_names: list[str],
     uni_escape: np.ndarray | None = None,
     uni_condition_idx: np.ndarray | None = None,
-    uni_condition_names: List[str] | None = None,
+    uni_condition_names: list[str] | None = None,
 ) -> pm.Model:
     """
     Build Bayesian psychometric model with separated bimodal/unimodal structure.
@@ -467,7 +461,7 @@ def run_mcmc(
     return trace
 
 
-def check_convergence(trace: az.InferenceData) -> Dict[str, Any]:
+def check_convergence(trace: az.InferenceData) -> dict[str, Any]:
     """Check MCMC convergence with full diagnostic metrics.
 
     Returns
@@ -522,7 +516,7 @@ def check_convergence(trace: az.InferenceData) -> Dict[str, Any]:
 
 def get_ttc50_posterior(
     trace: az.InferenceData,
-    bi_conditions: List[str],
+    bi_conditions: list[str],
 ) -> np.ndarray:
     """Extract TTC50 posterior samples as (n_chains, n_draws, n_bi_conditions)."""
     return trace.posterior["ttc50_named"].values
@@ -530,7 +524,7 @@ def get_ttc50_posterior(
 
 def get_k_posterior(
     trace: az.InferenceData,
-    bi_conditions: List[str],
+    bi_conditions: list[str],
 ) -> np.ndarray:
     """Extract k posterior samples as (n_chains, n_draws, n_bi_conditions)."""
     return trace.posterior["k_named"].values
@@ -538,8 +532,8 @@ def get_k_posterior(
 
 def get_p_baseline_posterior(
     trace: az.InferenceData,
-    uni_conditions: List[str],
-) -> Dict[str, np.ndarray]:
+    uni_conditions: list[str],
+) -> dict[str, np.ndarray]:
     """Extract p_baseline posteriors per unimodal condition."""
     if "p_baseline" not in trace.posterior:
         return {}
@@ -552,7 +546,7 @@ def get_p_baseline_posterior(
 # ══════════════════════════════════════════════════════════════════════
 
 
-def compute_hdi(samples: np.ndarray, credible_mass: float = 0.95) -> Tuple[float, float]:
+def compute_hdi(samples: np.ndarray, credible_mass: float = 0.95) -> tuple[float, float]:
     """Compute Highest Density Interval (HDI).
 
     NaN values are silently filtered before computation.
@@ -596,10 +590,10 @@ def _cohen_d(x: np.ndarray, y: np.ndarray) -> float:
 
 def analyze_ttc50_differences(
     trace: az.InferenceData,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
-    rope_ttc50: Tuple[float, float] = (-50.0, 50.0),
-) -> Dict[str, Any]:
+    bi_conditions: list[str],
+    uni_conditions: list[str],
+    rope_ttc50: tuple[float, float] = (-50.0, 50.0),
+) -> dict[str, Any]:
     """Analyze posterior TTC50 with ROPE-based inference and common-scale comparisons.
 
     For each bimodal condition:
@@ -621,7 +615,7 @@ def analyze_ttc50_differences(
 
     vis_p = p_baseline_post.get("visual_only")
 
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
 
     for i, cond in enumerate(bi_conditions):
         cond_post = ttc50_post[:, :, i].flatten()
@@ -633,7 +627,7 @@ def analyze_ttc50_differences(
             ((cond_post >= rope_ttc50[0]) & (cond_post <= rope_ttc50[1])).mean()
         )
 
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "ttc50_mean": float(cond_post.mean()),
             "ttc50_hdi_95": [hdi_low, hdi_high],
             "prob_ttc50_positive": prob_above_zero,
@@ -662,10 +656,10 @@ def analyze_ttc50_differences(
 
 def compute_variance_reduction(
     trace: az.InferenceData,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
     n_bootstrap: int = 2000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Compute posterior variance reduction on a common probability scale.
 
     For each bimodal condition, computes P(Escape) at TTC=0 from posterior
@@ -682,7 +676,7 @@ def compute_variance_reduction(
     ttc50_post = get_ttc50_posterior(trace, bi_conditions)
     p_baseline_post = get_p_baseline_posterior(trace, uni_conditions)
 
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
 
     vis_p = p_baseline_post.get("visual_only")
     if vis_p is not None:
@@ -733,11 +727,11 @@ def posterior_predictive_check(
     model: pm.Model,
     bi_escape: np.ndarray,
     uni_escape: np.ndarray,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
     bi_condition_idx: np.ndarray,
     uni_condition_idx: np.ndarray,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run posterior predictive checks and compute Bayesian p-values.
 
     Calibration is computed per posterior draw and then summarised with HDI,
@@ -757,7 +751,7 @@ def posterior_predictive_check(
     all_escape = np.concatenate([bi_escape, uni_escape])
     n_bi = len(bi_escape)
 
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
 
     # Per-condition Bayesian p-value
     all_conditions = bi_conditions + uni_conditions
@@ -784,7 +778,7 @@ def posterior_predictive_check(
         bin_edges[-1] += 0.01
         trial_bins = np.digitize(all_escape.astype(float), bin_edges[1:-1])  # 0-indexed
 
-        calibration: Dict[str, Any] = {}
+        calibration: dict[str, Any] = {}
         for b in range(n_bins):
             bin_mask = trial_bins == b
             if not bin_mask.any():
@@ -812,9 +806,9 @@ def posterior_predictive_check(
 
 
 def _generate_color_palette(
-    bi_conditions: List[str],
-    uni_conditions: List[str],
-) -> Dict[str, str]:
+    bi_conditions: list[str],
+    uni_conditions: list[str],
+) -> dict[str, str]:
     """Generate NPG-based discrete colour palette.
 
     - visual_only -> NPG Navy Blue (#3C5488)
@@ -822,7 +816,7 @@ def _generate_color_palette(
     - looming_wind_* -> cycles through NPG palette; brightness-stepped
       when count exceeds palette size.
     """
-    palette: Dict[str, str] = {}
+    palette: dict[str, str] = {}
     for cond in uni_conditions:
         if cond == "visual_only":
             palette[cond] = "#5B7B8A"   # Muted Teal (distinct from NPG cycle)
@@ -851,7 +845,7 @@ def _generate_color_palette(
 
 # ── Chain trace colours (NPG-derived maximum mutual contrast) ──────
 
-_CHAIN_COLOURS: List[str] = [
+_CHAIN_COLOURS: list[str] = [
     "#E64B35",   # NPG Red
     "#3C5488",   # NPG Navy
     "#00A087",   # NPG Teal
@@ -861,8 +855,8 @@ _CHAIN_COLOURS: List[str] = [
 
 def plot_posterior_traces(
     trace: az.InferenceData,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
     output_path: Path,
 ) -> None:
     """Generate posterior trace plots for MCMC diagnostics.
@@ -872,7 +866,7 @@ def plot_posterior_traces(
     """
     _apply_publication_style()
 
-    panels: List[Tuple[str, str, str]] = []
+    panels: list[tuple[str, str, str]] = []
     for cond in bi_conditions:
         panels.append(("ttc50_named", cond, f"{cond}\nTTC50 (ms)"))
         panels.append(("k_named", cond, "k (slope)"))
@@ -940,9 +934,9 @@ def plot_psychometric_curves(
     trace: az.InferenceData,
     bi_ttc: np.ndarray,
     bi_escape: np.ndarray,
-    bi_conditions: List[str],
+    bi_conditions: list[str],
     bi_condition_idx: np.ndarray,
-    uni_conditions: List[str],
+    uni_conditions: list[str],
     uni_escape: np.ndarray | None,
     uni_condition_idx: np.ndarray | None,
     output_path: Path,
@@ -1059,8 +1053,8 @@ def plot_psychometric_curves(
 
 def plot_posterior_distributions(
     trace: az.InferenceData,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
     output_path: Path,
 ) -> None:
     """Plot posterior distributions of TTC50, k, and p_baseline.
@@ -1129,8 +1123,8 @@ def plot_posterior_distributions(
 
 
 def plot_ttc50_differences(
-    ttc50_diff: Dict[str, Any],
-    bi_conditions: List[str],
+    ttc50_diff: dict[str, Any],
+    bi_conditions: list[str],
     trace: az.InferenceData,
     output_path: Path,
 ) -> None:
@@ -1206,8 +1200,8 @@ def plot_ttc50_differences(
 
 
 def plot_variance_reduction(
-    var_red: Dict[str, Any],
-    bi_conditions: List[str],
+    var_red: dict[str, Any],
+    bi_conditions: list[str],
     output_path: Path,
 ) -> None:
     """Plot variance reduction with 95% HDI error bars.
@@ -1274,7 +1268,7 @@ def plot_variance_reduction(
 # ══════════════════════════════════════════════════════════════════════
 
 
-def prepare_survival_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, float]:
+def prepare_survival_data(df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
     """Prepare trial-level survival data for Kaplan-Meier analysis.
 
     Each trial yields a single TTC-aligned time value (``TTC_at_event``):
@@ -1410,8 +1404,8 @@ def prepare_survival_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, float]:
 
 def plot_kaplan_meier_cumulative(
     df: pd.DataFrame,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
     output_path: Path,
     true_trial_start: float = -5000.0,
 ) -> None:
@@ -1551,8 +1545,8 @@ def plot_kaplan_meier_cumulative(
 
 def plot_critical_angle_theta50(
     trace: az.InferenceData,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
     output_path: Path,
 ) -> None:
     """Map TTC50 posterior to critical retinal angle θ₅₀ and plot forest plot.
@@ -1574,14 +1568,14 @@ def plot_critical_angle_theta50(
 
     ttc50_post = get_ttc50_posterior(trace, bi_conditions)
 
-    theta_summaries: List[Dict[str, Any]] = []
+    theta_summaries: list[dict[str, Any]] = []
 
     for i, cond in enumerate(bi_conditions):
         ttc_samples = ttc50_post[:, :, i].flatten()
         ttc_abs = np.abs(ttc_samples)
 
         # Resolve l/v ratio for this condition
-        l_v = L_V_RATIOS.get(cond, L_V_RATIOS["default"])
+        l_v = L_V_RATIO_DEFAULT
 
         # Core mapping: θ₅₀ = 2 * arctan(l/v / |TTC|) * (180 / π)
         theta_samples = 2.0 * np.arctan(l_v / ttc_abs) * (180.0 / np.pi)
@@ -1667,7 +1661,6 @@ def _extract_delay_from_condition(cond_name: str) -> float | None:
     available follow the pattern ``looming_wind_d0.613_500``.  Returns
     ``None`` for unimodal conditions or when no delay is encoded.
     """
-    import re
     m = re.match(r"looming_wind_d([\d.]+)_", cond_name)
     if m:
         try:
@@ -1694,16 +1687,16 @@ def _make_json_serializable(obj: Any) -> Any:
 
 def generate_summary(
     trace: az.InferenceData,
-    bi_conditions: List[str],
-    uni_conditions: List[str],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
     ttc50_differences: Dict,
     variance_reduction: Dict,
-    convergence: Dict[str, Any],
+    convergence: dict[str, Any],
     output_path: Path,
     n_chains: int = N_CHAINS,
     n_draws: int = N_DRAWS,
     n_tune: int = N_TUNE,
-    ppc_results: Dict[str, Any] | None = None,
+    ppc_results: dict[str, Any] | None = None,
 ) -> Dict:
     """Generate JSON summary with full diagnostic metrics.
 
@@ -1711,7 +1704,7 @@ def generate_summary(
     hypothesis tests, common-scale effect sizes, variance reduction on
     the probability scale, and delay-stratified posterior estimates.
     """
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "model_info": {
             "n_chains": n_chains,
             "n_draws": n_draws,
@@ -1771,7 +1764,7 @@ def generate_summary(
             }
 
     # Delay-stratified summary (when delay_sec was encoded in condition names)
-    delay_groups: Dict[str, List[str]] = {}
+    delay_groups: dict[str, list[str]] = {}
     for cond in bi_conditions:
         delay = _extract_delay_from_condition(cond)
         if delay is not None:
@@ -1779,7 +1772,7 @@ def generate_summary(
     if delay_groups:
         summary["delay_analysis"] = {}
         for delay_key, conds in sorted(delay_groups.items()):
-            delay_entry: Dict[str, Any] = {
+            delay_entry: dict[str, Any] = {
                 "conditions": conds,
                 "n_conditions": len(conds),
             }

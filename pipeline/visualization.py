@@ -107,6 +107,43 @@ def _add_threshold_lines(ax: plt.Axes) -> None:
     )
 
 
+def _draw_oscilloscope_channels(ax: plt.Axes, df: pd.DataFrame, cond: str) -> None:
+    """Draw dual-channel oscilloscope waveforms (visual + wind) on *ax*."""
+    vis_baseline = 1.0
+    wind_baseline = 3.0
+
+    if "visual" in cond.lower() or "looming" in cond.lower():
+        stim_t_rel = df["t_rel"]
+        t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
+        t_loom = np.array([t_loom_start, 0.0])
+        ax.fill_between(
+            t_loom, vis_baseline, vis_baseline + 1.0, step="mid",
+            color=COLOR_OSCI_VIS, alpha=0.6, label="Visual (looming)",
+        )
+
+    subset = df[df["type"] == cond]
+    if not subset.empty:
+        first_tid = subset["global_trial_id"].iloc[0]
+        grp = subset[subset["global_trial_id"] == first_tid].sort_values("t_rel")
+
+        if "wind" in cond.lower() or "puff" in cond.lower() or grp["stim_state"].max() > 0:
+            t_wind = grp["t_rel"].values
+            stim = grp["stim_state"].values.astype(float)
+            dt_last = t_wind[-1] - t_wind[-2] if len(t_wind) > 1 else 1.0
+            t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
+            stim_ext = np.append(stim, stim[-1])
+            ax.fill_between(
+                t_wind_ext, wind_baseline, wind_baseline + stim_ext, step="post",
+                color=COLOR_OSCI_HW, alpha=0.6, label="Wind (stim_state)",
+            )
+
+    ax.set_ylim(0, 5)
+    ax.set_yticks([])
+    ax.set_ylabel("")
+    ax.set_xlabel("Time relative to TTC (ms)")
+    ax.grid(False)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Plot 1 — Trajectory Overlay
 # ══════════════════════════════════════════════════════════════════════
@@ -176,23 +213,6 @@ def plot_trajectory_overlay(
 
             burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
 
-            '''
-            # Trim at first sub-threshold drop after the burst peak
-            if np.any(burst_mask):
-                burst_speed = speed_vals[burst_mask]
-                burst_t = t_vals[burst_mask]
-                if np.all(np.isnan(burst_speed)):
-                    continue
-                peak_in_burst = int(np.nanargmax(burst_speed))
-                post_peak_speed = burst_speed[peak_in_burst:]
-                post_peak_t = burst_t[peak_in_burst:]
-                below_rest = post_peak_speed < ESCAPE_START_THRESHOLD
-                if np.any(below_rest):
-                    rest_idx = int(np.argmax(below_rest))
-                    actual_end_ms = post_peak_t[rest_idx]
-                    burst_mask = (t_vals >= actual_start_ms) & (t_vals <= actual_end_ms)
-            '''
-
             if not np.any(burst_mask):
                 continue
 
@@ -252,10 +272,12 @@ def plot_speed_kinetics(
     control_type: str = "baseline_visual",
     stim_type: str = "looming_wind",
     figsize: tuple[float, float] = (10, 6),
+    y_col: str = "speed",
+    y_label: str = "Escape Speed (mm/s)",
 ) -> plt.Figure:
     """
     Two-panel figure (4:1 height ratio) with shared X axis.
-    Upper panel: speed (mean ± SEM) per condition + threshold lines.
+    Upper panel: y_col (mean ± SEM) per condition + threshold lines.
     Lower panel: Oscilloscope-style dual-channel waveforms.
     """
     fig = plt.figure(figsize=figsize)
@@ -284,8 +306,8 @@ def plot_speed_kinetics(
         subset = df_binned[df_binned["type"] == cond]
         if subset.empty:
             continue
-        trial_means = subset.groupby(["global_trial_id", "t_bin"])["speed"].mean().reset_index()
-        agg = trial_means.groupby("t_bin")["speed"]
+        trial_means = subset.groupby(["global_trial_id", "t_bin"])[y_col].mean().reset_index()
+        agg = trial_means.groupby("t_bin")[y_col]
         mean = agg.mean()
         sem = agg.sem().fillna(0)
         t_vals = mean.index.values
@@ -293,57 +315,20 @@ def plot_speed_kinetics(
         ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
                              color=color, alpha=0.2, edgecolor="none")
 
-    ax_main.set_ylabel("Escape Speed (mm/s)")
+    ax_main.set_ylabel(y_label)
     ax_main.legend(loc="upper right", frameon=False)
     ax_main.set_xlabel("")
     plt.setp(ax_main.get_xticklabels(), visible=False)
 
-    _add_threshold_lines(ax_main)
+    if y_col == "speed":
+        _add_threshold_lines(ax_main)
+    else:
+        ax_main.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
 
     # ── Lower panel: oscilloscope waveforms ──
-    vis_baseline = 1.0
-    wind_baseline = 3.0
-    drawn_vis = False
-    drawn_wind = False
-
     for cond in df["type"].dropna().unique():
-        subset = df[df["type"] == cond]
-        if subset.empty:
-            continue
-
-        if ("visual" in cond.lower() or "looming" in cond.lower()) and not drawn_vis:
-            stim_t_rel = subset["t_rel"]
-            t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
-            t_loom = np.array([t_loom_start, 0.0])
-            ax_stim.fill_between(
-                t_loom, vis_baseline, vis_baseline + 1.0, step="mid",
-                color=COLOR_OSCI_VIS, alpha=0.6, label="Visual (looming)",
-            )
-            drawn_vis = True
-
-        first_tid = subset["global_trial_id"].iloc[0]
-        grp = subset[subset["global_trial_id"] == first_tid].sort_values("t_rel")
-
-        if ("wind" in cond.lower() or "puff" in cond.lower() or grp["stim_state"].max() > 0) and not drawn_wind:
-            t_wind = grp["t_rel"].values
-            stim = grp["stim_state"].values.astype(float)
-
-            dt_last = t_wind[-1] - t_wind[-2] if len(t_wind) > 1 else 1.0
-            t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
-            stim_ext = np.append(stim, stim[-1])
-
-            ax_stim.fill_between(
-                t_wind_ext, wind_baseline, wind_baseline + stim_ext, step="post",
-                color=COLOR_OSCI_HW, alpha=0.6, label="Wind (stim_state)",
-            )
-            drawn_wind = True
-
-    ax_stim.set_ylim(0, 5)
-    ax_stim.set_yticks([])
-    ax_stim.set_ylabel("")
-    ax_stim.set_xlabel("Time relative to TTC (ms)")
+        _draw_oscilloscope_channels(ax_stim, df, cond)
     ax_stim.legend(loc="upper right", frameon=False, ncol=2)
-    ax_stim.grid(False)
 
     fig.tight_layout(pad=1.0)
     return fig
@@ -360,6 +345,8 @@ def plot_spaghetti_kinetics(
     stim_type: str = "looming_wind",
     figsize_per_col: float = 4.5,
     row_height: float = 5.0,
+    y_col: str = "speed",
+    y_label: str = "Escape Speed (mm/s)",
 ) -> plt.Figure:
     """Multi-panel spaghetti plot with per-condition spatial decoupling."""
     cond_color_map: dict[str, str] = {}
@@ -389,6 +376,8 @@ def plot_spaghetti_kinetics(
         ax_l = fig.add_subplot(gs[1, j], sharex=ax_u)
         ax_lower.append(ax_l)
 
+    show_latency = y_col != "speed"  # ponytail: angular velocity plots show onset markers
+
     for j, cond in enumerate(conditions):
         ax = ax_upper[j]
         subset = df[df["type"] == cond]
@@ -400,7 +389,7 @@ def plot_spaghetti_kinetics(
 
         for _tid, grp in subset.groupby("global_trial_id"):
             grp_sorted = grp.sort_values("t_rel")
-            ax.plot(grp_sorted["t_rel"], grp_sorted["speed"], color=cond_color, lw=0.5, alpha=0.25)
+            ax.plot(grp_sorted["t_rel"], grp_sorted[y_col], color=cond_color, lw=0.5, alpha=0.25)
 
         t_bin = 5.0
         t_min = subset["t_rel"].min()
@@ -410,8 +399,8 @@ def plot_spaghetti_kinetics(
         binned["t_bin"] = pd.cut(binned["t_rel"], bins=bins, labels=bins[:-1], include_lowest=True)
         binned["t_bin"] = binned["t_bin"].astype(float)
 
-        trial_means = binned.groupby(["global_trial_id", "t_bin"])["speed"].mean().reset_index()
-        agg = trial_means.groupby("t_bin")["speed"]
+        trial_means = binned.groupby(["global_trial_id", "t_bin"])[y_col].mean().reset_index()
+        agg = trial_means.groupby("t_bin")[y_col]
         mean = agg.mean()
         sem = agg.sem().fillna(0)
         t_vals = mean.index.values
@@ -421,52 +410,33 @@ def plot_spaghetti_kinetics(
         ax.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
                         color=cond_color, alpha=0.2, edgecolor="none")
 
+        # ── Escape-onset markers (angular velocity plots only) ──
+        if show_latency:
+            trial_lats = subset.groupby("global_trial_id")["latency_ms"].first().dropna()
+            for lat in trial_lats.values:
+                ax.axvline(x=lat, color=cond_color, ls="--", lw=0.4, alpha=0.15)
+            if not trial_lats.empty:
+                mean_lat = trial_lats.mean()
+                ax.axvline(x=mean_lat, color=cond_color, ls="--", lw=1.2, alpha=0.8)
+
         ax.set_title(cond, fontweight="bold")
         if j == 0:
-            ax.set_ylabel("Escape Speed (mm/s)")
+            ax.set_ylabel(y_label)
         else:
             plt.setp(ax.get_yticklabels(), visible=False)
         plt.setp(ax.get_xticklabels(), visible=False)
         ax.legend(loc="upper right", frameon=False)
 
-        _add_threshold_lines(ax)
+        if y_col == "speed":
+            _add_threshold_lines(ax)
+        else:
+            ax.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
 
     # ── Oscilloscope channels ──
     for j, cond in enumerate(conditions):
-        ax = ax_lower[j]
-        subset = df[df["type"] == cond]
-        vis_baseline = 1.0
-        wind_baseline = 3.0
-
-        if "visual" in cond.lower() or "looming" in cond.lower():
-            stim_t_rel = subset["t_rel"]
-            t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
-            t_loom = np.array([t_loom_start, 0.0])
-            ax.fill_between(t_loom, vis_baseline, vis_baseline + 1.0, step="mid",
-                            color=COLOR_OSCI_VIS, alpha=0.6, label="Visual (looming)")
-
-        if not subset.empty:
-            first_tid = subset["global_trial_id"].iloc[0]
-            grp = subset[subset["global_trial_id"] == first_tid].sort_values("t_rel")
-
-            if "wind" in cond.lower() or "puff" in cond.lower() or grp["stim_state"].max() > 0:
-                t_wind = grp["t_rel"].values
-                stim = grp["stim_state"].values.astype(float)
-
-                dt_last = t_wind[-1] - t_wind[-2] if len(t_wind) > 1 else 1.0
-                t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
-                stim_ext = np.append(stim, stim[-1])
-
-                ax.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
-                                step="post", color=COLOR_OSCI_HW, alpha=0.6, label="Wind (stim_state)")
-
-        ax.set_ylim(0, 5)
-        ax.set_yticks([])
-        ax.set_ylabel("")
-        ax.set_xlabel("Time relative to TTC (ms)")
-        ax.grid(False)
+        _draw_oscilloscope_channels(ax_lower[j], df, cond)
         if j == 0:
-            ax.legend(loc="upper right", frameon=False, ncol=2)
+            ax_lower[j].legend(loc="upper right", frameon=False, ncol=2)
 
     fig.tight_layout(pad=1.0)
     return fig
@@ -614,44 +584,46 @@ def plot_single_trial_kinetics(
     global_trial_index: int,
     response_type: str = "Escape",
     figsize: tuple[float, float] = (6.0, 3.5),
+    y_col: str = "speed",
+    y_label: str = "Escape Speed (mm/s)",
 ) -> plt.Figure:
     """
-    Speed kinetics for a single trial with latency marker and threshold lines.
-
+    Single-trial kinetics (speed or angular velocity) with latency marker.
     Works for both Escape and PreWalk trials.
     """
     fig, ax = plt.subplots(figsize=figsize)
 
     t = trial["t_rel"].values
-    spd = trial["speed"].values
+    y_vals = trial[y_col].values
 
-    # Color by response type
     curve_color = COLOR_ESCAPE if response_type == "Escape" else COLOR_PREWALK
 
-    ax.plot(t, spd, color=curve_color, lw=1.0, alpha=0.85, label="Speed")
+    ax.plot(t, y_vals, color=curve_color, lw=1.0, alpha=0.85, label=y_label)
 
     # ── Latency marker ──
     if not np.isnan(latency_ms):
         ax.axvline(x=latency_ms, color="#3C5488", ls="--", lw=0.9, alpha=0.9,
                    label=f"Latency = {latency_ms:.1f} ms")
         lat_idx = np.argmin(np.abs(t - latency_ms))
-        ax.scatter([latency_ms], [spd[lat_idx]], c="#3C5488", s=30, zorder=5,
+        ax.scatter([latency_ms], [y_vals[lat_idx]], c="#3C5488", s=30, zorder=5,
                    edgecolors="white", linewidths=0.5)
 
-    # ── Threshold reference lines ──
-    ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.6)
-    ax.text(ax.get_xlim()[0] + (ax.get_xlim()[1] - ax.get_xlim()[0]) * 0.02,
-            ESCAPE_VMAX_THRESHOLD + 1.5,
-            f"Vmax ({ESCAPE_VMAX_THRESHOLD:.0f})", fontsize=6, color="k", alpha=0.6)
-
-    ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
-    ax.text(ax.get_xlim()[0] + (ax.get_xlim()[1] - ax.get_xlim()[0]) * 0.02,
-            ESCAPE_START_THRESHOLD + 1.5,
-            f"Start ({ESCAPE_START_THRESHOLD:.0f})", fontsize=6, color="0.5", alpha=0.4)
+    # ── Reference lines ──
+    if y_col == "speed":
+        ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.6)
+        ax.text(ax.get_xlim()[0] + (ax.get_xlim()[1] - ax.get_xlim()[0]) * 0.02,
+                ESCAPE_VMAX_THRESHOLD + 1.5,
+                f"Vmax ({ESCAPE_VMAX_THRESHOLD:.0f})", fontsize=6, color="k", alpha=0.6)
+        ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
+        ax.text(ax.get_xlim()[0] + (ax.get_xlim()[1] - ax.get_xlim()[0]) * 0.02,
+                ESCAPE_START_THRESHOLD + 1.5,
+                f"Start ({ESCAPE_START_THRESHOLD:.0f})", fontsize=6, color="0.5", alpha=0.4)
+    else:
+        ax.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
 
     # ── Labels & annotation ──
     ax.set_xlabel("Time relative to TTC (ms)")
-    ax.set_ylabel("Escape Speed (mm/s)")
+    ax.set_ylabel(y_label)
     ax.set_title(f"Trial {global_trial_index} — {response_type}  (V$_{{max}}$={v_max:.1f} mm/s)", fontweight="bold")
 
     latency_str = f"{latency_ms:.1f}" if not np.isnan(latency_ms) else "N/A"
@@ -772,321 +744,3 @@ def plot_global_trajectory_overlay_fixed(
     fig.tight_layout(pad=1.0)
     return fig
 
-
-# ══════════════════════════════════════════════════════════════════════
-# Plot 10 — Single-Trial Angular Velocity Kinetics (rad/s)
-# ══════════════════════════════════════════════════════════════════════
-
-
-def plot_single_trial_kinetics_rad(
-    trial: pd.DataFrame,
-    latency_ms: float,
-    v_max: float,
-    global_trial_index: int,
-    response_type: str = "Escape",
-    figsize: tuple[float, float] = (6.0, 3.5),
-) -> plt.Figure:
-    """
-    Angular velocity kinetics for a single trial with latency marker.
-
-    The latency marker (dashed line + dot) is positioned at the escape onset
-    determined from linear speed — it is **not** re-computed from angular
-    velocity.  This ensures visual alignment between the speed and angular
-    velocity panels.
-    """
-    fig, ax = plt.subplots(figsize=figsize)
-
-    t = trial["t_rel"].values
-    ang_vel = trial["angular_velocity"].values
-
-    curve_color = COLOR_ESCAPE if response_type == "Escape" else COLOR_PREWALK
-
-    ax.plot(t, ang_vel, color=curve_color, lw=1.0, alpha=0.85, label="Angular Velocity")
-
-    # ── Latency marker (from linear speed) ──
-    if not np.isnan(latency_ms):
-        ax.axvline(x=latency_ms, color="#3C5488", ls="--", lw=0.9, alpha=0.9,
-                   label=f"Latency = {latency_ms:.1f} ms")
-        lat_idx = np.argmin(np.abs(t - latency_ms))
-        ax.scatter([latency_ms], [ang_vel[lat_idx]], c="#3C5488", s=30, zorder=5,
-                   edgecolors="white", linewidths=0.5)
-
-    # ── Zero reference line ──
-    ax.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
-
-    # ── Labels & annotation ──
-    ax.set_xlabel("Time relative to TTC (ms)")
-    ax.set_ylabel("Angular Velocity (rad/s)")
-    ax.set_title(
-        f"Trial {global_trial_index} — {response_type}  "
-        f"(V$_{{max}}$={v_max:.1f} mm/s)",
-        fontweight="bold",
-    )
-
-    latency_str = f"{latency_ms:.1f}" if not np.isnan(latency_ms) else "N/A"
-    info_text = f"Latency: {latency_str} ms\nV$_{{max}}$: {v_max:.1f} mm/s"
-    ax.text(0.98, 0.95, info_text, transform=ax.transAxes, fontsize=6,
-            ha="right", va="top",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8", alpha=0.9))
-
-    ax.legend(loc="upper left", frameon=False, fontsize=6)
-    fig.tight_layout(pad=1.0)
-    return fig
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Plot 11 — Angular Velocity Kinetics (mean ± SEM, grouped)
-# ══════════════════════════════════════════════════════════════════════
-
-
-def plot_speed_kinetics_rad(
-    df: pd.DataFrame,
-    control_type: str = "baseline_visual",
-    stim_type: str = "looming_wind",
-    figsize: tuple[float, float] = (10, 6),
-) -> plt.Figure:
-    """
-    Two-panel figure (4:1 height ratio) with shared X axis.
-    Upper panel: angular velocity (mean ± SEM) per condition + escape-onset
-        markers derived from linear-speed latency.
-    Lower panel: Oscilloscope-style dual-channel waveforms.
-
-    The vertical escape-onset dashed lines use the ``latency_ms`` column
-    that was computed from linear speed during preprocessing — angular
-    velocity does **not** re-determine the onset.
-    """
-    fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
-    ax_main = fig.add_subplot(gs[0])
-    ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
-
-    t_bin = 5.0
-    t_min = df["t_rel"].min()
-    t_max = df["t_rel"].max()
-    bins = np.arange(t_min, t_max + t_bin, t_bin)
-    df_binned = df.copy()
-    df_binned["t_bin"] = pd.cut(df_binned["t_rel"], bins=bins, labels=bins[:-1], include_lowest=True)
-    df_binned["t_bin"] = df_binned["t_bin"].astype(float)
-
-    cond_colors: dict[str, str] = {}
-    for ttype in df["type"].dropna().unique():
-        if ttype == control_type:
-            cond_colors[ttype] = COLOR_CONTROL
-        else:
-            sample = df[df["type"] == ttype].iloc[0]
-            ss = _get_unified_side(sample)
-            cond_colors[ttype] = COLOR_LEFT if ss == "left" else COLOR_RIGHT if ss == "right" else COLOR_LEFT
-
-    for cond, color in cond_colors.items():
-        subset = df_binned[df_binned["type"] == cond]
-        if subset.empty:
-            continue
-        trial_means = subset.groupby(["global_trial_id", "t_bin"])["angular_velocity"].mean().reset_index()
-        agg = trial_means.groupby("t_bin")["angular_velocity"]
-        mean = agg.mean()
-        sem = agg.sem().fillna(0)
-        t_vals = mean.index.values
-        ax_main.plot(t_vals, mean.values, color=color, lw=1.0, label=cond)
-        ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
-                             color=color, alpha=0.2, edgecolor="none")
-
-    # ── Escape-onset markers from linear-speed latency ──
-    for cond, color in cond_colors.items():
-        subset = df[df["type"] == cond]
-        if subset.empty:
-            continue
-        trial_lats = subset.groupby("global_trial_id")["latency_ms"].first().dropna()
-        for lat in trial_lats.values:
-            ax_main.axvline(x=lat, color=color, ls="--", lw=0.4, alpha=0.15)
-        if not trial_lats.empty:
-            mean_lat = trial_lats.mean()
-            ax_main.axvline(x=mean_lat, color=color, ls="--", lw=1.2, alpha=0.8)
-
-    ax_main.set_ylabel("Angular Velocity (rad/s)")
-    ax_main.legend(loc="upper right", frameon=False)
-    ax_main.set_xlabel("")
-    plt.setp(ax_main.get_xticklabels(), visible=False)
-    ax_main.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
-
-    # ── Lower panel: oscilloscope waveforms ──
-    vis_baseline = 1.0
-    wind_baseline = 3.0
-    drawn_vis = False
-    drawn_wind = False
-
-    for cond in df["type"].dropna().unique():
-        subset = df[df["type"] == cond]
-        if subset.empty:
-            continue
-
-        if ("visual" in cond.lower() or "looming" in cond.lower()) and not drawn_vis:
-            stim_t_rel = subset["t_rel"]
-            t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
-            t_loom = np.array([t_loom_start, 0.0])
-            ax_stim.fill_between(
-                t_loom, vis_baseline, vis_baseline + 1.0, step="mid",
-                color=COLOR_OSCI_VIS, alpha=0.6, label="Visual (looming)",
-            )
-            drawn_vis = True
-
-        first_tid = subset["global_trial_id"].iloc[0]
-        grp = subset[subset["global_trial_id"] == first_tid].sort_values("t_rel")
-
-        if ("wind" in cond.lower() or "puff" in cond.lower() or grp["stim_state"].max() > 0) and not drawn_wind:
-            t_wind = grp["t_rel"].values
-            stim = grp["stim_state"].values.astype(float)
-
-            dt_last = t_wind[-1] - t_wind[-2] if len(t_wind) > 1 else 1.0
-            t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
-            stim_ext = np.append(stim, stim[-1])
-
-            ax_stim.fill_between(
-                t_wind_ext, wind_baseline, wind_baseline + stim_ext, step="post",
-                color=COLOR_OSCI_HW, alpha=0.6, label="Wind (stim_state)",
-            )
-            drawn_wind = True
-
-    ax_stim.set_ylim(0, 5)
-    ax_stim.set_yticks([])
-    ax_stim.set_ylabel("")
-    ax_stim.set_xlabel("Time relative to TTC (ms)")
-    ax_stim.legend(loc="upper right", frameon=False, ncol=2)
-    ax_stim.grid(False)
-
-    fig.tight_layout(pad=1.0)
-    return fig
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Plot 12 — Spaghetti Angular Velocity Kinetics
-# ══════════════════════════════════════════════════════════════════════
-
-
-def plot_spaghetti_kinetics_rad(
-    df: pd.DataFrame,
-    control_type: str = "baseline_visual",
-    stim_type: str = "looming_wind",
-    figsize_per_col: float = 4.5,
-    row_height: float = 5.0,
-) -> plt.Figure:
-    """Multi-panel spaghetti plot of angular velocity with per-condition spatial decoupling.
-
-    Escape-onset markers use the ``latency_ms`` column (computed from linear
-    speed) — angular velocity does **not** re-determine the onset.
-    """
-    cond_color_map: dict[str, str] = {}
-    for ttype in df["type"].dropna().unique():
-        if ttype == control_type:
-            cond_color_map[ttype] = COLOR_CONTROL
-        else:
-            sample = df[df["type"] == ttype].iloc[0]
-            ss = _get_unified_side(sample)
-            cond_color_map[ttype] = COLOR_LEFT if ss == "left" else COLOR_RIGHT if ss == "right" else COLOR_LEFT
-
-    conditions = sorted(cond_color_map.keys())
-    n_conds = len(conditions)
-    if n_conds == 0:
-        fig, ax = plt.subplots()
-        return fig
-
-    fig = plt.figure(figsize=(figsize_per_col * n_conds, row_height * 2))
-    gs = gridspec.GridSpec(2, n_conds, height_ratios=[4, 1], hspace=0.1, wspace=0.15, figure=fig)
-
-    ax_upper: list[plt.Axes] = []
-    ax_lower: list[plt.Axes] = []
-    for j in range(n_conds):
-        sharey = ax_upper[0] if ax_upper else None
-        ax_u = fig.add_subplot(gs[0, j], sharey=sharey)
-        ax_upper.append(ax_u)
-        ax_l = fig.add_subplot(gs[1, j], sharex=ax_u)
-        ax_lower.append(ax_l)
-
-    for j, cond in enumerate(conditions):
-        ax = ax_upper[j]
-        subset = df[df["type"] == cond]
-        cond_color = cond_color_map[cond]
-
-        if subset.empty:
-            ax.set_title(cond, fontweight="bold")
-            continue
-
-        for _tid, grp in subset.groupby("global_trial_id"):
-            grp_sorted = grp.sort_values("t_rel")
-            ax.plot(grp_sorted["t_rel"], grp_sorted["angular_velocity"],
-                    color=cond_color, lw=0.5, alpha=0.25)
-
-        t_bin = 5.0
-        t_min = subset["t_rel"].min()
-        t_max = subset["t_rel"].max()
-        bins = np.arange(t_min, t_max + t_bin, t_bin)
-        binned = subset.copy()
-        binned["t_bin"] = pd.cut(binned["t_rel"], bins=bins, labels=bins[:-1], include_lowest=True)
-        binned["t_bin"] = binned["t_bin"].astype(float)
-
-        trial_means = binned.groupby(["global_trial_id", "t_bin"])["angular_velocity"].mean().reset_index()
-        agg = trial_means.groupby("t_bin")["angular_velocity"]
-        mean = agg.mean()
-        sem = agg.sem().fillna(0)
-        t_vals = mean.index.values
-
-        ax.plot(t_vals, mean.values, color="white", lw=4.0, alpha=0.8, solid_capstyle="round")
-        ax.plot(t_vals, mean.values, color=cond_color, lw=2.0, alpha=1.0, label=cond)
-        ax.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
-                        color=cond_color, alpha=0.2, edgecolor="none")
-
-        # ── Escape-onset markers from linear-speed latency ──
-        trial_lats = subset.groupby("global_trial_id")["latency_ms"].first().dropna()
-        for lat in trial_lats.values:
-            ax.axvline(x=lat, color=cond_color, ls="--", lw=0.4, alpha=0.15)
-        if not trial_lats.empty:
-            mean_lat = trial_lats.mean()
-            ax.axvline(x=mean_lat, color=cond_color, ls="--", lw=1.2, alpha=0.8)
-
-        ax.set_title(cond, fontweight="bold")
-        if j == 0:
-            ax.set_ylabel("Angular Velocity (rad/s)")
-        else:
-            plt.setp(ax.get_yticklabels(), visible=False)
-        plt.setp(ax.get_xticklabels(), visible=False)
-        ax.legend(loc="upper right", frameon=False)
-        ax.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
-
-    # ── Oscilloscope channels ──
-    for j, cond in enumerate(conditions):
-        ax = ax_lower[j]
-        subset = df[df["type"] == cond]
-        vis_baseline = 1.0
-        wind_baseline = 3.0
-
-        if "visual" in cond.lower() or "looming" in cond.lower():
-            stim_t_rel = subset["t_rel"]
-            t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
-            t_loom = np.array([t_loom_start, 0.0])
-            ax.fill_between(t_loom, vis_baseline, vis_baseline + 1.0, step="mid",
-                            color=COLOR_OSCI_VIS, alpha=0.6, label="Visual (looming)")
-
-        if not subset.empty:
-            first_tid = subset["global_trial_id"].iloc[0]
-            grp = subset[subset["global_trial_id"] == first_tid].sort_values("t_rel")
-
-            if "wind" in cond.lower() or "puff" in cond.lower() or grp["stim_state"].max() > 0:
-                t_wind = grp["t_rel"].values
-                stim = grp["stim_state"].values.astype(float)
-
-                dt_last = t_wind[-1] - t_wind[-2] if len(t_wind) > 1 else 1.0
-                t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
-                stim_ext = np.append(stim, stim[-1])
-
-                ax.fill_between(t_wind_ext, wind_baseline, wind_baseline + stim_ext,
-                                step="post", color=COLOR_OSCI_HW, alpha=0.6, label="Wind (stim_state)")
-
-        ax.set_ylim(0, 5)
-        ax.set_yticks([])
-        ax.set_ylabel("")
-        ax.set_xlabel("Time relative to TTC (ms)")
-        ax.grid(False)
-        if j == 0:
-            ax.legend(loc="upper right", frameon=False, ncol=2)
-
-    fig.tight_layout(pad=1.0)
-    return fig

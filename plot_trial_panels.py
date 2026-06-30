@@ -20,7 +20,6 @@ import logging
 from pathlib import Path
 
 import matplotlib.gridspec as gridspec
-import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -35,8 +34,6 @@ from pipeline.constants import (
     COLOR_OSCI_VIS,
     COLOR_PREWALK,
     COLOR_RIGHT,
-    ESCAPE_START_THRESHOLD,
-    ESCAPE_VMAX_THRESHOLD,
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
@@ -45,72 +42,16 @@ from pipeline.constants import (
 )
 from pipeline.io import load_and_concat_sessions, scan_and_pair_sessions
 from pipeline.kinematics import compute_escape_latency, preprocess
+from pipeline.visualization import (
+    _add_threshold_lines,
+    _draw_side_arrows,
+    _draw_standardized_grid,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 _apply_publication_style()
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Drawing Helpers (reused from pipeline.visualization)
-# ══════════════════════════════════════════════════════════════════════
-
-
-def _draw_standardized_grid(ax: plt.Axes, max_radius: float = 50.0, step: float = 10.0) -> None:
-    """Draw standardized physical coordinate system with concentric distance rings."""
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    ax.set_xlim(-max_radius, max_radius)
-    ax.set_ylim(-max_radius, max_radius)
-    ax.set_aspect("equal")
-    ax.axhline(0, color="black", lw=0.6, alpha=0.5, zorder=1)
-    ax.axvline(0, color="black", lw=0.6, alpha=0.5, zorder=1)
-    for r in np.arange(step, max_radius + step, step):
-        circle = plt.Circle((0, 0), r, color="gray", fill=False, ls="--", lw=0.5, alpha=1, zorder=1)
-        ax.add_patch(circle)
-        txt = ax.text(
-            r * 0.707, r * 0.707, f"{int(r)} mm",
-            color="gray", fontsize=6, ha="left", va="bottom", alpha=1, fontweight="regular",
-        )
-        txt.set_path_effects([path_effects.withStroke(linewidth=0.5, foreground="#0F172A", alpha=1)])
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-
-def _draw_side_arrows(ax: plt.Axes) -> None:
-    """Draw minimalist vector arrows on LEFT and RIGHT edges."""
-    arrow_style = dict(arrowstyle="]->, lengthA=0.01, widthA=10", color=None, lw=1.0, mutation_scale=8)
-    ax.annotate(
-        "", xy=(0.04, 0.5), xytext=(-0.02, 0.5),
-        xycoords="axes fraction", textcoords="axes fraction",
-        arrowprops={**arrow_style, "color": COLOR_LEFT},
-    )
-    ax.text(0.09, 0.45, "Left Stimulus", transform=ax.transAxes,
-            ha="center", va="top", fontsize=7, color=COLOR_LEFT)
-    ax.annotate(
-        "", xy=(0.96, 0.5), xytext=(1.02, 0.5),
-        xycoords="axes fraction", textcoords="axes fraction",
-        arrowprops={**arrow_style, "color": COLOR_RIGHT},
-    )
-    ax.text(0.91, 0.45, "Right Stimulus", transform=ax.transAxes,
-            ha="center", va="top", fontsize=7, color=COLOR_RIGHT)
-
-
-def _add_threshold_lines(ax: plt.Axes) -> None:
-    """Draw horizontal threshold lines at ESCAPE_VMAX (50) and ESCAPE_START (10)."""
-    ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.7)
-    ax.text(
-        ax.get_xlim()[1] * 0.98, ESCAPE_VMAX_THRESHOLD + 1.0,
-        f"Vmax ({ESCAPE_VMAX_THRESHOLD:.0f})",
-        ha="right", va="bottom", fontsize=6, color="k", alpha=0.7,
-    )
-    ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.5)
-    ax.text(
-        ax.get_xlim()[1] * 0.98, ESCAPE_START_THRESHOLD + 1.0,
-        f"Start ({ESCAPE_START_THRESHOLD:.0f})",
-        ha="right", va="bottom", fontsize=6, color="0.5", alpha=0.5,
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════
