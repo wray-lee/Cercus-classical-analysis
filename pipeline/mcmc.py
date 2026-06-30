@@ -32,9 +32,10 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 import seaborn as sns
+from lifelines import KaplanMeierFitter
 
 from .classifier import label_trials
-from .constants import _apply_publication_style
+from .constants import NPG_PALETTE, _apply_publication_style
 from .io import load_and_concat_sessions, scan_and_pair_sessions
 from .kinematics import preprocess
 
@@ -51,6 +52,15 @@ TARGET_ACCEPT: float = 0.9
 RANDOM_SEED: int = 42
 
 MAX_TTC_BINS: int = 10
+
+# ── Physical Stimulus Parameters for Angle Mapping ──
+# l_v_ratio (ms) = (Object Half-Size / Approach Speed).
+# For example, a 10cm radius object approaching at 50cm/s -> l/v = 0.2s = 200ms.
+L_V_RATIOS: Dict[str, float] = {
+    "visual_only": 120.0,
+    # 用户可以在此添加其他条件的特定 l/v ratio
+    "default": 120.0,
+}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -148,6 +158,9 @@ def prepare_mcmc_data(
 
     valid["stim_condition"] = _classify_conditions(valid)
 
+    # 强制丢弃所有未能被路由引擎识别的残缺/废弃试验
+    valid = valid[valid["stim_condition"] != "unknown"].copy()
+
     if binary_mode == "escape_only":
         valid["escape_binary"] = (valid["response_type"] == "Escape").astype(int)
     elif binary_mode == "escape_prewalk":
@@ -157,9 +170,9 @@ def prepare_mcmc_data(
 
     valid["effective_ttc_ms"] = _compute_effective_ttc(valid)
 
-    # For bimodal trials, require valid TTC; for unimodal, TTC is NaN (acceptable)
-    is_bimodal = valid["stim_condition"].str.startswith("looming_wind_")
-    keep = (~is_bimodal) | (is_bimodal & valid["effective_ttc_ms"].notna())
+    # 恢复原逻辑：只对 looming_wind 进行曲线拟合约束
+    is_curve_fitted = valid["stim_condition"].str.startswith("looming_wind_")
+    keep = (~is_curve_fitted) | (is_curve_fitted & valid["effective_ttc_ms"].notna())
     valid = valid[keep].copy()
 
     if valid.empty:
@@ -195,9 +208,10 @@ def _classify_conditions(df: pd.DataFrame) -> pd.Series:
         else pd.Series(np.nan, index=df.index)
     )
 
-    # Unimodal conditions
-    conditions[df["type"] == "baseline_visual"] = "visual_only"
-    conditions[df["type"].isin(["baseline_wind", "wind_only"])] = "wind_only"
+    # 强制清理空白字符并统一小写
+    type_cleaned = df["type"].astype(str).str.strip().str.lower()
+    conditions[type_cleaned.isin(["baseline_visual", "visual_only", "visual"])] = "visual_only"
+    conditions[type_cleaned.isin(["baseline_wind", "wind_only", "wind"])] = "wind_only"
 
     # Bimodal: group TTC values, optionally stratified by delay_sec
     mask_lw = df["type"] == "looming_wind"
@@ -279,8 +293,9 @@ def split_bimodal_unimodal(
     bi_ttc, bi_escape, bi_conditions, bi_condition_idx,
     uni_escape, uni_conditions, uni_condition_idx
     """
+    # visual_only 重新回归 uni_conditions 组，仅计算平均概率
     bi_conditions = sorted([c for c in conditions if c.startswith("looming_wind_")])
-    uni_conditions = sorted([c for c in conditions if not c.startswith("looming_wind_")])
+    uni_conditions = sorted([c for c in conditions if c not in bi_conditions])
 
     bi_map = {c: i for i, c in enumerate(bi_conditions)}
     uni_map = {c: i for i, c in enumerate(uni_conditions)}
@@ -800,37 +815,48 @@ def _generate_color_palette(
     bi_conditions: List[str],
     uni_conditions: List[str],
 ) -> Dict[str, str]:
-    """Generate Lancet/Cell style colour palette.
+    """Generate NPG-based discrete colour palette.
 
-    - visual_only -> Navy Blue
-    - wind_only -> Sand Orange
-    - looming_wind_* -> gradient from Crimson Red to Slate Grey
+    - visual_only -> NPG Navy Blue (#3C5488)
+    - wind_only -> NPG Salmon (#F39B7F)
+    - looming_wind_* -> cycles through NPG palette; brightness-stepped
+      when count exceeds palette size.
     """
-    from .constants import COLOR_LEFT, COLOR_OSCI_HW, COLOR_RIGHT, COLOR_CONTROL
-
     palette: Dict[str, str] = {}
     for cond in uni_conditions:
         if cond == "visual_only":
-            palette[cond] = COLOR_LEFT
+            palette[cond] = "#5B7B8A"   # Muted Teal (distinct from NPG cycle)
         elif cond == "wind_only":
-            palette[cond] = COLOR_OSCI_HW
+            palette[cond] = "#F39B7F"   # NPG Salmon
         else:
-            palette[cond] = COLOR_CONTROL
+            palette[cond] = "#8491B4"   # NPG Slate Blue fallback
 
-    n_bi = len(bi_conditions)
+    n_presets = len(NPG_PALETTE)
     for idx, cond in enumerate(bi_conditions):
-        if n_bi <= 1:
-            palette[cond] = COLOR_RIGHT
+        if idx < n_presets:
+            palette[cond] = NPG_PALETTE[idx]
         else:
-            r1, g1, b1 = int(COLOR_RIGHT[1:3], 16), int(COLOR_RIGHT[3:5], 16), int(COLOR_RIGHT[5:7], 16)
-            r2, g2, b2 = int(COLOR_CONTROL[1:3], 16), int(COLOR_CONTROL[3:5], 16), int(COLOR_CONTROL[5:7], 16)
-            t = idx / (n_bi - 1)
-            r = int(r1 + (r2 - r1) * t)
-            g = int(g1 + (g2 - g1) * t)
-            b = int(b1 + (b2 - b1) * t)
+            # Brightness step-down for overflow conditions
+            base = NPG_PALETTE[idx % n_presets]
+            step = (idx // n_presets) + 1
+            r = int(base[1:3], 16)
+            g = int(base[3:5], 16)
+            b = int(base[5:7], 16)
+            factor = max(0.4, 1.0 - 0.2 * step)
+            r, g, b = int(r * factor), int(g * factor), int(b * factor)
             palette[cond] = f"#{r:02x}{g:02x}{b:02x}"
 
     return palette
+
+
+# ── Chain trace colours (NPG-derived maximum mutual contrast) ──────
+
+_CHAIN_COLOURS: List[str] = [
+    "#E64B35",   # NPG Red
+    "#3C5488",   # NPG Navy
+    "#00A087",   # NPG Teal
+    "#F39B7F",   # NPG Salmon
+]
 
 
 def plot_posterior_traces(
@@ -841,10 +867,12 @@ def plot_posterior_traces(
 ) -> None:
     """Generate posterior trace plots for MCMC diagnostics.
 
-    Shows TTC50 and k traces for bimodal conditions, plus p_baseline
-    traces for unimodal conditions.
+    Each chain receives a fixed high-contrast colour for instant visual
+    separation.  Legend placed horizontally above the figure.
     """
-    panels: List[Tuple[str, str, str]] = []  # (param, condition, ylabel)
+    _apply_publication_style()
+
+    panels: List[Tuple[str, str, str]] = []
     for cond in bi_conditions:
         panels.append(("ttc50_named", cond, f"{cond}\nTTC50 (ms)"))
         panels.append(("k_named", cond, "k (slope)"))
@@ -855,26 +883,55 @@ def plot_posterior_traces(
     if n == 0:
         return
 
-    fig, axes = plt.subplots(n, 1, figsize=(10, 2.5 * n), squeeze=False)
+    n_chains = trace.posterior.sizes["chain"]
+    fig, axes = plt.subplots(n, 1, figsize=(12, 2.5 * n), squeeze=False)
     axes = axes.flatten()
 
     for ax, (param, cond, ylabel) in zip(axes, panels):
         if param in trace.posterior:
-            # Try to select by condition dimension
             try:
-                for chain in range(trace.posterior.sizes["chain"]):
-                    samples = trace.posterior[param].sel(chain=chain, **{trace.posterior[param].dims[-1]: cond}).values
-                    ax.plot(samples, alpha=0.7, linewidth=0.5, label=f"Chain {chain}")
+                for chain in range(n_chains):
+                    samples = trace.posterior[param].sel(
+                        chain=chain,
+                        **{trace.posterior[param].dims[-1]: cond},
+                    ).values
+                    ax.plot(
+                        samples,
+                        alpha=0.8,
+                        linewidth=0.8,
+                        color=_CHAIN_COLOURS[chain % len(_CHAIN_COLOURS)],
+                        label=f"Chain {chain}",
+                    )
             except (KeyError, ValueError):
-                for chain in range(trace.posterior.sizes["chain"]):
+                for chain in range(n_chains):
                     samples = trace.posterior[param].sel(chain=chain).values.flatten()
-                    ax.plot(samples, alpha=0.7, linewidth=0.5, label=f"Chain {chain}")
+                    ax.plot(
+                        samples,
+                        alpha=0.8,
+                        linewidth=0.8,
+                        color=_CHAIN_COLOURS[chain % len(_CHAIN_COLOURS)],
+                        label=f"Chain {chain}",
+                    )
 
         ax.set_ylabel(ylabel)
         ax.set_xlabel("Sample")
-        ax.legend(fontsize=6, ncol=min(4, trace.posterior.sizes["chain"]))
+
+    # Single legend above the entire figure, horizontal
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=n_chains,
+        fontsize=11,
+        frameon=False,
+    )
+    # Remove per-axes legends
+    for ax in axes:
+        ax.legend_.remove() if ax.legend_ else None
 
     plt.tight_layout()
+    fig.subplots_adjust(top=0.92)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -889,20 +946,20 @@ def plot_psychometric_curves(
     uni_escape: np.ndarray | None,
     uni_condition_idx: np.ndarray | None,
     output_path: Path,
+    true_trial_start: float = -5000.0,
 ) -> None:
-    """Generate psychometric curves with 95% HDI shading.
+    """Generate psychometric curves (median posterior only, no shading).
 
-    Bimodal conditions: fitted sigmoid curves with data points.
-    Unimodal conditions: horizontal reference lines with data rates.
+    Publication-standard: sharp lines, white-edged data markers,
+    legend outside right, stimulus onset marker, response window shading.
     """
+    _apply_publication_style()
     palette = _generate_color_palette(bi_conditions, uni_conditions)
 
-    # Determine TTC grid range
-    if len(bi_ttc) > 0:
-        ttc_lo, ttc_hi = bi_ttc.min() - 50, bi_ttc.max() + 50
-    else:
-        ttc_lo, ttc_hi = -500, 500
-    ttc_grid = np.linspace(ttc_lo, ttc_hi, 200)
+    # ── STEP 2: Dynamic window from true trial start ──
+    ttc_lo = true_trial_start
+    ttc_hi = 1000.0
+    ttc_grid = np.linspace(ttc_lo, ttc_hi, 500)
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -922,14 +979,9 @@ def plot_psychometric_curves(
             for j, (t50, kk) in enumerate(zip(t50_s[idx], k_s[idx])):
                 preds[j] = 1.0 / (1.0 + np.exp(-kk * (ttc_grid - t50)))
 
-            median = np.median(preds, axis=0)
-            hdi_lo = np.zeros(len(ttc_grid))
-            hdi_hi = np.zeros(len(ttc_grid))
-            for col in range(len(ttc_grid)):
-                hdi_lo[col], hdi_hi[col] = compute_hdi(preds[:, col])
+            median_curve = np.median(preds, axis=0)
 
-            ax.plot(ttc_grid, median, color=color, linewidth=1.5, label=cond)
-            ax.fill_between(ttc_grid, hdi_lo, hdi_hi, color=color, alpha=0.15)
+            ax.plot(ttc_grid, median_curve, color=color, linewidth=2.5, label=cond)
 
             # Data points (binned)
             mask = bi_condition_idx == i
@@ -942,37 +994,63 @@ def plot_psychometric_curves(
                 mean_ttc = grp["ttc"].mean()
                 mean_esc = grp["esc"].mean()
                 sem = grp["esc"].std() / np.sqrt(grp["esc"].count())
-                ax.errorbar(mean_ttc, mean_esc, yerr=sem, fmt="o", color=color,
-                            markersize=5, capsize=3, linewidth=1.0, markeredgewidth=0.8)
+                ax.errorbar(
+                    mean_ttc, mean_esc, yerr=sem,
+                    fmt="o", color=color,
+                    markersize=7, capsize=3, linewidth=1.0,
+                    markeredgecolor="white", markeredgewidth=1.0,
+                )
             except (ValueError, KeyError):
-                ax.scatter(cond_ttc, cond_esc, color=color, alpha=0.3, s=15)
+                ax.scatter(
+                    cond_ttc, cond_esc,
+                    color=color, alpha=0.3, s=25,
+                    edgecolors="white", linewidths=0.5,
+                )
 
-    # ── Unimodal conditions: horizontal reference lines ──
+    # ── Unimodal conditions: horizontal baseline only (no TTC axis) ──
+    # wind_only: purely temporal-irrelevant, global baseline only.
+    # visual_only: modelled as constant p_baseline (no TTC dimension in data),
+    #              so a single point at x=0 is physically misleading.
     p_baseline_post = get_p_baseline_posterior(trace, uni_conditions)
-    for i, cond in enumerate(uni_conditions):
+    for cond in uni_conditions:
         color = palette[cond]
         if cond in p_baseline_post:
             pb = p_baseline_post[cond]
             rate = float(np.median(pb))
-            hdi_lo, hdi_hi = compute_hdi(pb)
-            ax.axhline(rate, color=color, linewidth=1.5, linestyle="--", label=f"{cond} ({rate:.2f})")
-            ax.axhspan(hdi_lo, hdi_hi, color=color, alpha=0.07)
+            lo, hi = compute_hdi(pb)
+            ax.axhline(
+                rate, color=color, linewidth=1.5, linestyle="--",
+                label=f"{cond} ({rate:.2f} [{lo:.2f}, {hi:.2f}])",
+            )
 
-        # Show data rate as a point at TTC=0
-        if uni_escape is not None and uni_condition_idx is not None:
-            mask = uni_condition_idx == i
-            if mask.any():
-                rate_data = uni_escape[mask].mean()
-                ax.plot(0, rate_data, "s", color=color, markersize=8, markeredgecolor="black",
-                        markeredgewidth=0.8)
+    # ── Canvas purge: force white background ──
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
-    ax.axhline(0.5, color="grey", linestyle=":", alpha=0.5, linewidth=0.75)
-    ax.axvline(0, color="grey", linestyle=":", alpha=0.5, linewidth=0.75)
+    # ── Response window highlight ──
+    ax.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
+
+    # ── Stimulus onset marker (mixed coordinate system) ──
+    ax.axvline(ttc_lo, color="#94A3B8", linestyle="--", alpha=0.8, linewidth=1.2, zorder=0)
+    ax.text(ttc_lo + 30, 0.95, "Stimulus Onset",
+            ha="left", va="top",
+            fontsize=10, color="#64748B", fontweight="bold",
+            transform=ax.get_xaxis_transform(), zorder=1)
+
+    ax.axhline(0.5, color="grey", linestyle=":", alpha=0.4, linewidth=0.75)
+    ax.axvline(0, color="grey", linestyle=":", alpha=0.4, linewidth=0.75)
     ax.set_xlabel("Time-to-Collision (ms)\n(negative = wind before collision)")
     ax.set_ylabel("P(Escape)")
-    ax.set_title("Psychometric Functions: Multisensory Integration\n(95% HDI shaded)")
+    ax.set_title("Psychometric Functions: Multisensory Integration")
+    # ── Clamp viewport to dynamic data window ──
+    ax.set_xlim(ttc_lo, ttc_hi)
     ax.set_ylim(-0.05, 1.05)
-    ax.legend(loc="best", fontsize=7)
+
+    # Optional faint horizontal grid
+    ax.yaxis.grid(True, linestyle="--", alpha=0.15)
+    ax.set_axisbelow(True)
+
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
 
     plt.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -985,7 +1063,11 @@ def plot_posterior_distributions(
     uni_conditions: List[str],
     output_path: Path,
 ) -> None:
-    """Plot posterior distributions of TTC50, k, and p_baseline."""
+    """Plot posterior distributions of TTC50, k, and p_baseline.
+
+    Cell-standard: solid-edge histograms, black HDI lines, legend outside.
+    """
+    _apply_publication_style()
     palette = _generate_color_palette(bi_conditions, uni_conditions)
 
     n_panels = 2 + (1 if uni_conditions else 0)
@@ -997,24 +1079,30 @@ def plot_posterior_distributions(
     ax = axes[0]
     for i, cond in enumerate(bi_conditions):
         s = get_ttc50_posterior(trace, bi_conditions)[:, :, i].flatten()
-        ax.hist(s, bins=50, alpha=0.5, density=True, label=cond, color=palette[cond])
+        ax.hist(
+            s, bins=50, alpha=0.7, density=True, label=cond,
+            color=palette[cond], edgecolor="black", linewidth=0.5,
+        )
         lo, hi = compute_hdi(s)
-        ax.axvline(lo, color=palette[cond], linestyle="--", alpha=0.5, linewidth=0.75)
-        ax.axvline(hi, color=palette[cond], linestyle="--", alpha=0.5, linewidth=0.75)
+        ax.axvline(lo, color="black", linestyle="--", linewidth=1.2)
+        ax.axvline(hi, color="black", linestyle="--", linewidth=1.2)
     ax.set_xlabel("TTC50 (ms)")
     ax.set_ylabel("Density")
     ax.set_title("Posterior: TTC50 (PSE)")
-    ax.legend(fontsize=7)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
 
     # k
     ax = axes[1]
     for i, cond in enumerate(bi_conditions):
         s = get_k_posterior(trace, bi_conditions)[:, :, i].flatten()
-        ax.hist(s, bins=50, alpha=0.5, density=True, label=cond, color=palette[cond])
+        ax.hist(
+            s, bins=50, alpha=0.7, density=True, label=cond,
+            color=palette[cond], edgecolor="black", linewidth=0.5,
+        )
     ax.set_xlabel("k (slope)")
     ax.set_ylabel("Density")
     ax.set_title("Posterior: Slope (k)")
-    ax.legend(fontsize=7)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
 
     # p_baseline
     if uni_conditions:
@@ -1023,14 +1111,17 @@ def plot_posterior_distributions(
         for cond in uni_conditions:
             if cond in p_baseline_post:
                 s = p_baseline_post[cond]
-                ax.hist(s, bins=50, alpha=0.5, density=True, label=cond, color=palette[cond])
+                ax.hist(
+                    s, bins=50, alpha=0.7, density=True, label=cond,
+                    color=palette[cond], edgecolor="black", linewidth=0.5,
+                )
                 lo, hi = compute_hdi(s)
-                ax.axvline(lo, color=palette[cond], linestyle="--", alpha=0.5, linewidth=0.75)
-                ax.axvline(hi, color=palette[cond], linestyle="--", alpha=0.5, linewidth=0.75)
+                ax.axvline(lo, color="black", linestyle="--", linewidth=1.2)
+                ax.axvline(hi, color="black", linestyle="--", linewidth=1.2)
         ax.set_xlabel("P(Escape)")
         ax.set_ylabel("Density")
         ax.set_title("Posterior: Unimodal Baseline Escape Rate")
-        ax.legend(fontsize=7)
+        ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
 
     plt.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -1045,9 +1136,11 @@ def plot_ttc50_differences(
 ) -> None:
     """Plot posterior distributions of TTC50 with ROPE-based inference.
 
-    Each panel shows the TTC50 posterior histogram with 95% HDI, ROPE
-    shading, and annotation of P(TTC50 > 0) and P(in ROPE).
+    Cell-standard: heavy-colour histogram, grey ROPE band, clean text box
+    with black border (no shadow), legend outside.
     """
+    _apply_publication_style()
+
     comparisons = {k: v for k, v in ttc50_diff.items() if "ttc50_mean" in v}
     if not comparisons:
         return
@@ -1063,37 +1156,51 @@ def plot_ttc50_differences(
         if cond_name in bi_conditions:
             ci = bi_conditions.index(cond_name)
             samples = ttc50_post[:, :, ci].flatten()
-            ax.hist(samples, bins=60, alpha=0.6, density=True, color="#00468B")
+            ax.hist(
+                samples, bins=60, alpha=0.7, density=True,
+                color="#3C5488", edgecolor="black", linewidth=0.5,
+            )
             lo, hi = vals["ttc50_hdi_95"]
-            ax.axvline(lo, color="#ED0000", linestyle="--", linewidth=1.0)
-            ax.axvline(hi, color="#ED0000", linestyle="--", linewidth=1.0)
+            ax.axvline(lo, color="black", linestyle="--", linewidth=1.2)
+            ax.axvline(hi, color="black", linestyle="--", linewidth=1.2)
             ax.axvline(0, color="grey", linestyle=":", linewidth=0.75)
 
-            # ROPE shading
+            # ROPE shading — neutral grey
             rope = vals.get("rope", [-50.0, 50.0])
-            ax.axvspan(rope[0], rope[1], color="green", alpha=0.08)
+            ax.axvspan(rope[0], rope[1], color="#E0E0E0", alpha=0.4)
 
-            # Annotation with ROPE-based statistics
+            # Annotation text box — outside right, white bg, black border
             prob_pos = vals.get("prob_ttc50_positive", 0.5)
             prob_rope = vals.get("prob_ttc50_in_rope", 0.0)
             d = vals.get("cohen_d_common_scale", None)
-            text = (
-                f"mean = {vals['ttc50_mean']:.1f} ms\n"
-                f"95% HDI: [{lo:.1f}, {hi:.1f}]\n"
-                f"P(TTC50>0) = {prob_pos:.3f}\n"
-                f"P(in ROPE) = {prob_rope:.3f}"
-            )
+            lines = [
+                f"mean    = {vals['ttc50_mean']:>8.1f} ms",
+                f"95% HDI = [{lo:>7.1f}, {hi:>7.1f}]",
+                f"P(>0)   = {prob_pos:>8.3f}",
+                f"P(ROPE) = {prob_rope:>8.3f}",
+            ]
             if d is not None:
-                text += f"\nCohen's d = {d:.2f}"
-            ax.text(0.97, 0.95, text, transform=ax.transAxes, fontsize=7,
-                    verticalalignment="top", horizontalalignment="right",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+                lines.append(f"Cohen d = {d:>8.2f}")
+            text = "\n".join(lines)
+            ax.text(
+                1.02, 0.95, text,
+                transform=ax.transAxes, fontsize=10,
+                verticalalignment="top", horizontalalignment="left",
+                fontfamily="monospace",
+                bbox=dict(
+                    boxstyle="round,pad=0.4",
+                    facecolor="white",
+                    edgecolor="black",
+                    linewidth=0.8,
+                ),
+            )
 
         ax.set_xlabel("TTC50 (ms)")
         ax.set_ylabel("Density")
         ax.set_title(f"TTC50: {key}")
 
     plt.tight_layout()
+    fig.subplots_adjust(right=0.75)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -1103,7 +1210,13 @@ def plot_variance_reduction(
     bi_conditions: List[str],
     output_path: Path,
 ) -> None:
-    """Plot variance reduction with 95% HDI error bars."""
+    """Plot variance reduction with 95% HDI error bars.
+
+    Cell-standard: solid-fill bars with black edges, heavy error bars
+    with square caps, legend outside.
+    """
+    _apply_publication_style()
+
     conditions = []
     reductions = []
     ci_lo = []
@@ -1130,18 +1243,412 @@ def plot_variance_reduction(
     yerr_lo = [r - lo for r, lo in zip(reductions, ci_lo)]
     yerr_hi = [hi - r for r, hi in zip(reductions, ci_hi)]
 
-    colours = []
-    for cond in conditions:
-        colours.append("#00468B" if reductions[conditions.index(cond)] >= 0 else "#ED0000")
+    colours = [
+        "#3C5488" if reductions[i] >= 0 else "#E64B35"
+        for i in range(len(conditions))
+    ]
 
-    ax.bar(x, reductions, color=colours, alpha=0.7, edgecolor="black", linewidth=0.5)
-    ax.errorbar(x, reductions, yerr=[yerr_lo, yerr_hi], fmt="none", ecolor="black",
-                capsize=4, linewidth=1.5)
+    ax.bar(
+        x, reductions,
+        color=colours, alpha=0.85,
+        edgecolor="black", linewidth=1.5,
+    )
+    ax.errorbar(
+        x, reductions, yerr=[yerr_lo, yerr_hi],
+        fmt="none", ecolor="black",
+        linewidth=2, capsize=6, capthick=2,
+    )
     ax.axhline(0, color="grey", linestyle="--", linewidth=0.75)
     ax.set_xticks(x)
-    ax.set_xticklabels(conditions, rotation=45, ha="right", fontsize=7)
+    ax.set_xticklabels(conditions, rotation=45, ha="right", fontsize=10)
     ax.set_ylabel("P(Escape) Variance Reduction\n(relative to visual-only)")
     ax.set_title("Bayesian Optimal Integration: P(Escape) Variance Reduction\n(95% HDI error bars)")
+
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Kaplan-Meier Survival Analysis
+# ══════════════════════════════════════════════════════════════════════
+
+
+def prepare_survival_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, float]:
+    """Prepare trial-level survival data for Kaplan-Meier analysis.
+
+    Each trial yields a single TTC-aligned time value (``TTC_at_event``):
+    the ``latency_ms`` value at escape onset (event) or the ``t_rel``
+    value at the last observed frame (censored).  This value is in the
+    same coordinate system as the MCMC model's TTC axis (negative =
+    before collision, 0 = collision).
+
+    Returns
+    -------
+    result : DataFrame
+        Columns: ``TTC_at_event``, ``Event_Observed``, ``stim_condition``.
+    true_trial_start : float
+        Earliest frame-level ``t_rel`` across all valid trials — the true
+        physical stimulus onset time in TTC coordinates.
+    """
+    if "subject" in df.columns:
+        df = df.copy()
+        df["unique_trial_id"] = df["subject"].astype(str) + "_" + df["global_trial_id"].astype(str)
+    else:
+        df = df.copy()
+        df["unique_trial_id"] = df["global_trial_id"].astype(str)
+
+    # ── STEP 1: Global Data Purge — classify and drop 'unknown' ──
+    trial_level = df.groupby("unique_trial_id").first()
+    stim_conditions = _classify_conditions(trial_level)
+
+    valid_mask = stim_conditions != "unknown"
+    stim_conditions = stim_conditions[valid_mask]
+    valid_trial_ids = set(stim_conditions.index)
+
+    n_total = df["unique_trial_id"].nunique()
+    log.info("Survival data purge: %d valid / %d total trials (dropped 'unknown')",
+             len(valid_trial_ids), n_total)
+
+    # Locate the TTC-aligned time column (produced by kinematics.preprocess).
+    time_col = None
+    if "t_rel" in df.columns:
+        time_col = "t_rel"
+    else:
+        for candidate in ("ttc_ms", "time_to_collision_ms", "ttc", "frame_ttc"):
+            if candidate in df.columns:
+                time_col = candidate
+                break
+
+    if time_col is None:
+        raise ValueError("No TTC-aligned time column found in DataFrame")
+
+    # ── Extract true trial start from raw frame-level data ──
+    # The earliest t_rel across ALL frames in valid trials = stimulus onset
+    true_trial_start = float(df.loc[df["unique_trial_id"].isin(valid_trial_ids), time_col].min())
+    log.info("True trial start (stimulus onset): %.1f ms", true_trial_start)
+
+    trials = df.groupby("unique_trial_id")
+    records = []
+
+    # ── VERIFICATION: log first 10 raw (TTC, event) pairs ──
+    _debug_count = 0
+
+    for trial_id, grp in trials:
+        if trial_id not in valid_trial_ids:
+            continue
+
+        stim = stim_conditions.loc[trial_id]
+        response = grp.iloc[0].get("response_type", "Unknown")
+        t = grp[time_col]
+
+        if response == "Escape":
+            # Use the pre-computed escape onset latency (t_rel at escape start).
+            # This is set per trial by label_trials → compute_escape_latency.
+            lat = grp.iloc[0].get("latency_ms", np.nan)
+            if not np.isnan(lat):
+                ttc_at_event = float(lat)
+            else:
+                # Fallback: last observed TTC (shouldn't happen for valid Escape)
+                ttc_at_event = float(t.iloc[-1])
+                log.warning("Escape trial %s has NaN latency_ms, using last frame t_rel=%.1f",
+                            trial_id, ttc_at_event)
+        else:
+            # Censored: TTC at last observed frame
+            ttc_at_event = float(t.iloc[-1])
+
+        event = 1 if response == "Escape" else 0
+
+        # ── VERIFICATION: print first 10 samples ──
+        if _debug_count < 10:
+            log.info("  KM sample %d: trial=%s, stim=%s, response=%s, "
+                     "latency_ms=%.1f, t_last=%.1f → TTC_at_event=%.1f, event=%d",
+                     _debug_count, trial_id, stim, response,
+                     grp.iloc[0].get("latency_ms", np.nan), float(t.iloc[-1]),
+                     ttc_at_event, event)
+            _debug_count += 1
+
+        records.append({
+            "TTC_at_event": ttc_at_event,
+            "Event_Observed": event,
+            "stim_condition": stim,
+        })
+
+    result = pd.DataFrame(records)
+    log.info("Survival data: %d trials, conditions=%s",
+             len(result), sorted(result["stim_condition"].unique()))
+
+    # ── POST-FIT SANITY CHECK ──
+    escape_events = result[result["Event_Observed"] == 1]
+    censored_events = result[result["Event_Observed"] == 0]
+
+    if not escape_events.empty:
+        esc_ttc = escape_events["TTC_at_event"]
+        log.info("Escape events (n=%d): TTC mean=%.1f, median=%.1f, "
+                 "min=%.1f, max=%.1f, std=%.1f",
+                 len(esc_ttc), esc_ttc.mean(), esc_ttc.median(),
+                 esc_ttc.min(), esc_ttc.max(), esc_ttc.std())
+        # Guard: if >50% of escape events sit at the global min TTC,
+        # the mapping is almost certainly broken (trial-start artefact).
+        global_min = result["TTC_at_event"].min()
+        pct_at_min = (esc_ttc <= global_min + 1).mean() * 100
+        if pct_at_min > 50:
+            log.error(
+                "DATA ANOMALY: %.0f%% of escape events sit at TTC≈%.0f ms "
+                "(global min). Escape onset mapping is likely broken — "
+                "check that latency_ms is populated correctly.", pct_at_min, global_min
+            )
+    if not censored_events.empty:
+        cen_ttc = censored_events["TTC_at_event"]
+        log.info("Censored events (n=%d): TTC mean=%.1f, median=%.1f, "
+                 "min=%.1f, max=%.1f",
+                 len(cen_ttc), cen_ttc.mean(), cen_ttc.median(),
+                 cen_ttc.min(), cen_ttc.max())
+
+    return result, true_trial_start
+
+
+def plot_kaplan_meier_cumulative(
+    df: pd.DataFrame,
+    bi_conditions: List[str],
+    uni_conditions: List[str],
+    output_path: Path,
+    true_trial_start: float = -5000.0,
+) -> None:
+    """Plot cumulative escape probability anchored to TTC.
+
+    Uses the **positive-shift** method to satisfy lifelines' strict
+    requirement for non-negative durations while preserving the true
+    TTC-aligned coordinate system:
+
+    1. Read ``TTC_at_event`` directly (already in TTC coordinates).
+    2. Compute a single global shift = |min(TTC_at_event)| + 10 ms.
+    3. Fit KM on (TTC_at_event + shift)  — all values strictly positive.
+    4. Shift fitted timeline back:  x_ttc = kmf.timeline - shift.
+
+    Parameters
+    ----------
+    true_trial_start : float
+        Earliest frame-level t_rel (stimulus onset) in TTC coordinates.
+        Used to set the X-axis lower bound and inject a censored anchor
+        so the KM curve renders from the true physical origin.
+    """
+    _apply_publication_style()
+    palette = _generate_color_palette(bi_conditions, uni_conditions)
+
+    # ── STEP 1: Assert no 'unknown' contamination ──
+    unique_conds = df["stim_condition"].unique()
+    assert "unknown" not in unique_conds, (
+        f"Data contamination: 'unknown' found in stim_condition: {unique_conds}"
+    )
+    log.info("KM purge verified: %d conditions, no 'unknown'", len(unique_conds))
+
+    # ── STEP 2: Dynamic viewport from true trial start ──
+    X_MIN = true_trial_start
+    X_MAX = 1000.0
+
+    # ── STEP 3: Positive-shift alignment ──
+    # Global shift to make ALL TTC_at_event values strictly positive
+    # Use true_trial_start (not event min) so the anchor placeholder is included
+    global_min_ttc = min(float(df["TTC_at_event"].min()), true_trial_start)
+    time_shift = abs(global_min_ttc) + 10.0
+    log.info("KM positive-shift: true_trial_start=%.1f, event_min=%.1f, "
+             "time_shift=%.1f ms",
+             true_trial_start, float(df["TTC_at_event"].min()), time_shift)
+
+    all_conditions = sorted(unique_conds)
+
+    # ── Inject censored anchor at true trial start ──
+    # Forces KM curve to render from the physical origin (Y=0 baseline)
+    anchor_rows = []
+    for cond in all_conditions:
+        anchor_rows.append({
+            "TTC_at_event": true_trial_start,
+            "Event_Observed": 0,   # censored
+            "stim_condition": cond,
+        })
+    df = pd.concat([df, pd.DataFrame(anchor_rows)], ignore_index=True)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    kmf = KaplanMeierFitter()
+
+    for cond in all_conditions:
+        mask = df["stim_condition"] == cond
+        if mask.sum() < 2:
+            continue
+
+        df_cond = df.loc[mask]
+        ttc_raw = df_cond["TTC_at_event"].values
+        events = df_cond["Event_Observed"].values
+
+        # 3a. Shift to strictly positive domain for lifelines
+        positive_durations = ttc_raw + time_shift
+
+        # Safety: lifelines rejects non-positive values
+        assert np.all(positive_durations > 0), (
+            f"[{cond}] Shift failed: min={positive_durations.min():.1f}"
+        )
+
+        # 3b. Fit KM on positive-shifted durations
+        kmf.fit(durations=positive_durations, event_observed=events, label=cond)
+
+        # 3c. Extract arrays and shift timeline BACK to true TTC
+        x_true_ttc = kmf.timeline - time_shift
+        y_cum_escape = 1.0 - kmf.survival_function_.values.flatten()
+
+        # ── VERIFICATION: log x_true_ttc bounds ──
+        log.info("  [%s] x_true_ttc: min=%.1f, max=%.1f  (n=%d, events=%d)",
+                 cond, float(x_true_ttc.min()), float(x_true_ttc.max()),
+                 mask.sum(), int(events.sum()))
+
+        color = palette.get(cond, "#7C878E")
+        is_unimodal = not cond.startswith("looming_wind_")
+
+        # ── STEP 4: Pure step rendering (NO fill_between, NO CIs) ──
+        ax.step(x_true_ttc, y_cum_escape, where="post",
+                label=cond, color=color,
+                linestyle="--" if is_unimodal else "-",
+                linewidth=2.0 if is_unimodal else 2.5)
+
+    # ── Canvas purge: force white background ──
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    # ── Response window highlight ──
+    ax.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
+
+    # ── Stimulus onset marker (mixed coordinate system) ──
+    ax.axvline(true_trial_start, color="#94A3B8", linestyle="--", alpha=0.8, linewidth=1.2, zorder=0)
+    ax.text(true_trial_start + 30, 0.95, "Stimulus Onset",
+            ha="left", va="top",
+            fontsize=10, color="#64748B", fontweight="bold",
+            transform=ax.get_xaxis_transform(), zorder=1)
+
+    # ── Physical anchor lines ──
+    ax.axvline(0, color="black", linestyle="--", alpha=0.5, linewidth=1.2, zorder=0)
+    ax.text(0, 0.97, "Collision\n(TTC=0)", ha="center", va="top",
+            fontsize=10, color="black", fontweight="bold")
+    ax.axhline(0.5, color="grey", linestyle=":", alpha=0.5, linewidth=1.0, zorder=0)
+
+    # ── Dynamic viewport from data ──
+    ax.set_xlim(X_MIN, X_MAX)
+    ax.set_ylim(-0.05, 1.05)
+
+    ax.set_xlabel("Time to Collision (ms)\n(negative = before collision)")
+    ax.set_ylabel("Cumulative Escape Probability")
+    ax.set_title("Kaplan-Meier: Cumulative Escape Dynamics")
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Critical Retinal Angle Mapping
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_critical_angle_theta50(
+    trace: az.InferenceData,
+    bi_conditions: List[str],
+    uni_conditions: List[str],
+    output_path: Path,
+) -> None:
+    """Map TTC50 posterior to critical retinal angle θ₅₀ and plot forest plot.
+
+    Uses the looming geometry formula:
+        θ₅₀ = 2 × arctan(l/v / |TTC₅₀|) × (180/π)
+
+    Parameters
+    ----------
+    trace : InferenceData
+        MCMC posterior trace.
+    bi_conditions, uni_conditions : list of str
+        Condition names (bi_conditions includes visual_only after routing refactor).
+    output_path : Path
+        Output file path.
+    """
+    _apply_publication_style()
+    palette = _generate_color_palette(bi_conditions, uni_conditions)
+
+    ttc50_post = get_ttc50_posterior(trace, bi_conditions)
+
+    theta_summaries: List[Dict[str, Any]] = []
+
+    for i, cond in enumerate(bi_conditions):
+        ttc_samples = ttc50_post[:, :, i].flatten()
+        ttc_abs = np.abs(ttc_samples)
+
+        # Resolve l/v ratio for this condition
+        l_v = L_V_RATIOS.get(cond, L_V_RATIOS["default"])
+
+        # Core mapping: θ₅₀ = 2 * arctan(l/v / |TTC|) * (180 / π)
+        theta_samples = 2.0 * np.arctan(l_v / ttc_abs) * (180.0 / np.pi)
+
+        median = float(np.median(theta_samples))
+        hdi_lo, hdi_hi = compute_hdi(theta_samples)
+
+        theta_summaries.append({
+            "condition": cond,
+            "median": median,
+            "hdi_lo": hdi_lo,
+            "hdi_hi": hdi_hi,
+        })
+
+    if not theta_summaries:
+        return
+
+    n = len(theta_summaries)
+    fig, ax = plt.subplots(figsize=(6, max(4, n * 0.6)))
+
+    y_positions = np.arange(n)
+
+    for idx, entry in enumerate(theta_summaries):
+        cond = entry["condition"]
+        color = palette.get(cond, "#7C878E")
+        y = y_positions[idx]
+
+        # Error bar (HDI)
+        ax.plot(
+            [entry["hdi_lo"], entry["hdi_hi"]], [y, y],
+            color=color, linewidth=2.5, zorder=1,
+        )
+        # Median marker
+        ax.plot(
+            entry["median"], y,
+            marker="s", markersize=8, color=color,
+            markeredgecolor="white", markeredgewidth=1.0,
+            zorder=2,
+        )
+
+    # Visual-only baseline reference line
+    for idx, entry in enumerate(theta_summaries):
+        if entry["condition"] == "visual_only":
+            ax.axvline(
+                entry["median"], color="grey",
+                linestyle="--", alpha=0.5, zorder=0,
+            )
+            ax.text(
+                entry["median"], n - 0.3, "  Visual-only Threshold",
+                fontsize=9, color="grey", ha="left", va="bottom",
+            )
+            break
+
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels([e["condition"] for e in theta_summaries], fontsize=10)
+    ax.set_xlabel("Critical Retinal Angle (Degrees)")
+    ax.set_title("θ₅₀: Critical Retinal Angle at PSE")
+
+    # Remove top, right, and left (Y-axis) spines
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(axis="y", length=0)
+
+    # Faint vertical grid
+    ax.xaxis.grid(True, linestyle="--", alpha=0.15)
+    ax.set_axisbelow(True)
 
     plt.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -1389,6 +1896,14 @@ def run_mcmc_analysis(
     # Step 8: Plots
     if plot:
         log.info("Generating plots (%s)...", plot_format)
+
+        # Extract true trial start once from valid trials (shared by KM & psychometric)
+        try:
+            survival_df, true_trial_start = prepare_survival_data(df)
+        except Exception as exc:
+            log.warning("Survival data preparation failed: %s", exc)
+            survival_df, true_trial_start = None, -5000.0
+
         plot_posterior_traces(
             trace, bi_conditions, uni_conditions,
             output_dir / f"posterior_traces.{plot_format}",
@@ -1397,6 +1912,7 @@ def run_mcmc_analysis(
             trace, bi_ttc, bi_escape, bi_conditions, bi_condition_idx,
             uni_conditions, uni_escape, uni_condition_idx,
             output_dir / f"psychometric_curves.{plot_format}",
+            true_trial_start=true_trial_start,
         )
         plot_posterior_distributions(
             trace, bi_conditions, uni_conditions,
@@ -1412,6 +1928,20 @@ def run_mcmc_analysis(
                 var_red, bi_conditions,
                 output_dir / f"variance_reduction.{plot_format}",
             )
+        plot_critical_angle_theta50(
+            trace, bi_conditions, uni_conditions,
+            output_dir / f"critical_angle_theta50.{plot_format}",
+        )
+        # Kaplan-Meier cumulative escape dynamics
+        if survival_df is not None:
+            try:
+                plot_kaplan_meier_cumulative(
+                    survival_df, bi_conditions, uni_conditions,
+                    output_dir / "kaplan_meier_cumulative.svg",
+                    true_trial_start=true_trial_start,
+                )
+            except Exception as exc:
+                log.warning("Kaplan-Meier plot failed: %s", exc)
 
     # Step 9: Summary
     summary = generate_summary(

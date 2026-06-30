@@ -5,5 +5,9 @@ scipy
 seaborn
 pymc
 arviz
+numpyro
+lifelines
+jax
+jaxlib
 # Optional: Install for 10-100x faster MCMC sampling
 # pip install numpyro jax jaxlib

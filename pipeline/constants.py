@@ -16,35 +16,61 @@ import pandas as pd
 
 
 def _apply_publication_style() -> None:
-    """Inject Nature/Science/Cell compliant rcParams."""
+    """Inject publication-grade rcParams for Nature/Science/Cell standards.
+
+    Covers four global constraints:
+    1. Canvas: dpi=300, white background, hidden top/right spines.
+    2. Typography: Helvetica/Arial sans-serif, hierarchical font sizes.
+    3. Rendering: tight_layout-compatible defaults, high-contrast edges.
+    4. Colour: NPG palette defined separately as ``NPG_PALETTE``.
+    """
     rc = plt.rcParams
+    # ── Font family (sans-serif, Helvetica/Arial preferred) ──
     rc["font.family"] = "sans-serif"
-    rc["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
+    rc["font.sans-serif"] = ["Helvetica", "Arial", "DejaVu Sans"]
     rc["svg.fonttype"] = "none"
     rc["pdf.fonttype"] = 42
-    rc["font.size"] = 7
-    rc["axes.titlesize"] = 9
-    rc["axes.labelsize"] = 8
-    rc["legend.fontsize"] = 7
-    rc["xtick.labelsize"] = 7
-    rc["ytick.labelsize"] = 7
-    rc["lines.linewidth"] = 1.0
-    rc["axes.linewidth"] = 0.75
+
+    # ── Hierarchical font sizes ──
+    rc["font.size"] = 10
+    rc["axes.titlesize"] = 14
+    rc["axes.titleweight"] = "bold"
+    rc["axes.labelsize"] = 12
+    rc["axes.labelweight"] = "bold"
+    rc["legend.fontsize"] = 10
+    rc["xtick.labelsize"] = 10
+    rc["ytick.labelsize"] = 10
+
+    # ── Line widths & spine visibility ──
+    rc["lines.linewidth"] = 1.5
+    rc["axes.linewidth"] = 1.2
     rc["axes.spines.top"] = False
     rc["axes.spines.right"] = False
-    rc["xtick.direction"] = "in"
-    rc["ytick.direction"] = "in"
-    rc["xtick.major.size"] = 3
-    rc["ytick.major.size"] = 3
-    rc["xtick.major.width"] = 0.75
-    rc["ytick.major.width"] = 0.75
-    rc["xtick.minor.size"] = 1.5
-    rc["ytick.minor.size"] = 1.5
+    rc["axes.edgecolor"] = "#000000"
+
+    # ── Ticks ──
+    rc["xtick.direction"] = "out"
+    rc["ytick.direction"] = "out"
+    rc["xtick.major.size"] = 4
+    rc["ytick.major.size"] = 4
+    rc["xtick.major.width"] = 1.2
+    rc["ytick.major.width"] = 1.2
+    rc["xtick.minor.size"] = 2
+    rc["ytick.minor.size"] = 2
+
+    # ── Legend ──
     rc["legend.frameon"] = False
     rc["legend.borderaxespad"] = 0
+
+    # ── Canvas: high DPI, transparent background ──
     rc["figure.dpi"] = 150
     rc["savefig.dpi"] = 300
+    rc["savefig.bbox"] = "tight"
     rc["savefig.transparent"] = True
+    # rc["figure.facecolor"] = "#FFFFFF"
+    # rc["axes.facecolor"] = "#FFFFFF"
+    # rc["savefig.facecolor"] = "#FFFFFF"
+    rc["axes.grid"] = False
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -59,6 +85,21 @@ COLOR_OSCI_HW: str = "#E69F00"       # Sand Orange (hardware stimulus background
 COLOR_ESCAPE: str = "#ED0000"
 COLOR_PREWALK: str = "#00468B"
 COLOR_NO_RESPONSE: str = "#7C878E"
+
+
+# ── NPG (Nature Publishing Group) colour palette ─────────────────────
+# Colour-blind friendly, widely used in top-tier journals.
+
+NPG_PALETTE: list[str] = [
+    "#E64B35",   # Red
+    "#4DBBD5",   # Cyan
+    "#00A087",   # Teal
+    "#3C5488",   # Navy Blue
+    "#F39B7F",   # Salmon
+    "#8491B4",   # Slate Blue
+    "#91D1C2",   # Mint
+    "#DC0000",   # Dark Red
+]
 
 
 # ──────────────────────────────────────────────────────────────────────
