@@ -1,0 +1,9 @@
+numpy
+pandas
+matplotlib
+scipy
+seaborn
+pymc
+arviz
+# Optional: Install for 10-100x faster MCMC sampling
+# pip install numpyro jax jaxlib
