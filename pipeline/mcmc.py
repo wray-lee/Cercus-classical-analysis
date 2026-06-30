@@ -1038,10 +1038,10 @@ def plot_psychometric_curves(
 
     # ── Stimulus onset marker (mixed coordinate system) ──
     ax.axvline(ttc_lo, color="#94A3B8", linestyle="--", alpha=0.8, linewidth=1.2, zorder=0)
-    ax.text(ttc_lo + 30, 0.95, "Stimulus Onset",
-            ha="left", va="top",
-            fontsize=10, color="#64748B", fontweight="bold",
-            transform=ax.get_xaxis_transform(), zorder=1)
+    # ax.text(ttc_lo + 30, 0.95, "Stimulus Onset",
+    #         ha="left", va="top",
+    #         fontsize=10, color="#64748B", fontweight="bold",
+    #         transform=ax.get_xaxis_transform(), zorder=1)
 
     ax.axhline(0.5, color="grey", linestyle=":", alpha=0.4, linewidth=0.75)
     ax.axvline(0, color="grey", linestyle=":", alpha=0.4, linewidth=0.75)
@@ -1525,10 +1525,10 @@ def plot_kaplan_meier_cumulative(
 
     # ── Stimulus onset marker (mixed coordinate system) ──
     ax.axvline(true_trial_start, color="#94A3B8", linestyle="--", alpha=0.8, linewidth=1.2, zorder=0)
-    ax.text(true_trial_start + 30, 0.95, "Stimulus Onset",
-            ha="left", va="top",
-            fontsize=10, color="#64748B", fontweight="bold",
-            transform=ax.get_xaxis_transform(), zorder=1)
+    # ax.text(true_trial_start + 30, 0.95, "Stimulus Onset",
+    #         ha="left", va="top",
+    #         fontsize=10, color="#64748B", fontweight="bold",
+    #         transform=ax.get_xaxis_transform(), zorder=1)
 
     # ── Physical anchor lines ──
     ax.axvline(0, color="black", linestyle="--", alpha=0.5, linewidth=1.2, zorder=0)
