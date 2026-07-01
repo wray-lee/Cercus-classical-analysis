@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from pipeline.classifier import label_trials
@@ -118,15 +119,18 @@ def _generate_individual_trial_figures(
         row = grp.iloc[0]
         lat = float(row["latency_ms"])
         vmax = float(row["v_max"])
+        interval = float(row.get("escape_interval_ms", np.nan))
 
         if plot_fn == "rad":
             fig_trial = plot_single_trial_kinetics(
                 trial_data, lat, vmax, int(tid), response_type=response_type,
                 y_col="angular_velocity", y_label="Angular Velocity (rad/s)",
+                interval_ms=interval,
             )
         else:
             fig_trial = plot_single_trial_kinetics(
                 trial_data, lat, vmax, int(tid), response_type=response_type,
+                interval_ms=interval,
             )
         suffix = f"_{response_type.lower()}" if plot_fn != "rad" else f"_{response_type.lower()}_rad"
         fig_trial.savefig(output_dir / f"trial_{int(tid)}{suffix}.svg",

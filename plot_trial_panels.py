@@ -79,6 +79,7 @@ def plot_trial_panel(
     global_trial_index: int,
     response_type: str = "Escape",
     use_z_heading: bool = True,
+    interval_ms: float = np.nan,
 ) -> plt.Figure:
     """Single composite figure for one trial: speed, angular velocity, stimulus, trajectory."""
     fig = plt.figure(figsize=(16, 8))
@@ -109,6 +110,9 @@ def plot_trial_panel(
         lat_idx = np.argmin(np.abs(t - latency_ms))
         ax_speed.scatter([latency_ms], [spd[lat_idx]], c="#3C5488", s=30, zorder=5,
                          edgecolors="white", linewidths=0.5)
+    if not np.isnan(interval_ms) and not np.isnan(latency_ms):
+        offset_t = latency_ms + interval_ms
+        ax_speed.axvspan(latency_ms, offset_t, alpha=0.10, color="#E64B35", zorder=0)
     _add_threshold_lines(ax_speed)
     ax_speed.set_ylabel("Speed (mm/s)")
     ax_speed.set_xlabel("")
@@ -162,47 +166,46 @@ def plot_trial_panel(
     t_vals = trial["t_rel"].values
     speed_vals = trial["speed"].values
 
+    # 1. 提取流水线已平滑坐标
+    full_x_raw = trial["x"].values
+    full_y_raw = trial["y"].values
+
+    # 2. 计算绝对几何轨迹
+    if use_z_heading:
+        theta_init = (trial["dz"].cumsum().values / RADIUS_MM)[0]
+        full_x = full_x_raw * np.cos(theta_init) + full_y_raw * np.sin(theta_init)
+        full_y = -full_x_raw * np.sin(theta_init) + full_y_raw * np.cos(theta_init)
+    else:
+        full_x = full_x_raw
+        full_y = full_y_raw
+
+    # 3. 基于设定开关提取目标区间
     if (USE_ESCAPE_ONSET_ONLY
             and response_type == "Escape"
             and not np.isnan(latency_ms)):
-        # Escape-onset-only mode: slice to the local escape interval
+        # 锁定局部逃避区间
         lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-        # Search forward from latency onset for speed dropping below 10 mm/s
         post_onset_speed = speed_vals[lat_idx:]
         below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
         if np.any(below_mask):
-            first_below_local = int(np.argmax(below_mask))
-            end_idx = lat_idx + first_below_local
+            end_idx = lat_idx + int(np.argmax(below_mask))
         else:
-            end_idx = len(speed_vals) - 1  # fallback: take to end of array
+            end_idx = len(speed_vals) - 1
 
-        # Guard: ensure the slice is valid (lat_idx < end_idx)
         if lat_idx >= end_idx:
             end_idx = min(lat_idx + 1, len(speed_vals) - 1)
 
-        dx_body = -np.nan_to_num(trial["dx"].values[lat_idx:end_idx])
-        dy_body = -np.nan_to_num(trial["dy"].values[lat_idx:end_idx])
-        dz_body = np.nan_to_num(trial["dz"].values[lat_idx:end_idx])
+        traj_x = full_x[lat_idx:end_idx]
+        traj_y = full_y[lat_idx:end_idx]
     else:
-        # Full-trial mode
-        dx_body = -np.nan_to_num(trial["dx"].values)
-        dy_body = -np.nan_to_num(trial["dy"].values)
-        dz_body = np.nan_to_num(trial["dz"].values)
+        # 保留全景拓扑
+        traj_x = full_x
+        traj_y = full_y
 
-    if use_z_heading:
-        local_heading = np.cumsum(dz_body) / RADIUS_MM
-        local_heading -= local_heading[0]
-        dx_global = dx_body * np.cos(local_heading) - dy_body * np.sin(local_heading)
-        dy_global = dx_body * np.sin(local_heading) + dy_body * np.cos(local_heading)
-        traj_x = np.cumsum(dx_global)
-        traj_y = np.cumsum(dy_global)
-    else:
-        traj_x = np.cumsum(dx_body)
-        traj_y = np.cumsum(dy_body)
-
-    # Subtract first frame so origin = start position
-    traj_x -= traj_x[0]
-    traj_y -= traj_y[0]
+    # 4. 消除原点绝对位移（仅平移，不重置初始朝向角）
+    if len(traj_x) > 0:
+        traj_x -= traj_x[0]
+        traj_y -= traj_y[0]
 
     # Color trajectory by stimulus side
     ss = _get_unified_side(trial)
@@ -226,9 +229,10 @@ def plot_trial_panel(
 
     # ── Super title ──
     latency_str = f"{latency_ms:.1f}" if not np.isnan(latency_ms) else "N/A"
+    interval_str = f"{interval_ms:.1f}" if not np.isnan(interval_ms) else "N/A"
     fig.suptitle(
         f"Trial {global_trial_index} — {response_type}  |  "
-        f"V$_{{max}}$ = {v_max:.1f} mm/s  |  Latency = {latency_str} ms",
+        f"V$_{{max}}$ = {v_max:.1f} mm/s  |  Latency = {latency_str} ms  |  Interval = {interval_str} ms",
         fontweight="bold", fontsize=10, y=0.98,
     )
 
@@ -269,9 +273,11 @@ def _export_trials(
         row = grp.iloc[0]
         lat = float(row["latency_ms"])
         vmax = float(row["v_max"])
+        interval = float(row.get("escape_interval_ms", np.nan))
 
         fig = plot_trial_panel(
             trial_data, lat, vmax, int(tid), response_type=response_type,
+            interval_ms=interval,
         )
         fig.savefig(
             output_dir / f"trial_{int(tid)}_{response_type.lower()}.svg",

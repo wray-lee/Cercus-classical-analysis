@@ -207,6 +207,45 @@ def compute_escape_latency(
     return {"v_max": v_max, "latency_ms": latency_ms}
 
 
+def compute_escape_interval(
+    t_rel: np.ndarray,
+    speed: np.ndarray,
+    latency_ms: float,
+) -> float:
+    """
+    Compute the escape interval duration — time from 10 mm/s onset to the
+    point where speed falls back below 10 mm/s after the burst.
+
+    Parameters
+    ----------
+    t_rel : np.ndarray
+        Time axis in ms, relative to TTC.
+    speed : np.ndarray
+        Instantaneous speed in mm/s.
+    latency_ms : float
+        Latency (10 mm/s onset) in ms, as returned by ``compute_escape_latency``.
+
+    Returns
+    -------
+    float
+        Interval duration in ms (offset − onset).  NaN if latency_ms is NaN
+        or speed never drops back below threshold.
+    """
+    if np.isnan(latency_ms):
+        return np.nan
+
+    onset_idx = int(np.argmin(np.abs(t_rel - latency_ms)))
+    post_onset_speed = speed[onset_idx:]
+    below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+
+    if np.any(below_mask):
+        offset_local = int(np.argmax(below_mask))
+        offset_idx = onset_idx + offset_local
+        return float(t_rel[offset_idx] - t_rel[onset_idx])
+
+    return np.nan
+
+
 # ══════════════════════════════════════════════════════════════════════
 # High-Level Preprocessing Pipeline
 # ══════════════════════════════════════════════════════════════════════

@@ -107,6 +107,33 @@ def _add_threshold_lines(ax: plt.Axes) -> None:
     )
 
 
+def _body_to_traj(
+    grp: pd.DataFrame, mask: np.ndarray, *, use_z: bool
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Body-frame dx/dy → heading-rotated, cumsum-integrated trajectory.
+
+    Integrates on full grp, slices by boolean mask at the end.
+    Returns (None, None) if the resulting slice is empty.
+    """
+    dx_body = -grp["dx"].fillna(0).values
+    dy_body = -grp["dy"].fillna(0).values
+
+    if use_z:
+        heading_rad = grp["dz"].fillna(0).cumsum().values / RADIUS_MM
+        dx_global = dx_body * np.cos(heading_rad) - dy_body * np.sin(heading_rad)
+        dy_global = dx_body * np.sin(heading_rad) + dy_body * np.cos(heading_rad)
+    else:
+        dx_global = dx_body
+        dy_global = dy_body
+
+    burst_dx, burst_dy = dx_global[mask], dy_global[mask]
+
+    if len(burst_dx) == 0:
+        return None, None
+
+    return np.cumsum(burst_dx), np.cumsum(burst_dy)
+
+
 def _draw_oscilloscope_channels(ax: plt.Axes, df: pd.DataFrame, cond: str) -> None:
     """Draw dual-channel oscilloscope waveforms (visual + wind) on *ax*."""
     vis_baseline = 1.0
@@ -222,22 +249,9 @@ def plot_trajectory_overlay(
 
 # --------------------------- Way for drawing trajectory -----------
 
-            # ── Dynamic Origin Translation ──
-            x_origin = burst["x"].iloc[0]
-            y_origin = burst["y"].iloc[0]
-            burst_x = burst["x"].values - x_origin
-            burst_y = burst["y"].values - y_origin
-
-            if not USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
-                # ── Dynamic Vector Alignment (Reverse Rotation) ──
-                raw_heading = grp["dz"].cumsum().values / RADIUS_MM
-                theta = -raw_heading[render_start_idx]
-                rot_x = burst_x * np.cos(theta) - burst_y * np.sin(theta)
-                rot_y = burst_x * np.sin(theta) + burst_y * np.cos(theta)
-
-            if USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
-                rot_x = burst_x
-                rot_y = burst_y
+            rot_x, rot_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY)
+            if rot_x is None:
+                continue
 
 # --------------------------------------------------------------------
 
@@ -586,6 +600,7 @@ def plot_single_trial_kinetics(
     figsize: tuple[float, float] = (6.0, 3.5),
     y_col: str = "speed",
     y_label: str = "Escape Speed (mm/s)",
+    interval_ms: float = np.nan,
 ) -> plt.Figure:
     """
     Single-trial kinetics (speed or angular velocity) with latency marker.
@@ -608,6 +623,10 @@ def plot_single_trial_kinetics(
         ax.scatter([latency_ms], [y_vals[lat_idx]], c="#3C5488", s=30, zorder=5,
                    edgecolors="white", linewidths=0.5)
 
+    # ── Interval shading ──
+    if y_col == "speed" and not np.isnan(interval_ms) and not np.isnan(latency_ms):
+        ax.axvspan(latency_ms, latency_ms + interval_ms, alpha=0.10, color="#E64B35", zorder=0)
+
     # ── Reference lines ──
     if y_col == "speed":
         ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.6)
@@ -627,7 +646,8 @@ def plot_single_trial_kinetics(
     ax.set_title(f"Trial {global_trial_index} — {response_type}  (V$_{{max}}$={v_max:.1f} mm/s)", fontweight="bold")
 
     latency_str = f"{latency_ms:.1f}" if not np.isnan(latency_ms) else "N/A"
-    info_text = f"Latency: {latency_str} ms\nV$_{{max}}$: {v_max:.1f} mm/s"
+    interval_str = f"{interval_ms:.1f}" if not np.isnan(interval_ms) else "N/A"
+    info_text = f"Latency: {latency_str} ms\nV$_{{max}}$: {v_max:.1f} mm/s\nInterval: {interval_str} ms"
     ax.text(0.98, 0.95, info_text, transform=ax.transAxes, fontsize=6,
             ha="right", va="top",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8", alpha=0.9))
@@ -723,27 +743,9 @@ def plot_global_trajectory_overlay_fixed(
 
         burst = grp[burst_mask]
 
-        # 修复2: 绝对丢弃 DataFrame 中自带的全局 x 和 y
-        # 提取身体坐标系下的微小位移（根据现有逻辑，原始dx,dy需取反）
-        dx_body = -np.nan_to_num(burst["dx"].values)
-        dy_body = -np.nan_to_num(burst["dy"].values)
-        dz_body = np.nan_to_num(burst["dz"].values)
-
-        if USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
-            # 独立航向校准：局部累加 dz，强制第一帧朝向 0 rad
-            local_heading = np.cumsum(dz_body) / RADIUS_MM
-            local_heading -= local_heading[0]
-
-            # 局部坐标系旋转重构
-            dx_global = dx_body * np.cos(local_heading) - dy_body * np.sin(local_heading)
-            dy_global = dx_body * np.sin(local_heading) + dy_body * np.cos(local_heading)
-
-            traj_x = np.cumsum(dx_global)
-            traj_y = np.cumsum(dy_global)
-        else:
-            # 若不开启动态 dz 校准，直接对 body 进行干净积分（同样不会产生全局偏移）
-            traj_x = np.cumsum(dx_body)
-            traj_y = np.cumsum(dy_body)
+        traj_x, traj_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY)
+        if traj_x is None:
+            continue
 
         # ── 颜色分配与绘图 ──
         ss = _get_unified_side(burst)
