@@ -4,10 +4,11 @@ Cercus Framework — MCMC Bayesian Psychophysics Analysis
 Bayesian inference on multisensory integration using PyMC.
 
 Model architecture:
-- **Bimodal (looming_wind)**: P(Escape) = sigmoid(k * (TTC - TTC50))
+- **Bimodal (looming_wind_*)**: P(Escape) = sigmoid(k * (TTC - TTC50))
   with data-informed priors on k and TTC50.
 - **Unimodal (visual_only, wind_only)**: P(Escape) = p_baseline
   with uniform Beta(1, 1) prior.
+  visual_only receives a dynamic KM-based CDF overlay in the rendering layer.
 
 Key analyses:
 1. Psychometric function fitting per stimulus condition
@@ -33,6 +34,7 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 from lifelines import KaplanMeierFitter
+from scipy.interpolate import make_interp_spline
 
 from .classifier import label_trials
 from .constants import NPG_PALETTE, _apply_publication_style
@@ -171,7 +173,8 @@ def prepare_mcmc_data(
 
     valid["effective_ttc_ms"] = _compute_effective_ttc(valid)
 
-    # 恢复原逻辑：只对 looming_wind 进行曲线拟合约束
+    # Only looming_wind_* conditions require valid TTC for sigmoid fitting;
+    # unimodal (visual_only, wind_only) pass unconditionally.
     is_curve_fitted = valid["stim_condition"].str.startswith("looming_wind_")
     keep = (~is_curve_fitted) | (is_curve_fitted & valid["effective_ttc_ms"].notna())
     valid = valid[keep].copy()
@@ -258,7 +261,9 @@ def _compute_effective_ttc(df: pd.DataFrame) -> pd.Series:
     """Compute effective TTC for each trial.
 
     - **visual_only / wind_only**: TTC is NaN (no temporal dimension in
-      these unimodal reference conditions; modelled as separate intercepts).
+      the MCMC sampling graph; modelled as separate intercepts via
+      ``p_baseline``).  visual_only receives a dynamic KM-based CDF
+      overlay in the rendering layer, not here.
     - **looming_wind_***: TTC = ``target_ttc_ms``.
     """
     ttc = pd.Series(np.nan, index=df.index)
@@ -268,7 +273,7 @@ def _compute_effective_ttc(df: pd.DataFrame) -> pd.Series:
         else pd.Series(np.nan, index=df.index)
     )
 
-    # Only bimodal conditions have meaningful TTC
+    # Only bimodal conditions have meaningful TTC for MCMC sampling
     mask_lw = df["stim_condition"].str.startswith("looming_wind_")
     has_ttc = mask_lw & ttc_ms.notna()
     ttc[has_ttc] = ttc_ms[has_ttc]
@@ -287,14 +292,20 @@ def split_bimodal_unimodal(
     conditions: list[str],
     condition_idx: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray, np.ndarray, list[str], np.ndarray]:
-    """Split data into bimodal (looming_wind_*) and unimodal groups.
+    """Split data into bimodal (sigmoid) and unimodal (static baseline) groups.
+
+    - **Bimodal** (sigmoid): ``looming_wind_*``
+      — fitted with ``sigmoid(k * (TTC - TTC50))``.
+    - **Unimodal** (static baseline): ``visual_only``, ``wind_only``
+      — modelled as ``p_baseline`` (constant, independent of TTC).
+      visual_only receives a dynamic KM-based CDF overlay in the rendering
+      layer; the MCMC model itself computes a flat escape rate.
 
     Returns
     -------
     bi_ttc, bi_escape, bi_conditions, bi_condition_idx,
     uni_escape, uni_conditions, uni_condition_idx
     """
-    # visual_only 重新回归 uni_conditions 组，仅计算平均概率
     bi_conditions = sorted([c for c in conditions if c.startswith("looming_wind_")])
     uni_conditions = sorted([c for c in conditions if c not in bi_conditions])
 
@@ -341,7 +352,7 @@ def build_psychometric_model(
     """
     Build Bayesian psychometric model with separated bimodal/unimodal structure.
 
-    Bimodal (looming_wind) conditions:
+    Bimodal (looming_wind_*) conditions:
         P(Escape) = sigmoid(k * (TTC - TTC50))
 
     Unimodal (visual_only, wind_only) conditions:
@@ -823,15 +834,15 @@ def _generate_color_palette(
 ) -> dict[str, str]:
     """Generate NPG-based discrete colour palette.
 
-    - visual_only -> NPG Navy Blue (#3C5488)
-    - wind_only -> NPG Salmon (#F39B7F)
+    - visual_only -> Muted Teal (#5B7B8A) — dynamic KM curve in psychometric plot
+    - wind_only -> NPG Salmon (#F39B7F) — static baseline
     - looming_wind_* -> cycles through NPG palette; brightness-stepped
       when count exceeds palette size.
     """
     palette: dict[str, str] = {}
     for cond in uni_conditions:
         if cond == "visual_only":
-            palette[cond] = "#5B7B8A"   # Muted Teal (distinct from NPG cycle)
+            palette[cond] = "#5B7B8A"   # Muted Teal (dynamic KM curve)
         elif cond == "wind_only":
             palette[cond] = "#F39B7F"   # NPG Salmon
         else:
@@ -953,16 +964,28 @@ def plot_psychometric_curves(
     uni_condition_idx: np.ndarray | None,
     output_path: Path,
     true_trial_start: float = -5000.0,
+    survival_df: pd.DataFrame | None = None,
 ) -> None:
     """Generate psychometric curves (median posterior only, no shading).
 
     Publication-standard: sharp lines, white-edged data markers,
     legend outside right, stimulus onset marker, response window shading.
+
+    For **visual_only**, instead of a horizontal p_baseline line, the plot
+    renders a dynamic Kaplan-Meier cumulative escape curve extracted from
+    ``survival_df``.  The KM curve is fitted on positive-shifted durations
+    (to satisfy lifelines' strict positivity requirement) and then shifted
+    back to the TTC coordinate system, sharing the same physical anchor
+    (TTC=0 = collision) as the bimodal sigmoid curves.
+
+    For **wind_only**, a horizontal dashed line at the MCMC p_baseline
+    posterior median is drawn (pure mechanical trigger, no temporal
+    dimension).
     """
     _apply_publication_style()
     palette = _generate_color_palette(bi_conditions, uni_conditions)
 
-    # ── STEP 2: Dynamic window from true trial start ──
+    # ── Dynamic window from true trial start ──
     ttc_lo = true_trial_start
     ttc_hi = 1000.0
     ttc_grid = np.linspace(ttc_lo, ttc_hi, 500)
@@ -1013,21 +1036,67 @@ def plot_psychometric_curves(
                     edgecolors="white", linewidths=0.5,
                 )
 
-    # ── Unimodal conditions: horizontal baseline only (no TTC axis) ──
-    # wind_only: purely temporal-irrelevant, global baseline only.
-    # visual_only: modelled as constant p_baseline (no TTC dimension in data),
-    #              so a single point at x=0 is physically misleading.
+    # ── Unimodal conditions ──
     p_baseline_post = get_p_baseline_posterior(trace, uni_conditions)
+
+    # ── visual_only: dynamic Kaplan-Meier CDF interpolated onto ttc_grid ──
+    if "visual_only" in uni_conditions:
+        color = palette["visual_only"]
+        if survival_df is not None:
+            vis_mask = survival_df["stim_condition"] == "visual_only"
+            df_vis = survival_df.loc[vis_mask]
+            if len(df_vis) >= 2:
+                global_min_ttc = min(
+                    float(df_vis["TTC_at_event"].min()), true_trial_start
+                )
+                time_shift = abs(global_min_ttc) + 10.0
+
+                anchor = pd.DataFrame([{
+                    "TTC_at_event": true_trial_start,
+                    "Event_Observed": 0,
+                    "stim_condition": "visual_only",
+                }])
+                df_vis = pd.concat([df_vis, anchor], ignore_index=True)
+
+                positive_durations = df_vis["TTC_at_event"].values + time_shift
+                assert np.all(positive_durations > 0), (
+                    f"[visual_only] shift failed: min={positive_durations.min():.1f}"
+                )
+
+                kmf = KaplanMeierFitter()
+                kmf.fit(
+                    durations=positive_durations,
+                    event_observed=df_vis["Event_Observed"].values,
+                    label="visual_only",
+                )
+                x_ttc = kmf.timeline - time_shift
+                y_cdf = 1.0 - kmf.survival_function_.values.flatten()
+
+                if len(x_ttc) >= 4:
+                    interp_fn = make_interp_spline(x_ttc, y_cdf, k=3)
+                    y_grid = interp_fn(ttc_grid)
+                    y_grid = np.clip(y_grid, 0.0, 1.0)
+                else:
+                    y_grid = np.interp(ttc_grid, x_ttc, y_cdf)
+
+                ax.plot(
+                    ttc_grid, y_grid,
+                    color=color, linewidth=2.5, linestyle="--",
+                    label="visual_only (dynamic)",
+                )
+            else:
+                log.warning("visual_only: insufficient survival data (%d rows), "
+                            "falling back to p_baseline", len(df_vis))
+                _draw_static_baseline(ax, p_baseline_post, "visual_only", color)
+        else:
+            _draw_static_baseline(ax, p_baseline_post, "visual_only", color)
+
+    # ── wind_only (and any other residual unimodal): static baseline ──
     for cond in uni_conditions:
+        if cond == "visual_only":
+            continue
         color = palette[cond]
-        if cond in p_baseline_post:
-            pb = p_baseline_post[cond]
-            rate = float(np.median(pb))
-            lo, hi = compute_hdi(pb)
-            ax.axhline(
-                rate, color=color, linewidth=1.5, linestyle="--",
-                label=f"{cond} ({rate:.2f} [{lo:.2f}, {hi:.2f}])",
-            )
+        _draw_static_baseline(ax, p_baseline_post, cond, color)
 
     # ── Canvas purge: force white background ──
     fig.patch.set_facecolor("white")
@@ -1036,12 +1105,8 @@ def plot_psychometric_curves(
     # ── Response window highlight ──
     ax.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
 
-    # ── Stimulus onset marker (mixed coordinate system) ──
+    # ── Stimulus onset marker ──
     ax.axvline(ttc_lo, color="#94A3B8", linestyle="--", alpha=0.8, linewidth=1.2, zorder=0)
-    # ax.text(ttc_lo + 30, 0.95, "Stimulus Onset",
-    #         ha="left", va="top",
-    #         fontsize=10, color="#64748B", fontweight="bold",
-    #         transform=ax.get_xaxis_transform(), zorder=1)
 
     ax.axhline(0.5, color="grey", linestyle=":", alpha=0.4, linewidth=0.75)
     ax.axvline(0, color="grey", linestyle=":", alpha=0.4, linewidth=0.75)
@@ -1061,6 +1126,23 @@ def plot_psychometric_curves(
     plt.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+
+
+def _draw_static_baseline(
+    ax: plt.Axes,
+    p_baseline_post: dict[str, np.ndarray],
+    cond: str,
+    color: str,
+) -> None:
+    """Draw a horizontal dashed line for a static unimodal baseline."""
+    if cond in p_baseline_post:
+        pb = p_baseline_post[cond]
+        rate = float(np.median(pb))
+        lo, hi = compute_hdi(pb)
+        ax.axhline(
+            rate, color=color, linewidth=1.5, linestyle="--",
+            label=f"{cond} ({rate:.2f} [{lo:.2f}, {hi:.2f}])",
+        )
 
 
 def plot_posterior_distributions(
@@ -1555,105 +1637,246 @@ def plot_kaplan_meier_cumulative(
 # ══════════════════════════════════════════════════════════════════════
 
 
-def plot_critical_angle_theta50(
-    trace: az.InferenceData,
+def plot_race_model_violation(
+    df: pd.DataFrame,
     bi_conditions: list[str],
     uni_conditions: list[str],
     output_path: Path,
+    true_trial_start: float = -5000.0,
 ) -> None:
-    """Map TTC50 posterior to critical retinal angle θ₅₀ and plot forest plot.
+    """Plot Race Model Inequality violation for multisensory integration.
 
-    Uses the looming geometry formula:
-        θ₅₀ = 2 × arctan(l/v / |TTC₅₀|) × (180/π)
+    Computes empirical CDFs via Kaplan-Meier for each bimodal condition and
+    compares them against Miller's Race Model Bound:
+        CDF_bound(t) = min(1, CDF_visual(t) + CDF_wind(t))
+
+    Regions where a bimodal CDF exceeds the bound are shaded red, providing
+    direct mathematical evidence for super-additive Bayesian integration that
+    violates the independent race model.
 
     Parameters
     ----------
-    trace : InferenceData
-        MCMC posterior trace.
+    df : DataFrame
+        Survival-level data with ``TTC_at_event``, ``Event_Observed``,
+        ``stim_condition`` (from ``prepare_survival_data``).
     bi_conditions, uni_conditions : list of str
-        Condition names (bi_conditions includes visual_only after routing refactor).
+        Condition names.
     output_path : Path
         Output file path.
+    true_trial_start : float
+        Earliest frame-level ``t_rel`` (stimulus onset) in TTC coordinates.
     """
     _apply_publication_style()
     palette = _generate_color_palette(bi_conditions, uni_conditions)
 
-    ttc50_post = get_ttc50_posterior(trace, bi_conditions)
+    # ── Positive-shift to satisfy lifelines' strict positive-duration req ──
+    global_min_ttc = min(float(df["TTC_at_event"].min()), true_trial_start)
+    time_shift = abs(global_min_ttc) + 10.0
+    log.info("Race Model plot — positive-shift: true_trial_start=%.1f, "
+             "event_min=%.1f, time_shift=%.1f ms",
+             true_trial_start, float(df["TTC_at_event"].min()), time_shift)
 
-    theta_summaries: list[dict[str, Any]] = []
+    # Inject censored anchor at true trial start per condition (Y=0 baseline)
+    all_conds = sorted(df["stim_condition"].unique())
+    anchor_rows = [
+        {"TTC_at_event": true_trial_start, "Event_Observed": 0,
+         "stim_condition": c}
+        for c in all_conds
+    ]
+    df = pd.concat([df, pd.DataFrame(anchor_rows)], ignore_index=True)
 
-    for i, cond in enumerate(bi_conditions):
-        ttc_samples = ttc50_post[:, :, i].flatten()
-        ttc_abs = np.abs(ttc_samples)
+    kmf = KaplanMeierFitter()
+    cdf_curves: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
-        # Resolve l/v ratio for this condition
-        l_v = L_V_RATIO_DEFAULT
+    # ── Fit empirical CDFs for all bimodal conditions ──
+    for cond in all_conds:
+        mask = df["stim_condition"] == cond
+        if mask.sum() < 2:
+            continue
+        df_cond = df.loc[mask]
+        pos_dur = df_cond["TTC_at_event"].values + time_shift
+        assert np.all(pos_dur > 0), f"[{cond}] shift failed: min={pos_dur.min():.1f}"
+        kmf.fit(durations=pos_dur,
+                event_observed=df_cond["Event_Observed"].values, label=cond)
+        x_ttc = kmf.timeline - time_shift
+        y_cdf = 1.0 - kmf.survival_function_.values.flatten()
+        cdf_curves[cond] = (x_ttc, y_cdf)
 
-        # Core mapping: θ₅₀ = 2 * arctan(l/v / |TTC|) * (180 / π)
-        theta_samples = 2.0 * np.arctan(l_v / ttc_abs) * (180.0 / np.pi)
+    # ── Fit unimodal baselines for the race model bound ──
+    uni_cdf: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for cond in ("visual_only", "wind_only"):
+        if cond not in cdf_curves:
+            mask = df["stim_condition"] == cond
+            if mask.sum() < 2:
+                continue
+            df_cond = df.loc[mask]
+            pos_dur = df_cond["TTC_at_event"].values + time_shift
+            assert np.all(pos_dur > 0)
+            kmf.fit(durations=pos_dur,
+                    event_observed=df_cond["Event_Observed"].values, label=cond)
+            x_ttc = kmf.timeline - time_shift
+            y_cdf = 1.0 - kmf.survival_function_.values.flatten()
+            uni_cdf[cond] = (x_ttc, y_cdf)
+        else:
+            uni_cdf[cond] = cdf_curves[cond]
 
-        median = float(np.median(theta_samples))
-        hdi_lo, hdi_hi = compute_hdi(theta_samples)
+    # ── Miller's Race Model Bound on a shared time grid ──
+    bound_x = bound_y = None
+    if "visual_only" in uni_cdf and "wind_only" in uni_cdf:
+        x_v, y_v = uni_cdf["visual_only"]
+        x_w, y_w = uni_cdf["wind_only"]
+        bound_x = np.union1d(x_v, x_w)
+        cdf_v = np.interp(bound_x, x_v, y_v)
+        cdf_w = np.interp(bound_x, x_w, y_w)
+        bound_y = np.minimum(1.0, cdf_v + cdf_w)
+    elif "visual_only" in uni_cdf:
+        bound_x, bound_y = uni_cdf["visual_only"]
+    elif "wind_only" in uni_cdf:
+        bound_x, bound_y = uni_cdf["wind_only"]
 
-        theta_summaries.append({
-            "condition": cond,
-            "median": median,
-            "hdi_lo": hdi_lo,
-            "hdi_hi": hdi_hi,
-        })
+    # ── Plot ──
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
-    if not theta_summaries:
+    # Response window highlight
+    ax.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
+
+    # Empirical CDFs for bimodal conditions
+    for cond in bi_conditions:
+        if cond not in cdf_curves:
+            continue
+        x, y = cdf_curves[cond]
+        color = palette.get(cond, "#7C878E")
+        ax.plot(x, y, color=color, linewidth=2.5, label=cond, zorder=2)
+
+    # Race Model Bound + violation shading
+    if bound_x is not None and bound_y is not None:
+        ax.plot(bound_x, bound_y, color="#333333", linewidth=2.5,
+                linestyle="--", label="Race Model Bound", zorder=3)
+
+        for cond in bi_conditions:
+            if cond not in cdf_curves:
+                continue
+            x_bi, y_bi = cdf_curves[cond]
+            x_shared = np.union1d(x_bi, bound_x)
+            y_bi_interp = np.interp(x_shared, x_bi, y_bi)
+            y_bound_interp = np.interp(x_shared, bound_x, bound_y)
+            violation = y_bi_interp > y_bound_interp
+            if np.any(violation):
+                ax.fill_between(
+                    x_shared, y_bound_interp, y_bi_interp,
+                    where=violation, color="#E64B35", alpha=0.20,
+                    interpolate=True, zorder=1,
+                )
+
+    # Physical anchor lines
+    ax.axvline(0, color="black", linestyle="--", alpha=0.5, linewidth=1.2, zorder=0)
+    ax.text(0, 0.97, "Collision\n(TTC=0)", ha="center", va="top",
+            fontsize=10, color="black", fontweight="bold")
+    ax.axhline(0.5, color="grey", linestyle=":", alpha=0.5, linewidth=1.0, zorder=0)
+
+    ax.set_xlim(true_trial_start, 1000.0)
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel("Time to Collision (ms)\n(negative = before collision)")
+    ax.set_ylabel("Cumulative Escape Probability")
+    ax.set_title("Race Model Inequality: Bayesian Integration Evidence")
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_time_window_of_integration(
+    var_red: dict[str, Any],
+    bi_conditions: list[str],
+    output_path: Path,
+) -> None:
+    """Plot Time-Window of Integration (TWoI) curve.
+
+    Maps each bimodal condition's TTC offset (extracted from the condition
+    name, e.g. ``looming_wind_d0.625_-119`` → SOA = −119 ms) against its
+    posterior Variance Reduction, revealing the temporal profile of
+    multisensory integration.
+
+    Parameters
+    ----------
+    var_red : dict
+        Output of ``compute_variance_reduction``.
+    bi_conditions : list of str
+        Bimodal condition names.
+    output_path : Path
+        Output file path.
+    """
+    _apply_publication_style()
+
+    soa_vals: list[int] = []
+    vr_vals: list[float] = []
+    err_lo: list[float] = []
+    err_hi: list[float] = []
+
+    for cond in bi_conditions:
+        m = re.search(r"_(-?\d+)$", cond)
+        if m is None:
+            continue
+        soa = int(m.group(1))
+        vr_key = f"{cond}_variance_reduction"
+        hdi_key = f"{cond}_variance_reduction_hdi_95"
+        if vr_key not in var_red:
+            continue
+        vr = var_red[vr_key]
+        if not np.isfinite(vr):
+            continue
+        soa_vals.append(soa)
+        vr_vals.append(float(vr))
+        if hdi_key in var_red:
+            err_lo.append(var_red[hdi_key][0])
+            err_hi.append(var_red[hdi_key][1])
+        else:
+            err_lo.append(float(vr))
+            err_hi.append(float(vr))
+
+    if len(soa_vals) < 2:
+        log.warning("TWoI plot skipped: fewer than 2 valid SOA points")
         return
 
-    n = len(theta_summaries)
-    fig, ax = plt.subplots(figsize=(6, max(4, n * 0.6)))
+    order = np.argsort(soa_vals)
+    soa_arr = np.asarray(soa_vals)[order]
+    vr_arr = np.asarray(vr_vals)[order]
+    lo_arr = np.asarray(err_lo)[order]
+    hi_arr = np.asarray(err_hi)[order]
 
-    y_positions = np.arange(n)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
-    for idx, entry in enumerate(theta_summaries):
-        cond = entry["condition"]
-        color = palette.get(cond, "#7C878E")
-        y = y_positions[idx]
+    # Smooth curve
+    try:
+        n_pts = max(200, len(soa_arr) * 20)
+        x_smooth = np.linspace(soa_arr[0], soa_arr[-1], n_pts)
+        y_smooth = make_interp_spline(soa_arr, vr_arr, k=min(3, len(soa_arr) - 1))(x_smooth)
+        ax.plot(x_smooth, y_smooth, color="#3C5488", linewidth=2.5, zorder=2)
+    except Exception:
+        ax.plot(soa_arr, vr_arr, color="#3C5488", linewidth=2.5, zorder=2)
 
-        # Error bar (HDI)
-        ax.plot(
-            [entry["hdi_lo"], entry["hdi_hi"]], [y, y],
-            color=color, linewidth=2.5, zorder=1,
-        )
-        # Median marker
-        ax.plot(
-            entry["median"], y,
-            marker="s", markersize=8, color=color,
-            markeredgecolor="white", markeredgewidth=1.0,
-            zorder=2,
-        )
+    # Points with HDI error bars
+    yerr = np.vstack([vr_arr - lo_arr, hi_arr - vr_arr])
+    ax.errorbar(
+        soa_arr, vr_arr, yerr=yerr,
+        fmt="o", color="#3C5488", markersize=8,
+        markeredgecolor="white", markeredgewidth=1.2,
+        ecolor="black", elinewidth=1.5, capsize=5, capthick=1.5,
+        zorder=3,
+    )
 
-    # Visual-only baseline reference line
-    for idx, entry in enumerate(theta_summaries):
-        if entry["condition"] == "visual_only":
-            ax.axvline(
-                entry["median"], color="grey",
-                linestyle="--", alpha=0.5, zorder=0,
-            )
-            ax.text(
-                entry["median"], n - 0.3, "  Visual-only Threshold",
-                fontsize=9, color="grey", ha="left", va="bottom",
-            )
-            break
+    ax.axhline(0, color="grey", linestyle="--", linewidth=0.75, zorder=0)
 
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels([e["condition"] for e in theta_summaries], fontsize=10)
-    ax.set_xlabel("Critical Retinal Angle (Degrees)")
-    ax.set_title("θ₅₀: Critical Retinal Angle at PSE")
+    ax.set_xlabel("Stimulus Onset Asynchrony (ms)")
+    ax.set_ylabel("Posterior Variance Reduction\n(relative to visual-only)")
+    ax.set_title("Time-Window of Multisensory Integration")
 
-    # Remove top, right, and left (Y-axis) spines
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_visible(False)
-    ax.tick_params(axis="y", length=0)
-
-    # Faint vertical grid
-    ax.xaxis.grid(True, linestyle="--", alpha=0.15)
+    ax.yaxis.grid(True, linestyle="--", alpha=0.15)
     ax.set_axisbelow(True)
 
     plt.tight_layout()
@@ -1913,6 +2136,7 @@ def run_mcmc_analysis(
             uni_conditions, uni_escape, uni_condition_idx,
             output_dir / f"psychometric_curves.{plot_format}",
             true_trial_start=true_trial_start,
+            survival_df=survival_df,
         )
         plot_posterior_distributions(
             trace, bi_conditions, uni_conditions,
@@ -1928,9 +2152,15 @@ def run_mcmc_analysis(
                 var_red, bi_conditions,
                 output_dir / f"variance_reduction.{plot_format}",
             )
-        plot_critical_angle_theta50(
-            trace, bi_conditions, uni_conditions,
-            output_dir / f"critical_angle_theta50.{plot_format}",
+        if survival_df is not None:
+            plot_race_model_violation(
+                survival_df, bi_conditions, uni_conditions,
+                output_dir / f"race_model_violation.{plot_format}",
+                true_trial_start=true_trial_start,
+            )
+        plot_time_window_of_integration(
+            var_red, bi_conditions,
+            output_dir / f"time_window_of_integration.{plot_format}",
         )
         # Kaplan-Meier cumulative escape dynamics
         if survival_df is not None:
