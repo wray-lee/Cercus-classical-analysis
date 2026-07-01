@@ -34,6 +34,7 @@ from pipeline.constants import (
     COLOR_OSCI_VIS,
     COLOR_PREWALK,
     COLOR_RIGHT,
+    ESCAPE_START_THRESHOLD,
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
@@ -52,6 +53,9 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 _apply_publication_style()
+
+# ── Global switch: escape-onset-only trajectory mode ──
+USE_ESCAPE_ONSET_ONLY = True
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -154,10 +158,36 @@ def plot_trial_panel(
     ax_stim.grid(False)
     ax_stim.set_title("Stimulus Paradigm", fontweight="bold")
 
-    # ── Panel 4: Trajectory Overlay (whole trial, origin at first frame) ──
-    dx_body = -np.nan_to_num(trial["dx"].values)
-    dy_body = -np.nan_to_num(trial["dy"].values)
-    dz_body = np.nan_to_num(trial["dz"].values)
+    # ── Panel 4: Trajectory Overlay ──
+    t_vals = trial["t_rel"].values
+    speed_vals = trial["speed"].values
+
+    if (USE_ESCAPE_ONSET_ONLY
+            and response_type == "Escape"
+            and not np.isnan(latency_ms)):
+        # Escape-onset-only mode: slice to the local escape interval
+        lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
+        # Search forward from latency onset for speed dropping below 10 mm/s
+        post_onset_speed = speed_vals[lat_idx:]
+        below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+        if np.any(below_mask):
+            first_below_local = int(np.argmax(below_mask))
+            end_idx = lat_idx + first_below_local
+        else:
+            end_idx = len(speed_vals) - 1  # fallback: take to end of array
+
+        # Guard: ensure the slice is valid (lat_idx < end_idx)
+        if lat_idx >= end_idx:
+            end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+
+        dx_body = -np.nan_to_num(trial["dx"].values[lat_idx:end_idx])
+        dy_body = -np.nan_to_num(trial["dy"].values[lat_idx:end_idx])
+        dz_body = np.nan_to_num(trial["dz"].values[lat_idx:end_idx])
+    else:
+        # Full-trial mode
+        dx_body = -np.nan_to_num(trial["dx"].values)
+        dy_body = -np.nan_to_num(trial["dy"].values)
+        dz_body = np.nan_to_num(trial["dz"].values)
 
     if use_z_heading:
         local_heading = np.cumsum(dz_body) / RADIUS_MM

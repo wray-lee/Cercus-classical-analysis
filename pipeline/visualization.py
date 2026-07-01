@@ -652,7 +652,8 @@ def plot_global_trajectory_overlay_fixed(
     right_color: str = COLOR_RIGHT,
     #------------- Trajectory Drawing Options -------------
     # USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False
-    USE_Z_DEGREE_TO_DRAW_TRAJECTORY = True
+    USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = True,
+    USE_ESCAPE_ONSET_ONLY: bool = True
     # -------------------------------------------------
 ) -> plt.Figure:
     """
@@ -680,18 +681,42 @@ def plot_global_trajectory_overlay_fixed(
             stim_onset_t_rel=float(_ttc) if pd.notna(_ttc) else None,
         )
 
+        # ── 读取当前试次的分类信息 ──
+        _latency_ms = esc["latency_ms"]
+        _response_type = grp["response_type"].iloc[0] if "response_type" in grp.columns else ""
+
         # ── 确定有效数据窗口 ──
-        if not np.isnan(esc["latency_ms"]):
+        if (USE_ESCAPE_ONSET_ONLY
+                and _response_type == "Escape"
+                and not np.isnan(_latency_ms)):
+            # Escape-onset-only mode: slice to the local escape interval
+            lat_idx = int(np.argmin(np.abs(t_vals - _latency_ms)))
+            # Search forward from latency onset for speed dropping below 10 mm/s
+            post_onset_speed = speed_vals[lat_idx:]
+            below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+            if np.any(below_mask):
+                first_below_local = int(np.argmax(below_mask))
+                end_idx = lat_idx + first_below_local
+            else:
+                end_idx = len(speed_vals) - 1  # fallback: take to end of array
+
+            # Guard: ensure the slice is valid
+            if lat_idx >= end_idx:
+                end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+
+            burst_mask = np.zeros(len(t_vals), dtype=bool)
+            burst_mask[lat_idx:end_idx] = True
+        elif not np.isnan(_latency_ms):
             render_start_ms = float(t_vals.min())
             render_start_idx = int(np.argmin(np.abs(t_vals - render_start_ms)))
             actual_start_ms = t_vals[render_start_idx]
             burst_end_ms = float(t_vals.max())
+            burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
         else:
             render_start_idx = int(np.argmin(np.abs(t_vals - 0.0)))
             actual_start_ms = 0.0
             burst_end_ms = float(t_vals.max())
-
-        burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
+            burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
 
         if not np.any(burst_mask):
             continue
