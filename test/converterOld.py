@@ -122,6 +122,6 @@ def convert_legacy_to_standard(data_dir: str, output_dir: Path):
             print(f"✅ 转换完毕: \n ├── {events_path.name}\n └── {kin_path.name}")
 
 if __name__ == "__main__":
-    LEGACY_DATA_DIR = r"D:\OH DATA\StopToEscape_Result_csv\cercus_standard_data"
+    LEGACY_DATA_DIR = r"D:\OH DATA\StopToEscape_Result_csv"
     OUTPUT_DIR = Path(f"{LEGACY_DATA_DIR}/cercus_standard_data")
     convert_legacy_to_standard(LEGACY_DATA_DIR, OUTPUT_DIR)

@@ -177,13 +177,34 @@ def _body_to_traj(
     x_inner = np.cumsum(dx_inner)
     y_inner = np.cumsum(dy_inner)
 
-    # ── Stage 2: rigid macro rotation ──
+    # ── Stage 2: rigid macro rotation (with curvature thresholding) ──
     if use_rigid_rotation:
         # Total yaw = sum of all dz in the z-mask window / RADIUS_MM
         total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
+        macro_yaw = total_yaw_rad  # intrinsic trajectory rotation
 
-        cos_yaw = np.cos(total_yaw_rad)
-        sin_yaw = np.sin(total_yaw_rad)
+        # ── Curvature Thresholding ──
+        # High-intrinsic-curvature trajectories can suffer start-tangent
+        # distortion and quadrant reversal when the full compensation
+        # angle is applied.  We attenuate comp_angle in two steps:
+        #   1. Gradual decay when |macro_yaw| exceeds MACRO_YAW_THRESHOLD.
+        #   2. Hard clamp at COMP_ANGLE_MAX to cap the forced distortion.
+        MACRO_YAW_THRESHOLD = np.pi / 2   # 90° — high intrinsic curvature
+        COMP_ANGLE_MAX = np.pi / 2        # 90° — max allowed compensation
+
+        comp_angle = macro_yaw
+
+        # Gradual decay: linear ramp from 1→0 over one threshold width
+        yaw_abs = abs(macro_yaw)
+        if yaw_abs > MACRO_YAW_THRESHOLD:
+            decay_factor = max(0.0, 1.0 - (yaw_abs - MACRO_YAW_THRESHOLD) / MACRO_YAW_THRESHOLD)
+            comp_angle *= decay_factor
+
+        # Hard clamp on compensation angle
+        comp_angle = np.clip(comp_angle, -COMP_ANGLE_MAX, COMP_ANGLE_MAX)
+
+        cos_yaw = np.cos(comp_angle)
+        sin_yaw = np.sin(comp_angle)
 
         traj_x = x_inner * cos_yaw - y_inner * sin_yaw
         traj_y = x_inner * sin_yaw + y_inner * cos_yaw
@@ -739,8 +760,8 @@ def plot_single_trial_kinetics(
 
 def plot_global_trajectory_overlay_fixed(
     df: pd.DataFrame,
-    TRAJECTORY_MAX_RADIUS_MM: float = 200.0,
-    TRAJECTORY_STEP_MM: float = 20.0,
+    TRAJECTORY_MAX_RADIUS_MM: float = 120.0,
+    TRAJECTORY_STEP_MM: float = 10.0,
     figsize: tuple[float, float] = (5.0, 5.0),
     alpha: float = 1.0,
     lw: float = 0.3,

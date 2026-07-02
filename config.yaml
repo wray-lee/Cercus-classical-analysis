@@ -18,4 +18,4 @@ trajectory:
   # xy: controls which dx/dy frames are accumulated into the trajectory.
   # z:  controls which dz frames are used for heading integration & total yaw.
   use_escape_onset_only_xy: true
-  use_escape_onset_only_z: false
+  use_escape_onset_only_z: true
