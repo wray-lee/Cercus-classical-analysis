@@ -6,8 +6,45 @@ Centralised configuration for thresholds, geometry, and Nature/Science rcParams.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import pandas as pd
+import yaml
+
+_log = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# YAML Configuration Loader
+# ──────────────────────────────────────────────────────────────────────
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
+
+
+def _load_config() -> dict:
+    """Load ``config.yaml`` from the project root, with silent fallback."""
+    if not _CONFIG_PATH.is_file():
+        _log.info("config.yaml not found at %s — using defaults.", _CONFIG_PATH)
+        return {}
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        _log.info("Loaded config from %s", _CONFIG_PATH)
+        return cfg
+    except Exception as exc:
+        _log.warning("Failed to parse config.yaml: %s — using defaults.", exc)
+        return {}
+
+
+_cfg = _load_config()
+_traj_cfg = _cfg.get("trajectory", {})
+
+TRAJ_USE_Z_DEGREE: bool = bool(_traj_cfg.get("use_z_degree_to_draw", True))
+TRAJ_USE_RIGID_ROTATION: bool = bool(_traj_cfg.get("use_rigid_rotation", False))
+TRAJ_USE_ESCAPE_ONSET_ONLY: bool = bool(_traj_cfg.get("use_escape_onset_only", True))
 
 
 # ──────────────────────────────────────────────────────────────────────

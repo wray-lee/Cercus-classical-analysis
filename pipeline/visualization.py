@@ -29,6 +29,9 @@ from .constants import (
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
+    TRAJ_USE_ESCAPE_ONSET_ONLY,
+    TRAJ_USE_RIGID_ROTATION,
+    TRAJ_USE_Z_DEGREE,
     _get_unified_side,
 )
 from .kinematics import compute_escape_latency
@@ -108,30 +111,61 @@ def _add_threshold_lines(ax: plt.Axes) -> None:
 
 
 def _body_to_traj(
-    grp: pd.DataFrame, mask: np.ndarray, *, use_z: bool
+    grp: pd.DataFrame, mask: np.ndarray, *, use_z: bool,
+    use_rigid_rotation: bool = False,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Body-frame dx/dy → heading-rotated, cumsum-integrated trajectory.
 
     Integrates on full grp, slices by boolean mask at the end.
     Returns (None, None) if the resulting slice is empty.
+
+    When *use_rigid_rotation* is True the per-frame heading update is
+    ignored.  Instead, the body-frame displacements are accumulated in a
+    straight line and the **total** yaw of the burst window is applied as
+    a single rigid-body rotation, reproducing the fan-shaped distribution
+    caused by small yaw angles being amplified over the full escape.
     """
     dx_body = -grp["dx"].fillna(0).values
     dy_body = -grp["dy"].fillna(0).values
 
-    if use_z:
+    burst_dx_body = dx_body[mask]
+    burst_dy_body = dy_body[mask]
+
+    if len(burst_dx_body) == 0:
+        return None, None
+
+    if use_rigid_rotation:
+        # ── Rigid global rotation mode ──
+        # 1. Linear accumulation without heading → straight base trajectory
+        base_x = np.cumsum(burst_dx_body)
+        base_y = np.cumsum(burst_dy_body)
+
+        # 2. Total yaw = sum of all dz in the burst window / RADIUS_MM
+        dz_body = grp["dz"].fillna(0).values
+        total_yaw_rad = np.sum(dz_body[mask]) / RADIUS_MM
+
+        # 3. Static 2D rotation matrix applied once to the whole trajectory
+        cos_yaw = np.cos(total_yaw_rad)
+        sin_yaw = np.sin(total_yaw_rad)
+        traj_x = base_x * cos_yaw - base_y * sin_yaw
+        traj_y = base_x * sin_yaw + base_y * cos_yaw
+    elif use_z:
+        # ── Default: per-frame dynamic heading integration ──
         heading_rad = grp["dz"].fillna(0).cumsum().values / RADIUS_MM
         dx_global = dx_body * np.cos(heading_rad) - dy_body * np.sin(heading_rad)
         dy_global = dx_body * np.sin(heading_rad) + dy_body * np.cos(heading_rad)
+
+        traj_x = np.cumsum(dx_global[mask])
+        traj_y = np.cumsum(dy_global[mask])
     else:
-        dx_global = dx_body
-        dy_global = dy_body
+        traj_x = np.cumsum(burst_dx_body)
+        traj_y = np.cumsum(burst_dy_body)
 
-    burst_dx, burst_dy = dx_global[mask], dy_global[mask]
+    # ── Origin alignment: start from (0, 0) ──
+    traj_x -= traj_x[0]
+    traj_y -= traj_y[0]
 
-    if len(burst_dx) == 0:
-        return None, None
-
-    return np.cumsum(burst_dx), np.cumsum(burst_dy)
+    return traj_x, traj_y
 
 
 def _draw_oscilloscope_channels(ax: plt.Axes, df: pd.DataFrame, cond: str) -> None:
@@ -183,12 +217,8 @@ def plot_trajectory_overlay(
     left_color: str = COLOR_LEFT,
     right_color: str = COLOR_RIGHT,
     figsize_per_ax: tuple[float, float] = (4.0, 4.0),
-
-
-    #------------- Trajectory Drawing Options -------------
-    # USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False
-    USE_Z_DEGREE_TO_DRAW_TRAJECTORY = True
-    # -------------------------------------------------
+    USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = TRAJ_USE_Z_DEGREE,
+    USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
 ) -> plt.Figure:
     """
     One subplot per trial type. Left stimuli in NPG blue, right in NPG red.
@@ -249,7 +279,7 @@ def plot_trajectory_overlay(
 
 # --------------------------- Way for drawing trajectory -----------
 
-            rot_x, rot_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY)
+            rot_x, rot_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY, use_rigid_rotation=USE_RIGID_ROTATION)
             if rot_x is None:
                 continue
 
@@ -663,18 +693,16 @@ def plot_single_trial_kinetics(
 
 def plot_global_trajectory_overlay_fixed(
     df: pd.DataFrame,
-    TRAJECTORY_MAX_RADIUS_MM: float = 120.0,
+    TRAJECTORY_MAX_RADIUS_MM: float = 50.0,
     TRAJECTORY_STEP_MM: float = 10.0,
     figsize: tuple[float, float] = (5.0, 5.0),
     alpha: float = 1.0,
     lw: float = 0.3,
     left_color: str = COLOR_LEFT,
     right_color: str = COLOR_RIGHT,
-    #------------- Trajectory Drawing Options -------------
-    # USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False
-    USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = True,
-    USE_ESCAPE_ONSET_ONLY: bool = True
-    # -------------------------------------------------
+    USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = TRAJ_USE_Z_DEGREE,
+    USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
+    USE_ESCAPE_ONSET_ONLY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY,
 ) -> plt.Figure:
     """
     Unified trajectory overlay — all paradigms on one axes, with left/right
@@ -743,7 +771,7 @@ def plot_global_trajectory_overlay_fixed(
 
         burst = grp[burst_mask]
 
-        traj_x, traj_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY)
+        traj_x, traj_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY, use_rigid_rotation=USE_RIGID_ROTATION)
         if traj_x is None:
             continue
 

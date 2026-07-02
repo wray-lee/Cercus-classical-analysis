@@ -2,6 +2,7 @@ numpy
 pandas
 matplotlib
 scipy
+pyyaml
 pymc
 arviz
 numpyro

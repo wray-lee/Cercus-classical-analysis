@@ -1,0 +1,18 @@
+# ══════════════════════════════════════════════════════════════════════
+# Cercus Framework — Trajectory Drawing Configuration
+# ══════════════════════════════════════════════════════════════════════
+
+trajectory:
+  # Per-frame dynamic heading integration via dz accumulation.
+  # When false, dx/dy are used raw without heading rotation.
+  use_z_degree_to_draw: true
+
+  # Rigid global rotation: ignore per-frame heading, linearly accumulate
+  # dx/dy into a straight base trajectory, then apply the total yaw
+  # (sum(dz) / RADIUS_MM) as a single rigid-body rotation.
+  # Takes precedence over use_z_degree_to_draw when true.
+  use_rigid_rotation: true
+
+  # Slice trajectory to the escape-onset interval only
+  # (latency onset → speed drops below ESCAPE_START_THRESHOLD).
+  use_escape_onset_only: true

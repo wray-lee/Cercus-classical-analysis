@@ -67,6 +67,9 @@ def plot_global_trajectory_overlay_fixed(
     #------------- Trajectory Drawing Options -------------
     # USE_Z_DEGREE_TO_DRAW_TRAJECTORY = False
     USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = True,
+
+    # 旧数据已经旋转过了，所以不需要，赋值false
+    USE_RIGID_ROTATION: bool = False,
     USE_ESCAPE_ONSET_ONLY: bool = False
     # -------------------------------------------------
 ) -> plt.Figure:
@@ -143,22 +146,35 @@ def plot_global_trajectory_overlay_fixed(
         dy_body = -np.nan_to_num(burst["dy"].values)
         dz_body = np.nan_to_num(burst["dz"].values)
 
-        if USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
-            # 独立航向校准：局部累加 dz，强制第一帧朝向 0 rad
+        if USE_RIGID_ROTATION:
+            # ── 刚性全局旋转模式 ──
+            # 1. 忽略逐帧航向更新，纯粹线性累加 → 基础直轨
+            base_x = np.cumsum(dx_body)
+            base_y = np.cumsum(dy_body)
+
+            # 2. 一次性求和 burst 窗口内所有 dz，除以 RADIUS_MM → 总偏航角
+            total_yaw_rad = np.sum(dz_body) / RADIUS_MM
+
+            # 3. 静态二维旋转矩阵，将整条轨迹刚性偏转
+            cos_yaw = np.cos(total_yaw_rad)
+            sin_yaw = np.sin(total_yaw_rad)
+            traj_x = base_x * cos_yaw - base_y * sin_yaw
+            traj_y = base_x * sin_yaw + base_y * cos_yaw
+        elif USE_Z_DEGREE_TO_DRAW_TRAJECTORY:
+            # ── 默认：逐帧动态航向积分 ──
             local_heading = np.cumsum(dz_body) / RADIUS_MM
             local_heading -= local_heading[0]
 
-            # 局部坐标系旋转重构
             dx_global = dx_body * np.cos(local_heading) - dy_body * np.sin(local_heading)
             dy_global = dx_body * np.sin(local_heading) + dy_body * np.cos(local_heading)
 
             traj_x = np.cumsum(dx_global)
             traj_y = np.cumsum(dy_global)
         else:
-            # 若不开启动态 dz 校准，直接对 body 进行干净积分（同样不会产生全局偏移）
             traj_x = np.cumsum(dx_body)
             traj_y = np.cumsum(dy_body)
 
+        # ── 起点对齐：确保弹道从绝对原点出发 ──
         traj_x -= traj_x[0]
         traj_y -= traj_y[0]
 

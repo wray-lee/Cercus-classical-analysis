@@ -38,6 +38,9 @@ from pipeline.constants import (
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
+    TRAJ_USE_ESCAPE_ONSET_ONLY,
+    TRAJ_USE_RIGID_ROTATION,
+    TRAJ_USE_Z_DEGREE,
     _apply_publication_style,
     _get_unified_side,
 )
@@ -53,9 +56,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 _apply_publication_style()
-
-# ── Global switch: escape-onset-only trajectory mode ──
-USE_ESCAPE_ONSET_ONLY = True
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -78,7 +78,9 @@ def plot_trial_panel(
     v_max: float,
     global_trial_index: int,
     response_type: str = "Escape",
-    use_z_heading: bool = True,
+    use_z_heading: bool = TRAJ_USE_Z_DEGREE,
+    use_rigid_rotation: bool = TRAJ_USE_RIGID_ROTATION,
+    use_escape_onset_only: bool = TRAJ_USE_ESCAPE_ONSET_ONLY,
     interval_ms: float = np.nan,
 ) -> plt.Figure:
     """Single composite figure for one trial: speed, angular velocity, stimulus, trajectory."""
@@ -166,43 +168,76 @@ def plot_trial_panel(
     t_vals = trial["t_rel"].values
     speed_vals = trial["speed"].values
 
-    # 1. 提取流水线已平滑坐标
-    full_x_raw = trial["x"].values
-    full_y_raw = trial["y"].values
+    if use_rigid_rotation:
+        # ── Rigid global rotation mode: use dx/dy/dz body-frame integration ──
+        dx_body = -np.nan_to_num(trial["dx"].values)
+        dy_body = -np.nan_to_num(trial["dy"].values)
+        dz_body = np.nan_to_num(trial["dz"].values)
 
-    # 2. 计算绝对几何轨迹
-    if use_z_heading:
-        theta_init = (trial["dz"].cumsum().values / RADIUS_MM)[0]
-        full_x = full_x_raw * np.cos(theta_init) + full_y_raw * np.sin(theta_init)
-        full_y = -full_x_raw * np.sin(theta_init) + full_y_raw * np.cos(theta_init)
-    else:
-        full_x = full_x_raw
-        full_y = full_y_raw
-
-    # 3. 基于设定开关提取目标区间
-    if (USE_ESCAPE_ONSET_ONLY
-            and response_type == "Escape"
-            and not np.isnan(latency_ms)):
-        # 锁定局部逃避区间
-        lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-        post_onset_speed = speed_vals[lat_idx:]
-        below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
-        if np.any(below_mask):
-            end_idx = lat_idx + int(np.argmax(below_mask))
+        # Determine slice indices for the rendering window
+        if (use_escape_onset_only
+                and response_type == "Escape"
+                and not np.isnan(latency_ms)):
+            lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
+            post_onset_speed = speed_vals[lat_idx:]
+            below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+            if np.any(below_mask):
+                end_idx = lat_idx + int(np.argmax(below_mask))
+            else:
+                end_idx = len(speed_vals) - 1
+            if lat_idx >= end_idx:
+                end_idx = min(lat_idx + 1, len(speed_vals) - 1)
         else:
-            end_idx = len(speed_vals) - 1
+            lat_idx = 0
+            end_idx = len(speed_vals)
 
-        if lat_idx >= end_idx:
-            end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+        burst_dx = dx_body[lat_idx:end_idx]
+        burst_dy = dy_body[lat_idx:end_idx]
+        burst_dz = dz_body[lat_idx:end_idx]
 
-        traj_x = full_x[lat_idx:end_idx]
-        traj_y = full_y[lat_idx:end_idx]
+        if len(burst_dx) > 0:
+            base_x = np.cumsum(burst_dx)
+            base_y = np.cumsum(burst_dy)
+            total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
+            cos_yaw = np.cos(total_yaw_rad)
+            sin_yaw = np.sin(total_yaw_rad)
+            traj_x = base_x * cos_yaw - base_y * sin_yaw
+            traj_y = base_x * sin_yaw + base_y * cos_yaw
+        else:
+            traj_x = np.array([])
+            traj_y = np.array([])
     else:
-        # 保留全景拓扑
-        traj_x = full_x
-        traj_y = full_y
+        # ── Default: global x/y coordinates with optional initial heading rotation ──
+        full_x_raw = trial["x"].values
+        full_y_raw = trial["y"].values
 
-    # 4. 消除原点绝对位移（仅平移，不重置初始朝向角）
+        if use_z_heading:
+            theta_init = (trial["dz"].cumsum().values / RADIUS_MM)[0]
+            full_x = full_x_raw * np.cos(theta_init) + full_y_raw * np.sin(theta_init)
+            full_y = -full_x_raw * np.sin(theta_init) + full_y_raw * np.cos(theta_init)
+        else:
+            full_x = full_x_raw
+            full_y = full_y_raw
+
+        if (use_escape_onset_only
+                and response_type == "Escape"
+                and not np.isnan(latency_ms)):
+            lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
+            post_onset_speed = speed_vals[lat_idx:]
+            below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+            if np.any(below_mask):
+                end_idx = lat_idx + int(np.argmax(below_mask))
+            else:
+                end_idx = len(speed_vals) - 1
+            if lat_idx >= end_idx:
+                end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+            traj_x = full_x[lat_idx:end_idx]
+            traj_y = full_y[lat_idx:end_idx]
+        else:
+            traj_x = full_x
+            traj_y = full_y
+
+    # ── Origin alignment: start from (0, 0) ──
     if len(traj_x) > 0:
         traj_x -= traj_x[0]
         traj_y -= traj_y[0]

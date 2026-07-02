@@ -93,7 +93,27 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     # ── 4. Priority 3 — Escape: baseline quiescent at stimulus onset ──
     zero_idx = int(np.argmin(np.abs(t_vals - onset)))
     baseline_speed = speed_vals[zero_idx]
-    if (not np.isnan(baseline_speed)) and (baseline_speed < ESCAPE_START_THRESHOLD):
+
+    # When the exact-onset speed is NaN (common in pure-wind trials where the
+    # kinematics stream has gaps around t_rel=0), fall back to the nearest
+    # non-NaN PRE-STIMULUS value within 2 s before onset.
+    # (Pure-wind paradigm guarantees the animal is stationary for ≥2 s before wind.)
+    if np.isnan(baseline_speed):
+        pre_onset_mask = (t_vals >= onset - 2000.0) & (t_vals < onset)
+        if np.any(pre_onset_mask):
+            pre_speeds = speed_vals[pre_onset_mask]
+            valid = pre_speeds[~np.isnan(pre_speeds)]
+            if len(valid) > 0:
+                # Take the value closest to onset (last in the pre-stimulus window)
+                baseline_speed = valid[-1]
+
+    # If baseline is still NaN (no valid pre-stimulus data), assume quiescent —
+    # the animal was stationary before the stimulus.  This is the common case
+    # for pure-wind paradigms where kinematics data only starts after wind onset.
+    if np.isnan(baseline_speed):
+        baseline_speed = 0.0
+
+    if baseline_speed < ESCAPE_START_THRESHOLD:
         return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms}
 
     # ── 5. Fallback ──
