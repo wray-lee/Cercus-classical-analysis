@@ -116,6 +116,7 @@ def _integrate_body_trajectory(
     burst_dy: np.ndarray,
     burst_dz: np.ndarray,
     *,
+    use_heading: bool = True,
     use_rigid_rotation: bool = True,
     src_idx: np.ndarray | None = None,
     dst_idx: np.ndarray | None = None,
@@ -124,16 +125,20 @@ def _integrate_body_trajectory(
 
     Stage 1 — Build an *inner trajectory* via dynamic dz integration so every
               frame's local curvature and S-turns are preserved.
+              Controlled by *use_heading*.
     Stage 2 — Apply curvature-thresholded rigid macro rotation to the curved
               trajectory, producing the correct left/right fan-shaped
               dispersion without flattening the natural bends.
+              Controlled by *use_rigid_rotation* (implies Stage 1).
 
     Parameters
     ----------
     burst_dx, burst_dy, burst_dz : np.ndarray
         Pre-extracted body-frame micro-displacements (already masked/sliced).
+    use_heading : bool
+        Whether to apply Stage 1 per-frame heading integration from dz.
     use_rigid_rotation : bool
-        Whether to apply Stage 2 macro rotation.
+        Whether to apply Stage 2 macro rotation (implies Stage 1).
     src_idx, dst_idx : np.ndarray | None
         Frame indices for heading interpolation when dz and dx arrays have
         different lengths.  *src_idx* maps to burst_dz, *dst_idx* maps to
@@ -142,8 +147,11 @@ def _integrate_body_trajectory(
     if len(burst_dx) == 0:
         return None, None
 
-    if not use_rigid_rotation:
-        # Degenerate mode: pure translation, no heading integration
+    # Rigid rotation requires heading integration.
+    do_heading = use_heading or use_rigid_rotation
+
+    if not do_heading:
+        # Pure translation, no heading integration
         traj_x = np.cumsum(burst_dx)
         traj_y = np.cumsum(burst_dy)
         traj_x -= traj_x[0]
@@ -236,6 +244,7 @@ def _body_to_traj(
 
     return _integrate_body_trajectory(
         burst_dx, burst_dy, burst_dz,
+        use_heading=use_z,
         use_rigid_rotation=use_rigid_rotation,
         src_idx=src_idx, dst_idx=dst_idx,
     )
