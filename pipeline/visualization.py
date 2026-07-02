@@ -114,52 +114,62 @@ def _body_to_traj(
     grp: pd.DataFrame, mask: np.ndarray, *, use_z: bool,
     use_rigid_rotation: bool = False,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
-    """Body-frame dx/dy → heading-rotated, cumsum-integrated trajectory.
+    """双阶映射算法：保留局部本征曲率的同时，锁定全局逃避散布象限。
 
-    Integrates on full grp, slices by boolean mask at the end.
-    Returns (None, None) if the resulting slice is empty.
-
-    When *use_rigid_rotation* is True the per-frame heading update is
-    ignored.  Instead, the body-frame displacements are accumulated in a
-    straight line and the **total** yaw of the burst window is applied as
-    a single rigid-body rotation, reproducing the fan-shaped distribution
-    caused by small yaw angles being amplified over the full escape.
+    Stage 1 — Build an *inner trajectory* via dynamic dz integration so every
+              frame's local curvature and S-turns are preserved.
+    Stage 2 — Apply the total yaw as a rigid-body rotation to the curved
+              trajectory, producing the correct left/right fan-shaped
+              dispersion without flattening the natural bends.
     """
+    # Extract body-frame micro-displacements and yaw (sign-flip per convention)
     dx_body = -grp["dx"].fillna(0).values
     dy_body = -grp["dy"].fillna(0).values
+    dz_body = grp["dz"].fillna(0).values
 
-    burst_dx_body = dx_body[mask]
-    burst_dy_body = dy_body[mask]
+    burst_dx = dx_body[mask]
+    burst_dy = dy_body[mask]
+    burst_dz = dz_body[mask]
 
-    if len(burst_dx_body) == 0:
+    if len(burst_dx) == 0:
         return None, None
 
+    if not use_z and not use_rigid_rotation:
+        # Degenerate mode: pure translation, no heading integration
+        traj_x = np.cumsum(burst_dx)
+        traj_y = np.cumsum(burst_dy)
+        traj_x -= traj_x[0]
+        traj_y -= traj_y[0]
+        return traj_x, traj_y
+
+    # ── Stage 1: build inner (intrinsic) curved trajectory ──
+    # Dynamic per-frame heading — preserves all natural wiggles and S-turns
+    local_heading = np.cumsum(burst_dz) / RADIUS_MM
+    local_heading -= local_heading[0]
+
+    dx_inner = burst_dx * np.cos(local_heading) - burst_dy * np.sin(local_heading)
+    dy_inner = burst_dx * np.sin(local_heading) + burst_dy * np.cos(local_heading)
+
+    x_inner = np.cumsum(dx_inner)
+    y_inner = np.cumsum(dy_inner)
+
+    # ── Stage 2: rigid macro rotation ──
     if use_rigid_rotation:
-        # ── Rigid global rotation mode ──
-        # 1. Linear accumulation without heading → straight base trajectory
-        base_x = np.cumsum(burst_dx_body)
-        base_y = np.cumsum(burst_dy_body)
+        # Total yaw = sum of all dz in the burst window / RADIUS_MM
+        # Apply it directly as a rigid-body rotation to the curved trajectory.
+        # This mirrors the old proven approach (which used a straight line)
+        # but now preserves the natural S-turns from Stage 1.
+        total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
 
-        # 2. Total yaw = sum of all dz in the burst window / RADIUS_MM
-        dz_body = grp["dz"].fillna(0).values
-        total_yaw_rad = np.sum(dz_body[mask]) / RADIUS_MM
-
-        # 3. Static 2D rotation matrix applied once to the whole trajectory
         cos_yaw = np.cos(total_yaw_rad)
         sin_yaw = np.sin(total_yaw_rad)
-        traj_x = base_x * cos_yaw - base_y * sin_yaw
-        traj_y = base_x * sin_yaw + base_y * cos_yaw
-    elif use_z:
-        # ── Default: per-frame dynamic heading integration ──
-        heading_rad = grp["dz"].fillna(0).cumsum().values / RADIUS_MM
-        dx_global = dx_body * np.cos(heading_rad) - dy_body * np.sin(heading_rad)
-        dy_global = dx_body * np.sin(heading_rad) + dy_body * np.cos(heading_rad)
 
-        traj_x = np.cumsum(dx_global[mask])
-        traj_y = np.cumsum(dy_global[mask])
+        traj_x = x_inner * cos_yaw - y_inner * sin_yaw
+        traj_y = x_inner * sin_yaw + y_inner * cos_yaw
     else:
-        traj_x = np.cumsum(burst_dx_body)
-        traj_y = np.cumsum(burst_dy_body)
+        # Dynamic integration only — no macro locking
+        traj_x = x_inner
+        traj_y = y_inner
 
     # ── Origin alignment: start from (0, 0) ──
     traj_x -= traj_x[0]
@@ -693,8 +703,8 @@ def plot_single_trial_kinetics(
 
 def plot_global_trajectory_overlay_fixed(
     df: pd.DataFrame,
-    TRAJECTORY_MAX_RADIUS_MM: float = 50.0,
-    TRAJECTORY_STEP_MM: float = 10.0,
+    TRAJECTORY_MAX_RADIUS_MM: float = 200.0,
+    TRAJECTORY_STEP_MM: float = 20.0,
     figsize: tuple[float, float] = (5.0, 5.0),
     alpha: float = 1.0,
     lw: float = 0.3,
