@@ -111,43 +111,38 @@ def _add_threshold_lines(ax: plt.Axes) -> None:
     )
 
 
-def _body_to_traj(
-    grp: pd.DataFrame, mask_xy: np.ndarray, *, use_z: bool,
-    use_rigid_rotation: bool = False,
-    mask_z: np.ndarray | None = None,
+def _integrate_body_trajectory(
+    burst_dx: np.ndarray,
+    burst_dy: np.ndarray,
+    burst_dz: np.ndarray,
+    *,
+    use_rigid_rotation: bool = True,
+    src_idx: np.ndarray | None = None,
+    dst_idx: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
-    """双阶映射算法：保留局部本征曲率的同时，锁定全局逃避散布象限。
+    """双阶映射算法核心：保留局部本征曲率的同时，锁定全局逃避散布象限。
 
     Stage 1 — Build an *inner trajectory* via dynamic dz integration so every
               frame's local curvature and S-turns are preserved.
-    Stage 2 — Apply the total yaw as a rigid-body rotation to the curved
+    Stage 2 — Apply curvature-thresholded rigid macro rotation to the curved
               trajectory, producing the correct left/right fan-shaped
               dispersion without flattening the natural bends.
 
     Parameters
     ----------
-    mask_xy : np.ndarray
-        Boolean mask selecting which frames contribute dx/dy displacements.
-    mask_z : np.ndarray | None
-        Boolean mask selecting which frames contribute dz for heading
-        integration and total yaw.  Defaults to *mask_xy* when None.
+    burst_dx, burst_dy, burst_dz : np.ndarray
+        Pre-extracted body-frame micro-displacements (already masked/sliced).
+    use_rigid_rotation : bool
+        Whether to apply Stage 2 macro rotation.
+    src_idx, dst_idx : np.ndarray | None
+        Frame indices for heading interpolation when dz and dx arrays have
+        different lengths.  *src_idx* maps to burst_dz, *dst_idx* maps to
+        burst_dx.  Defaults to uniform stretch when None.
     """
-    if mask_z is None:
-        mask_z = mask_xy
-
-    # Extract body-frame micro-displacements and yaw (sign-flip per convention)
-    dx_body = -grp["dx"].fillna(0).values
-    dy_body = -grp["dy"].fillna(0).values
-    dz_body = grp["dz"].fillna(0).values
-
-    burst_dx = dx_body[mask_xy]
-    burst_dy = dy_body[mask_xy]
-    burst_dz = dz_body[mask_z]
-
     if len(burst_dx) == 0:
         return None, None
 
-    if not use_z and not use_rigid_rotation:
+    if not use_rigid_rotation:
         # Degenerate mode: pure translation, no heading integration
         traj_x = np.cumsum(burst_dx)
         traj_y = np.cumsum(burst_dy)
@@ -156,16 +151,15 @@ def _body_to_traj(
         return traj_x, traj_y
 
     # ── Stage 1: build inner (intrinsic) curved trajectory ──
-    # Dynamic per-frame heading — preserves all natural wiggles and S-turns.
-    # heading length must match displacement length for element-wise rotation.
     local_heading = np.cumsum(burst_dz) / RADIUS_MM
     local_heading -= local_heading[0]
 
-    # If mask_xy and mask_z cover different frame counts, interpolate the
-    # heading onto the xy grid so shapes align for the rotation step.
+    # Interpolate heading onto the xy grid if lengths differ.
     if len(local_heading) != len(burst_dx):
-        src_idx = np.flatnonzero(mask_z)
-        dst_idx = np.flatnonzero(mask_xy)
+        if src_idx is None:
+            src_idx = np.arange(len(burst_dz))
+        if dst_idx is None:
+            dst_idx = np.linspace(0, len(burst_dz) - 1, len(burst_dx))
         if len(src_idx) >= 2:
             local_heading = np.interp(dst_idx, src_idx, local_heading)
         else:
@@ -179,9 +173,8 @@ def _body_to_traj(
 
     # ── Stage 2: rigid macro rotation (with curvature thresholding) ──
     if use_rigid_rotation:
-        # Total yaw = sum of all dz in the z-mask window / RADIUS_MM
         total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
-        macro_yaw = total_yaw_rad  # intrinsic trajectory rotation
+        macro_yaw = total_yaw_rad
 
         # ── Curvature Thresholding ──
         # High-intrinsic-curvature trajectories can suffer start-tangent
@@ -194,13 +187,11 @@ def _body_to_traj(
 
         comp_angle = macro_yaw
 
-        # Gradual decay: linear ramp from 1→0 over one threshold width
         yaw_abs = abs(macro_yaw)
         if yaw_abs > MACRO_YAW_THRESHOLD:
             decay_factor = max(0.0, 1.0 - (yaw_abs - MACRO_YAW_THRESHOLD) / MACRO_YAW_THRESHOLD)
             comp_angle *= decay_factor
 
-        # Hard clamp on compensation angle
         comp_angle = np.clip(comp_angle, -COMP_ANGLE_MAX, COMP_ANGLE_MAX)
 
         cos_yaw = np.cos(comp_angle)
@@ -209,7 +200,6 @@ def _body_to_traj(
         traj_x = x_inner * cos_yaw - y_inner * sin_yaw
         traj_y = x_inner * sin_yaw + y_inner * cos_yaw
     else:
-        # Dynamic integration only — no macro locking
         traj_x = x_inner
         traj_y = y_inner
 
@@ -218,6 +208,37 @@ def _body_to_traj(
     traj_y -= traj_y[0]
 
     return traj_x, traj_y
+
+
+def _body_to_traj(
+    grp: pd.DataFrame, mask_xy: np.ndarray, *, use_z: bool,
+    use_rigid_rotation: bool = False,
+    mask_z: np.ndarray | None = None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """DataFrame wrapper around :func:`_integrate_body_trajectory`.
+
+    Extracts body-frame dx/dy/dz from *grp* using boolean masks, then
+    delegates to the shared integration core.
+    """
+    if mask_z is None:
+        mask_z = mask_xy
+
+    dx_body = -grp["dx"].fillna(0).values
+    dy_body = -grp["dy"].fillna(0).values
+    dz_body = grp["dz"].fillna(0).values
+
+    burst_dx = dx_body[mask_xy]
+    burst_dy = dy_body[mask_xy]
+    burst_dz = dz_body[mask_z]
+
+    src_idx = np.flatnonzero(mask_z) if len(burst_dz) != len(burst_dx) else None
+    dst_idx = np.flatnonzero(mask_xy) if len(burst_dz) != len(burst_dx) else None
+
+    return _integrate_body_trajectory(
+        burst_dx, burst_dy, burst_dz,
+        use_rigid_rotation=use_rigid_rotation,
+        src_idx=src_idx, dst_idx=dst_idx,
+    )
 
 
 def _draw_oscilloscope_channels(ax: plt.Axes, df: pd.DataFrame, cond: str) -> None:

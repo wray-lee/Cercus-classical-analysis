@@ -51,6 +51,7 @@ from pipeline.visualization import (
     _add_threshold_lines,
     _draw_side_arrows,
     _draw_standardized_grid,
+    _integrate_body_trajectory,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -207,32 +208,10 @@ def plot_trial_panel(
         burst_dy = dy_body[xy_start:xy_end]
         burst_dz = dz_body[z_start:z_end]
 
-        if len(burst_dx) > 0:
-            # Stage 1: inner trajectory with dynamic heading
-            local_heading = np.cumsum(burst_dz) / RADIUS_MM
-            local_heading -= local_heading[0]
-
-            # Align heading length to displacement length via interpolation
-            if len(local_heading) != len(burst_dx):
-                src_idx = np.arange(len(burst_dz))
-                dst_idx = np.linspace(0, len(burst_dz) - 1, len(burst_dx))
-                if len(src_idx) >= 2:
-                    local_heading = np.interp(dst_idx, src_idx, local_heading)
-                else:
-                    local_heading = np.full(len(burst_dx), local_heading[0])
-
-            dx_inner = burst_dx * np.cos(local_heading) - burst_dy * np.sin(local_heading)
-            dy_inner = burst_dx * np.sin(local_heading) + burst_dy * np.cos(local_heading)
-            x_inner = np.cumsum(dx_inner)
-            y_inner = np.cumsum(dy_inner)
-
-            # Stage 2: rigid macro rotation
-            total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
-            cos_yaw = np.cos(total_yaw_rad)
-            sin_yaw = np.sin(total_yaw_rad)
-            traj_x = x_inner * cos_yaw - y_inner * sin_yaw
-            traj_y = x_inner * sin_yaw + y_inner * cos_yaw
-        else:
+        traj_x, traj_y = _integrate_body_trajectory(
+            burst_dx, burst_dy, burst_dz, use_rigid_rotation=True,
+        )
+        if traj_x is None:
             traj_x = np.array([])
             traj_y = np.array([])
     else:
