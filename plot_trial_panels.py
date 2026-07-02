@@ -38,7 +38,8 @@ from pipeline.constants import (
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
-    TRAJ_USE_ESCAPE_ONSET_ONLY,
+    TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
+    TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
     TRAJ_USE_RIGID_ROTATION,
     TRAJ_USE_Z_DEGREE,
     _apply_publication_style,
@@ -80,7 +81,8 @@ def plot_trial_panel(
     response_type: str = "Escape",
     use_z_heading: bool = TRAJ_USE_Z_DEGREE,
     use_rigid_rotation: bool = TRAJ_USE_RIGID_ROTATION,
-    use_escape_onset_only: bool = TRAJ_USE_ESCAPE_ONSET_ONLY,
+    use_escape_onset_only_xy: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
+    use_escape_onset_only_z: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
     interval_ms: float = np.nan,
 ) -> plt.Figure:
     """Single composite figure for one trial: speed, angular velocity, stimulus, trajectory."""
@@ -168,41 +170,68 @@ def plot_trial_panel(
     t_vals = trial["t_rel"].values
     speed_vals = trial["speed"].values
 
+    # ── Build escape-onset mask (shared logic) ──
+    _is_escape = (response_type == "Escape" and not np.isnan(latency_ms))
+    if _is_escape:
+        lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
+        post_onset_speed = speed_vals[lat_idx:]
+        below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+        if np.any(below_mask):
+            end_idx = lat_idx + int(np.argmax(below_mask))
+        else:
+            end_idx = len(speed_vals) - 1
+        if lat_idx >= end_idx:
+            end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+        escape_start, escape_end = lat_idx, end_idx
+    else:
+        escape_start, escape_end = 0, len(speed_vals)
+
     if use_rigid_rotation:
         # ── Rigid global rotation mode: use dx/dy/dz body-frame integration ──
         dx_body = -np.nan_to_num(trial["dx"].values)
         dy_body = -np.nan_to_num(trial["dy"].values)
         dz_body = np.nan_to_num(trial["dz"].values)
 
-        # Determine slice indices for the rendering window
-        if (use_escape_onset_only
-                and response_type == "Escape"
-                and not np.isnan(latency_ms)):
-            lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-            post_onset_speed = speed_vals[lat_idx:]
-            below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
-            if np.any(below_mask):
-                end_idx = lat_idx + int(np.argmax(below_mask))
-            else:
-                end_idx = len(speed_vals) - 1
-            if lat_idx >= end_idx:
-                end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+        # Independent masks for xy displacement and z heading
+        if use_escape_onset_only_xy and _is_escape:
+            xy_start, xy_end = escape_start, escape_end
         else:
-            lat_idx = 0
-            end_idx = len(speed_vals)
+            xy_start, xy_end = 0, len(dx_body)
 
-        burst_dx = dx_body[lat_idx:end_idx]
-        burst_dy = dy_body[lat_idx:end_idx]
-        burst_dz = dz_body[lat_idx:end_idx]
+        if use_escape_onset_only_z and _is_escape:
+            z_start, z_end = escape_start, escape_end
+        else:
+            z_start, z_end = 0, len(dz_body)
+
+        burst_dx = dx_body[xy_start:xy_end]
+        burst_dy = dy_body[xy_start:xy_end]
+        burst_dz = dz_body[z_start:z_end]
 
         if len(burst_dx) > 0:
-            base_x = np.cumsum(burst_dx)
-            base_y = np.cumsum(burst_dy)
+            # Stage 1: inner trajectory with dynamic heading
+            local_heading = np.cumsum(burst_dz) / RADIUS_MM
+            local_heading -= local_heading[0]
+
+            # Align heading length to displacement length via interpolation
+            if len(local_heading) != len(burst_dx):
+                src_idx = np.arange(len(burst_dz))
+                dst_idx = np.linspace(0, len(burst_dz) - 1, len(burst_dx))
+                if len(src_idx) >= 2:
+                    local_heading = np.interp(dst_idx, src_idx, local_heading)
+                else:
+                    local_heading = np.full(len(burst_dx), local_heading[0])
+
+            dx_inner = burst_dx * np.cos(local_heading) - burst_dy * np.sin(local_heading)
+            dy_inner = burst_dx * np.sin(local_heading) + burst_dy * np.cos(local_heading)
+            x_inner = np.cumsum(dx_inner)
+            y_inner = np.cumsum(dy_inner)
+
+            # Stage 2: rigid macro rotation
             total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
             cos_yaw = np.cos(total_yaw_rad)
             sin_yaw = np.sin(total_yaw_rad)
-            traj_x = base_x * cos_yaw - base_y * sin_yaw
-            traj_y = base_x * sin_yaw + base_y * cos_yaw
+            traj_x = x_inner * cos_yaw - y_inner * sin_yaw
+            traj_y = x_inner * sin_yaw + y_inner * cos_yaw
         else:
             traj_x = np.array([])
             traj_y = np.array([])
@@ -219,20 +248,9 @@ def plot_trial_panel(
             full_x = full_x_raw
             full_y = full_y_raw
 
-        if (use_escape_onset_only
-                and response_type == "Escape"
-                and not np.isnan(latency_ms)):
-            lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-            post_onset_speed = speed_vals[lat_idx:]
-            below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
-            if np.any(below_mask):
-                end_idx = lat_idx + int(np.argmax(below_mask))
-            else:
-                end_idx = len(speed_vals) - 1
-            if lat_idx >= end_idx:
-                end_idx = min(lat_idx + 1, len(speed_vals) - 1)
-            traj_x = full_x[lat_idx:end_idx]
-            traj_y = full_y[lat_idx:end_idx]
+        if use_escape_onset_only_xy and _is_escape:
+            traj_x = full_x[escape_start:escape_end]
+            traj_y = full_y[escape_start:escape_end]
         else:
             traj_x = full_x
             traj_y = full_y

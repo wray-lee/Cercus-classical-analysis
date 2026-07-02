@@ -44,7 +44,8 @@ _traj_cfg = _cfg.get("trajectory", {})
 
 TRAJ_USE_Z_DEGREE: bool = bool(_traj_cfg.get("use_z_degree_to_draw", True))
 TRAJ_USE_RIGID_ROTATION: bool = bool(_traj_cfg.get("use_rigid_rotation", False))
-TRAJ_USE_ESCAPE_ONSET_ONLY: bool = bool(_traj_cfg.get("use_escape_onset_only", True))
+TRAJ_USE_ESCAPE_ONSET_ONLY_XY: bool = bool(_traj_cfg.get("use_escape_onset_only_xy", True))
+TRAJ_USE_ESCAPE_ONSET_ONLY_Z: bool = bool(_traj_cfg.get("use_escape_onset_only_z", True))
 
 
 # ──────────────────────────────────────────────────────────────────────

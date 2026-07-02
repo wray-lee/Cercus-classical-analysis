@@ -29,7 +29,8 @@ from .constants import (
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
-    TRAJ_USE_ESCAPE_ONSET_ONLY,
+    TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
+    TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
     TRAJ_USE_RIGID_ROTATION,
     TRAJ_USE_Z_DEGREE,
     _get_unified_side,
@@ -111,8 +112,9 @@ def _add_threshold_lines(ax: plt.Axes) -> None:
 
 
 def _body_to_traj(
-    grp: pd.DataFrame, mask: np.ndarray, *, use_z: bool,
+    grp: pd.DataFrame, mask_xy: np.ndarray, *, use_z: bool,
     use_rigid_rotation: bool = False,
+    mask_z: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """双阶映射算法：保留局部本征曲率的同时，锁定全局逃避散布象限。
 
@@ -121,15 +123,26 @@ def _body_to_traj(
     Stage 2 — Apply the total yaw as a rigid-body rotation to the curved
               trajectory, producing the correct left/right fan-shaped
               dispersion without flattening the natural bends.
+
+    Parameters
+    ----------
+    mask_xy : np.ndarray
+        Boolean mask selecting which frames contribute dx/dy displacements.
+    mask_z : np.ndarray | None
+        Boolean mask selecting which frames contribute dz for heading
+        integration and total yaw.  Defaults to *mask_xy* when None.
     """
+    if mask_z is None:
+        mask_z = mask_xy
+
     # Extract body-frame micro-displacements and yaw (sign-flip per convention)
     dx_body = -grp["dx"].fillna(0).values
     dy_body = -grp["dy"].fillna(0).values
     dz_body = grp["dz"].fillna(0).values
 
-    burst_dx = dx_body[mask]
-    burst_dy = dy_body[mask]
-    burst_dz = dz_body[mask]
+    burst_dx = dx_body[mask_xy]
+    burst_dy = dy_body[mask_xy]
+    burst_dz = dz_body[mask_z]
 
     if len(burst_dx) == 0:
         return None, None
@@ -143,9 +156,20 @@ def _body_to_traj(
         return traj_x, traj_y
 
     # ── Stage 1: build inner (intrinsic) curved trajectory ──
-    # Dynamic per-frame heading — preserves all natural wiggles and S-turns
+    # Dynamic per-frame heading — preserves all natural wiggles and S-turns.
+    # heading length must match displacement length for element-wise rotation.
     local_heading = np.cumsum(burst_dz) / RADIUS_MM
     local_heading -= local_heading[0]
+
+    # If mask_xy and mask_z cover different frame counts, interpolate the
+    # heading onto the xy grid so shapes align for the rotation step.
+    if len(local_heading) != len(burst_dx):
+        src_idx = np.flatnonzero(mask_z)
+        dst_idx = np.flatnonzero(mask_xy)
+        if len(src_idx) >= 2:
+            local_heading = np.interp(dst_idx, src_idx, local_heading)
+        else:
+            local_heading = np.full(len(burst_dx), local_heading[0])
 
     dx_inner = burst_dx * np.cos(local_heading) - burst_dy * np.sin(local_heading)
     dy_inner = burst_dx * np.sin(local_heading) + burst_dy * np.cos(local_heading)
@@ -155,10 +179,7 @@ def _body_to_traj(
 
     # ── Stage 2: rigid macro rotation ──
     if use_rigid_rotation:
-        # Total yaw = sum of all dz in the burst window / RADIUS_MM
-        # Apply it directly as a rigid-body rotation to the curved trajectory.
-        # This mirrors the old proven approach (which used a straight line)
-        # but now preserves the natural S-turns from Stage 1.
+        # Total yaw = sum of all dz in the z-mask window / RADIUS_MM
         total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
 
         cos_yaw = np.cos(total_yaw_rad)
@@ -229,6 +250,8 @@ def plot_trajectory_overlay(
     figsize_per_ax: tuple[float, float] = (4.0, 4.0),
     USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = TRAJ_USE_Z_DEGREE,
     USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
+    USE_ESCAPE_ONSET_ONLY_XY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
+    USE_ESCAPE_ONSET_ONLY_Z: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
 ) -> plt.Figure:
     """
     One subplot per trial type. Left stimuli in NPG blue, right in NPG red.
@@ -263,33 +286,46 @@ def plot_trajectory_overlay(
                 stim_onset_t_rel=float(_ttc) if pd.notna(_ttc) else None,
             )
 
-            # ── Determine render window ──
-            if not np.isnan(esc["latency_ms"]):
-                latency_ms = esc["latency_ms"]
-                # Choose drawng window
-                # render_start_ms = latency_ms - timewindow_ms
-                # use all trial as trajectory analysis
-                render_start_ms = float(t_vals.min())
-                render_start_idx = int(np.argmin(np.abs(t_vals - render_start_ms)))
-                actual_start_ms = t_vals[render_start_idx]
-                burst_end_ms = float(t_vals.max())
+            # ── 读取当前试次的分类信息 ──
+            _latency_ms = esc["latency_ms"]
+            _response_type = grp["response_type"].iloc[0] if "response_type" in grp.columns else ""
+
+            # ── Build escape-onset mask (shared logic) ──
+            _is_escape = (_response_type == "Escape" and not np.isnan(_latency_ms))
+            if _is_escape:
+                lat_idx = int(np.argmin(np.abs(t_vals - _latency_ms)))
+                post_onset_speed = speed_vals[lat_idx:]
+                below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+                if np.any(below_mask):
+                    end_idx = lat_idx + int(np.argmax(below_mask))
+                else:
+                    end_idx = len(speed_vals) - 1
+                if lat_idx >= end_idx:
+                    end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+                escape_mask = np.zeros(len(t_vals), dtype=bool)
+                escape_mask[lat_idx:end_idx] = True
             else:
-                render_start_idx = int(np.argmin(np.abs(t_vals - 0.0)))
-                actual_start_ms = 0.0
-                burst_end_ms = float(t_vals.max())
+                escape_mask = None
 
-            burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
+            # ── Determine render window (xy and z independently) ──
+            full_mask = np.ones(len(t_vals), dtype=bool)
 
-            if not np.any(burst_mask):
+            mask_xy = escape_mask if (USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
+            mask_z = escape_mask if (USE_ESCAPE_ONSET_ONLY_Z and escape_mask is not None) else full_mask
+
+            if not np.any(mask_xy):
                 continue
 
-            burst = grp[burst_mask]
+            burst = grp[mask_xy]
 
 
 
 # --------------------------- Way for drawing trajectory -----------
 
-            rot_x, rot_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY, use_rigid_rotation=USE_RIGID_ROTATION)
+            rot_x, rot_y = _body_to_traj(
+                grp, mask_xy, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY,
+                use_rigid_rotation=USE_RIGID_ROTATION, mask_z=mask_z,
+            )
             if rot_x is None:
                 continue
 
@@ -712,7 +748,8 @@ def plot_global_trajectory_overlay_fixed(
     right_color: str = COLOR_RIGHT,
     USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = TRAJ_USE_Z_DEGREE,
     USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
-    USE_ESCAPE_ONSET_ONLY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY,
+    USE_ESCAPE_ONSET_ONLY_XY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
+    USE_ESCAPE_ONSET_ONLY_Z: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
 ) -> plt.Figure:
     """
     Unified trajectory overlay — all paradigms on one axes, with left/right
@@ -743,45 +780,38 @@ def plot_global_trajectory_overlay_fixed(
         _latency_ms = esc["latency_ms"]
         _response_type = grp["response_type"].iloc[0] if "response_type" in grp.columns else ""
 
-        # ── 确定有效数据窗口 ──
-        if (USE_ESCAPE_ONSET_ONLY
-                and _response_type == "Escape"
-                and not np.isnan(_latency_ms)):
-            # Escape-onset-only mode: slice to the local escape interval
+        # ── Build escape-onset mask (shared logic) ──
+        _is_escape = (_response_type == "Escape" and not np.isnan(_latency_ms))
+        if _is_escape:
             lat_idx = int(np.argmin(np.abs(t_vals - _latency_ms)))
-            # Search forward from latency onset for speed dropping below 10 mm/s
             post_onset_speed = speed_vals[lat_idx:]
             below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
             if np.any(below_mask):
-                first_below_local = int(np.argmax(below_mask))
-                end_idx = lat_idx + first_below_local
+                end_idx = lat_idx + int(np.argmax(below_mask))
             else:
-                end_idx = len(speed_vals) - 1  # fallback: take to end of array
-
-            # Guard: ensure the slice is valid
+                end_idx = len(speed_vals) - 1
             if lat_idx >= end_idx:
                 end_idx = min(lat_idx + 1, len(speed_vals) - 1)
-
-            burst_mask = np.zeros(len(t_vals), dtype=bool)
-            burst_mask[lat_idx:end_idx] = True
-        elif not np.isnan(_latency_ms):
-            render_start_ms = float(t_vals.min())
-            render_start_idx = int(np.argmin(np.abs(t_vals - render_start_ms)))
-            actual_start_ms = t_vals[render_start_idx]
-            burst_end_ms = float(t_vals.max())
-            burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
+            escape_mask = np.zeros(len(t_vals), dtype=bool)
+            escape_mask[lat_idx:end_idx] = True
         else:
-            render_start_idx = int(np.argmin(np.abs(t_vals - 0.0)))
-            actual_start_ms = 0.0
-            burst_end_ms = float(t_vals.max())
-            burst_mask = (t_vals >= actual_start_ms) & (t_vals <= burst_end_ms)
+            escape_mask = None
 
-        if not np.any(burst_mask):
+        # ── Determine render window (xy and z independently) ──
+        full_mask = np.ones(len(t_vals), dtype=bool)
+
+        mask_xy = escape_mask if (USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
+        mask_z = escape_mask if (USE_ESCAPE_ONSET_ONLY_Z and escape_mask is not None) else full_mask
+
+        if not np.any(mask_xy):
             continue
 
-        burst = grp[burst_mask]
+        burst = grp[mask_xy]
 
-        traj_x, traj_y = _body_to_traj(grp, burst_mask, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY, use_rigid_rotation=USE_RIGID_ROTATION)
+        traj_x, traj_y = _body_to_traj(
+            grp, mask_xy, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY,
+            use_rigid_rotation=USE_RIGID_ROTATION, mask_z=mask_z,
+        )
         if traj_x is None:
             continue
 
