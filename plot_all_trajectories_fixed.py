@@ -52,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--save", required=True,
         help="Path to save the output figure (e.g. fixed_trajectories.svg).",
     )
+    p.add_argument(
+        "--escape-only", action="store_true",
+        help="Strictly filter and plot ONLY trials classified as 'Escape'.",
+    )
     return p
 
 
@@ -101,6 +105,17 @@ def main(argv: list[str] | None = None) -> None:
 
     # ── Global concatenation ──
     all_data = pd.concat(population_parts, ignore_index=True)
+    if args.escape_only:
+        all_data = all_data[all_data["response_type"] == "Escape"].copy()
+        log.info("Escape-only filter activated. Noise isolated.")
+
+    n_subjects = all_data["subject_id"].nunique()
+    n_trials = all_data.groupby(["subject_id", "global_trial_index"]).ngroups
+    log.info("Population assembled: %d subjects, %d valid trials", n_subjects, n_trials)
+
+    # ── Generate fixed unified trajectory overlay ──
+    log.info("Generating fixed unified trajectory overlay...")
+    fig = plot_global_trajectory_overlay_fixed(all_data)
 
     n_subjects = all_data["subject_id"].nunique()
     n_trials = all_data.groupby(["subject_id", "global_trial_index"]).ngroups
