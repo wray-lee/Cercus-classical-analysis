@@ -93,9 +93,11 @@ def plot_global_trajectory_overlay_fixed(
 
         # 获取 TTC 以对齐窗口
         _ttc = grp["target_ttc_ms"].iloc[0] if "target_ttc_ms" in grp.columns else np.nan
+        _trial_type = grp["type"].iloc[0] if "type" in grp.columns else None
         esc = compute_escape_latency(
             t_vals, speed_vals,
             stim_onset_t_rel=float(_ttc) if pd.notna(_ttc) else None,
+            trial_type=_trial_type,
         )
 
         # ── 读取当前试次的分类信息 ──

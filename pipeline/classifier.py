@@ -50,13 +50,15 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
 
     Returns
     -------
-    dict with keys: ``response_type``, ``v_max``, ``latency_ms``, ``escape_interval_ms``
+    dict with keys: ``response_type``, ``v_max``, ``latency_ms``, ``escape_interval_ms``,
+    ``interval_onset_ms``, ``interval_offset_ms``
     """
     if trial.empty:
-        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan}
+        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
 
     speed_vals = trial["speed"].values
     t_vals = trial["t_rel"].values
+    ang_vel_vals = trial["angular_velocity"].values if "angular_velocity" in trial.columns else None
 
     # ── Determine stimulus onset in t_rel coordinates ──
     # For multimodal trials t_rel=0 is TTC; wind onset = target_ttc_ms on the
@@ -66,69 +68,92 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     stim_onset: float | None = float(_ttc) if pd.notna(_ttc) else None
     onset = stim_onset if stim_onset is not None else 0.0
 
+    # ── Extract trial type for baseline_visual special handling ──
+    _trial_type = trial["type"].iloc[0] if "type" in trial.columns else None
+
     # ── 1. Physical measurement (always runs, never vetoed) ──
-    result = compute_escape_latency(t_vals, speed_vals, stim_onset_t_rel=stim_onset)
+    result = compute_escape_latency(t_vals, speed_vals, stim_onset_t_rel=stim_onset, trial_type=_trial_type)
     v_max: float = result["v_max"]  # type: ignore[assignment]
     latency_ms: float = result["latency_ms"]  # type: ignore[assignment]
 
     has_burst: bool = not np.isnan(latency_ms)
 
     # ── Escape interval: 10 mm/s onset → 10 mm/s offset ──
-    interval_ms = compute_escape_interval(t_vals, speed_vals, latency_ms) if has_burst else np.nan
+    interval_result = compute_escape_interval(t_vals, speed_vals, latency_ms, trial_type=_trial_type, stim_onset_t_rel=stim_onset, angular_velocity=ang_vel_vals) if has_burst else {"interval_ms": np.nan, "onset_ms": np.nan, "offset_ms": np.nan}
+    interval_ms = interval_result["interval_ms"]
+    interval_onset_ms = interval_result["onset_ms"]
+    interval_offset_ms = interval_result["offset_ms"]
 
     # ── 2. Priority 1 — No-burst absolute veto ──
     if not has_burst:
-        return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan}
+        return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
 
     # ── 3. Priority 2 — PreWalk intercept: pre-stimulus spontaneous activity ──
-    # Window is relative to stimulus onset (wind for multimodal, TTC otherwise).
-    pre_mask = (t_vals >= onset - PREWALK_WINDOW_MS) & (t_vals < onset)
+    # For baseline_visual: check 1 s before the burst onset (latency_ms).
+    # For others: check 1 s before stimulus onset (wind/TTC).
+    _is_baseline_visual = (_trial_type is not None and "baseline_visual" in str(_trial_type))
+    prewalk_anchor = latency_ms if (_is_baseline_visual and has_burst) else onset
+    pre_mask = (t_vals >= prewalk_anchor - PREWALK_WINDOW_MS) & (t_vals < prewalk_anchor)
     if np.any(pre_mask):
         pre_slice = speed_vals[pre_mask]
         if not np.all(np.isnan(pre_slice)):
             pre_v_max = float(np.nanmax(pre_slice))
             if pre_v_max > PREWALK_THRESHOLD:
-                return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms}
+                return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
 
-    # ── 4. Priority 3 — Escape: baseline quiescent at stimulus onset ──
-    zero_idx = int(np.argmin(np.abs(t_vals - onset)))
-    baseline_speed = speed_vals[zero_idx]
+    # ── 4. Priority 3 — Escape: baseline quiescent before burst onset ──
+    # For baseline_visual: check speed at the frame just before latency_ms
+    #   (the last frame < 10 mm/s before escape onset).
+    # For others: check speed at stimulus onset (t=0 / wind onset).
+    if _is_baseline_visual and has_burst:
+        # latency_ms is the first frame ≥ 10 mm/s; the frame before it is < 10 mm/s
+        lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
+        if lat_idx > 0:
+            baseline_speed = speed_vals[lat_idx - 1]
+        else:
+            # Burst starts at the very first frame — no pre-burst data
+            baseline_speed = 0.0
+    else:
+        zero_idx = int(np.argmin(np.abs(t_vals - onset)))
+        baseline_speed = speed_vals[zero_idx]
 
-    # When the exact-onset speed is NaN (common in pure-wind trials where the
-    # kinematics stream has gaps around t_rel=0), fall back to the nearest
-    # non-NaN PRE-STIMULUS value within 2 s before onset.
-    # (Pure-wind paradigm guarantees the animal is stationary for ≥2 s before wind.)
-    if np.isnan(baseline_speed):
-        pre_onset_mask = (t_vals >= onset - 2000.0) & (t_vals < onset)
-        if np.any(pre_onset_mask):
-            pre_speeds = speed_vals[pre_onset_mask]
-            valid = pre_speeds[~np.isnan(pre_speeds)]
-            if len(valid) > 0:
-                # Take the value closest to onset (last in the pre-stimulus window)
-                baseline_speed = valid[-1]
+        # When the exact-onset speed is NaN (common in pure-wind trials where the
+        # kinematics stream has gaps around t_rel=0), fall back to the nearest
+        # non-NaN PRE-STIMULUS value within 2 s before onset.
+        # (Pure-wind paradigm guarantees the animal is stationary for ≥2 s before wind.)
+        if np.isnan(baseline_speed):
+            pre_onset_mask = (t_vals >= onset - 2000.0) & (t_vals < onset)
+            if np.any(pre_onset_mask):
+                pre_speeds = speed_vals[pre_onset_mask]
+                valid = pre_speeds[~np.isnan(pre_speeds)]
+                if len(valid) > 0:
+                    # Take the value closest to onset (last in the pre-stimulus window)
+                    baseline_speed = valid[-1]
 
-    # If baseline is still NaN (no valid pre-stimulus data), assume quiescent —
-    # the animal was stationary before the stimulus.  This is the common case
-    # for pure-wind paradigms where kinematics data only starts after wind onset.
-    if np.isnan(baseline_speed):
-        baseline_speed = 0.0
+        # If baseline is still NaN (no valid pre-stimulus data), assume quiescent —
+        # the animal was stationary before the stimulus.  This is the common case
+        # for pure-wind paradigms where kinematics data only starts after wind onset.
+        if np.isnan(baseline_speed):
+            baseline_speed = 0.0
 
     if baseline_speed < ESCAPE_START_THRESHOLD:
-        return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms}
+        return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
 
     # ── 5. Fallback ──
-    return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan}
+    return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
 
 
 def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add ``response_type``, ``v_max``, ``latency_ms``, and ``escape_interval_ms``
-    columns to a preprocessed DataFrame.
+    Add ``response_type``, ``v_max``, ``latency_ms``, ``escape_interval_ms``,
+    ``interval_onset_ms``, and ``interval_offset_ms`` columns to a preprocessed DataFrame.
     """
     classify_map: dict = {}
     v_max_map: dict = {}
     latency_map: dict = {}
     interval_map: dict = {}
+    interval_onset_map: dict = {}
+    interval_offset_map: dict = {}
 
     for tid, grp in df.groupby("global_trial_id"):
         result = classify_trial(grp)
@@ -136,12 +161,16 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
         v_max_map[tid] = result["v_max"]
         latency_map[tid] = result["latency_ms"]
         interval_map[tid] = result["escape_interval_ms"]
+        interval_onset_map[tid] = result["interval_onset_ms"]
+        interval_offset_map[tid] = result["interval_offset_ms"]
 
     df = df.copy()
     df["response_type"] = df["global_trial_id"].map(classify_map)
     df["v_max"] = df["global_trial_id"].map(v_max_map)
     df["latency_ms"] = df["global_trial_id"].map(latency_map)
     df["escape_interval_ms"] = df["global_trial_id"].map(interval_map)
+    df["interval_onset_ms"] = df["global_trial_id"].map(interval_onset_map)
+    df["interval_offset_ms"] = df["global_trial_id"].map(interval_offset_map)
 
     n_escape = sum(1 for v in classify_map.values() if v == "Escape")
     n_prewalk = sum(1 for v in classify_map.values() if v == "PreWalk")

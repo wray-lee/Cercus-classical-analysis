@@ -44,8 +44,15 @@ _traj_cfg = _cfg.get("trajectory", {})
 
 TRAJ_USE_Z_DEGREE: bool = bool(_traj_cfg.get("use_z_degree_to_draw", True))
 TRAJ_USE_RIGID_ROTATION: bool = bool(_traj_cfg.get("use_rigid_rotation", False))
+TRAJ_USE_ESCAPE_ONSET_HEADING: bool = bool(_traj_cfg.get("use_escape_onset_heading", True))
 TRAJ_USE_ESCAPE_ONSET_ONLY_XY: bool = bool(_traj_cfg.get("use_escape_onset_only_xy", True))
-TRAJ_USE_ESCAPE_ONSET_ONLY_Z: bool = bool(_traj_cfg.get("use_escape_onset_only_z", True))
+TRAJ_USE_ANGULAR_VELOCITY_OFFSET: bool = bool(_traj_cfg.get("use_angular_velocity_offset", False))
+
+_DZ_RANGE_VALID = {"full_trial", "escape_interval", "trial_to_onset"}
+DZ_INTEGRATION_RANGE: str = _traj_cfg.get("dz_integration_range", "escape_interval")
+if DZ_INTEGRATION_RANGE not in _DZ_RANGE_VALID:
+    _log.warning("Invalid dz_integration_range=%r, falling back to 'escape_interval'", DZ_INTEGRATION_RANGE)
+    DZ_INTEGRATION_RANGE = "escape_interval"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -181,7 +188,7 @@ ESCAPE_WINDOW_MS: float = 250.0           # ms — post-stimulus burst detection
 # Trajectory Plot Constants
 # ──────────────────────────────────────────────────────────────────────
 
-TRAJECTORY_MAX_RADIUS_MM: float = 80.0
+TRAJECTORY_MAX_RADIUS_MM: float = 120.0
 TRAJECTORY_STEP_MM: float = 10.0
 
 

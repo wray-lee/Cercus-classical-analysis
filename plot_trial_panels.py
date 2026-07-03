@@ -34,12 +34,13 @@ from pipeline.constants import (
     COLOR_OSCI_VIS,
     COLOR_PREWALK,
     COLOR_RIGHT,
+    DZ_INTEGRATION_RANGE,
     ESCAPE_START_THRESHOLD,
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
+    TRAJ_USE_ESCAPE_ONSET_HEADING,
     TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
-    TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
     TRAJ_USE_RIGID_ROTATION,
     TRAJ_USE_Z_DEGREE,
     _apply_publication_style,
@@ -82,9 +83,12 @@ def plot_trial_panel(
     response_type: str = "Escape",
     use_z_heading: bool = TRAJ_USE_Z_DEGREE,
     use_rigid_rotation: bool = TRAJ_USE_RIGID_ROTATION,
+    use_escape_onset_heading: bool = TRAJ_USE_ESCAPE_ONSET_HEADING,
     use_escape_onset_only_xy: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
-    use_escape_onset_only_z: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
+    dz_integration_range: str = DZ_INTEGRATION_RANGE,
     interval_ms: float = np.nan,
+    interval_onset_ms: float = np.nan,
+    interval_offset_ms: float = np.nan,
 ) -> plt.Figure:
     """Single composite figure for one trial: speed, angular velocity, stimulus, trajectory."""
     fig = plt.figure(figsize=(16, 8))
@@ -115,7 +119,9 @@ def plot_trial_panel(
         lat_idx = np.argmin(np.abs(t - latency_ms))
         ax_speed.scatter([latency_ms], [spd[lat_idx]], c="#3C5488", s=30, zorder=5,
                          edgecolors="white", linewidths=0.5)
-    if not np.isnan(interval_ms) and not np.isnan(latency_ms):
+    if not np.isnan(interval_onset_ms) and not np.isnan(interval_offset_ms):
+        ax_speed.axvspan(interval_onset_ms, interval_offset_ms, alpha=0.10, color="#E64B35", zorder=0)
+    elif not np.isnan(interval_ms) and not np.isnan(latency_ms):
         offset_t = latency_ms + interval_ms
         ax_speed.axvspan(latency_ms, offset_t, alpha=0.10, color="#E64B35", zorder=0)
     _add_threshold_lines(ax_speed)
@@ -172,18 +178,23 @@ def plot_trial_panel(
     speed_vals = trial["speed"].values
 
     # ── Build escape-onset mask (shared logic) ──
-    _is_escape = (response_type == "Escape" and not np.isnan(latency_ms))
+    _is_escape = (response_type in ("Escape", "PreWalk") and not np.isnan(latency_ms))
     if _is_escape:
-        lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-        post_onset_speed = speed_vals[lat_idx:]
-        below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
-        if np.any(below_mask):
-            end_idx = lat_idx + int(np.argmax(below_mask))
+        # Use interval_onset_ms/interval_offset_ms if available (baseline_visual)
+        if not np.isnan(interval_onset_ms) and not np.isnan(interval_offset_ms):
+            escape_start = int(np.argmin(np.abs(t_vals - interval_onset_ms)))
+            escape_end = int(np.argmin(np.abs(t_vals - interval_offset_ms)))
         else:
-            end_idx = len(speed_vals) - 1
-        if lat_idx >= end_idx:
-            end_idx = min(lat_idx + 1, len(speed_vals) - 1)
-        escape_start, escape_end = lat_idx, end_idx
+            lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
+            post_onset_speed = speed_vals[lat_idx:]
+            below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+            if np.any(below_mask):
+                end_idx = lat_idx + int(np.argmax(below_mask))
+            else:
+                end_idx = len(speed_vals) - 1
+            if lat_idx >= end_idx:
+                end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+            escape_start, escape_end = lat_idx, end_idx
     else:
         escape_start, escape_end = 0, len(speed_vals)
 
@@ -199,8 +210,10 @@ def plot_trial_panel(
         else:
             xy_start, xy_end = 0, len(dx_body)
 
-        if use_escape_onset_only_z and _is_escape:
+        if dz_integration_range == "escape_interval" and _is_escape:
             z_start, z_end = escape_start, escape_end
+        elif dz_integration_range == "trial_to_onset" and _is_escape:
+            z_start, z_end = 0, escape_start
         else:
             z_start, z_end = 0, len(dz_body)
 
@@ -215,24 +228,29 @@ def plot_trial_panel(
             traj_x = np.array([])
             traj_y = np.array([])
     else:
-        # ── Default: global x/y coordinates with optional initial heading rotation ──
+        # ── Default: global x/y coordinates with optional heading rotation ──
         full_x_raw = trial["x"].values
         full_y_raw = trial["y"].values
 
-        if use_z_heading:
-            theta_init = (trial["dz"].cumsum().values / RADIUS_MM)[0]
-            full_x = full_x_raw * np.cos(theta_init) + full_y_raw * np.sin(theta_init)
-            full_y = -full_x_raw * np.sin(theta_init) + full_y_raw * np.cos(theta_init)
-        else:
-            full_x = full_x_raw
-            full_y = full_y_raw
-
         if use_escape_onset_only_xy and _is_escape:
-            traj_x = full_x[escape_start:escape_end]
-            traj_y = full_y[escape_start:escape_end]
+            raw_x = full_x_raw[escape_start:escape_end]
+            raw_y = full_y_raw[escape_start:escape_end]
         else:
-            traj_x = full_x
-            traj_y = full_y
+            raw_x = full_x_raw
+            raw_y = full_y_raw
+
+        if use_z_heading:
+            if use_escape_onset_heading:
+                # Rotate by cumulative dz from trial start to escape onset
+                theta_init = (trial["dz"].cumsum().values / RADIUS_MM)[escape_start]
+            else:
+                # Reset angle to zero at escape onset
+                theta_init = 0.0
+            traj_x = raw_x * np.cos(theta_init) + raw_y * np.sin(theta_init)
+            traj_y = -raw_x * np.sin(theta_init) + raw_y * np.cos(theta_init)
+        else:
+            traj_x = raw_x
+            traj_y = raw_y
 
     # ── Origin alignment: start from (0, 0) ──
     if len(traj_x) > 0:
@@ -306,10 +324,12 @@ def _export_trials(
         lat = float(row["latency_ms"])
         vmax = float(row["v_max"])
         interval = float(row.get("escape_interval_ms", np.nan))
+        interval_onset = float(row.get("interval_onset_ms", np.nan))
+        interval_offset = float(row.get("interval_offset_ms", np.nan))
 
         fig = plot_trial_panel(
             trial_data, lat, vmax, int(tid), response_type=response_type,
-            interval_ms=interval,
+            interval_ms=interval, interval_onset_ms=interval_onset, interval_offset_ms=interval_offset,
         )
         fig.savefig(
             output_dir / f"trial_{int(tid)}_{response_type.lower()}.svg",

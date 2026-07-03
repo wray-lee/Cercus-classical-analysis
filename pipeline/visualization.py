@@ -24,18 +24,17 @@ from .constants import (
     COLOR_OSCI_VIS,
     COLOR_PREWALK,
     COLOR_RIGHT,
+    DZ_INTEGRATION_RANGE,
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
     TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
-    TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
     TRAJ_USE_RIGID_ROTATION,
     TRAJ_USE_Z_DEGREE,
     _get_unified_side,
 )
-from .kinematics import compute_escape_latency
 
 log = logging.getLogger(__name__)
 
@@ -147,37 +146,34 @@ def _integrate_body_trajectory(
     if len(burst_dx) == 0:
         return None, None
 
-    # Rigid rotation requires heading integration.
-    do_heading = use_heading or use_rigid_rotation
+    # Stage 1 heading integration is controlled by use_heading (from use_z_degree_to_draw).
+    # Stage 2 rigid rotation is controlled by use_rigid_rotation, independently of Stage 1.
 
-    if not do_heading:
-        # Pure translation, no heading integration
-        traj_x = np.cumsum(burst_dx)
-        traj_y = np.cumsum(burst_dy)
-        traj_x -= traj_x[0]
-        traj_y -= traj_y[0]
-        return traj_x, traj_y
+    if use_heading:
+        # ── Stage 1: build curved trajectory via per-frame heading integration ──
+        local_heading = np.cumsum(burst_dz) / RADIUS_MM
+        local_heading -= local_heading[0]
 
-    # ── Stage 1: build inner (intrinsic) curved trajectory ──
-    local_heading = np.cumsum(burst_dz) / RADIUS_MM
-    local_heading -= local_heading[0]
+        # Interpolate heading onto the xy grid if lengths differ.
+        if len(local_heading) != len(burst_dx):
+            if src_idx is None:
+                src_idx = np.arange(len(burst_dz))
+            if dst_idx is None:
+                dst_idx = np.linspace(0, len(burst_dz) - 1, len(burst_dx))
+            if len(src_idx) >= 2:
+                local_heading = np.interp(dst_idx, src_idx, local_heading)
+            else:
+                local_heading = np.full(len(burst_dx), local_heading[0])
 
-    # Interpolate heading onto the xy grid if lengths differ.
-    if len(local_heading) != len(burst_dx):
-        if src_idx is None:
-            src_idx = np.arange(len(burst_dz))
-        if dst_idx is None:
-            dst_idx = np.linspace(0, len(burst_dz) - 1, len(burst_dx))
-        if len(src_idx) >= 2:
-            local_heading = np.interp(dst_idx, src_idx, local_heading)
-        else:
-            local_heading = np.full(len(burst_dx), local_heading[0])
+        dx_inner = burst_dx * np.cos(local_heading) - burst_dy * np.sin(local_heading)
+        dy_inner = burst_dx * np.sin(local_heading) + burst_dy * np.cos(local_heading)
 
-    dx_inner = burst_dx * np.cos(local_heading) - burst_dy * np.sin(local_heading)
-    dy_inner = burst_dx * np.sin(local_heading) + burst_dy * np.cos(local_heading)
-
-    x_inner = np.cumsum(dx_inner)
-    y_inner = np.cumsum(dy_inner)
+        x_inner = np.cumsum(dx_inner)
+        y_inner = np.cumsum(dy_inner)
+    else:
+        # Straight accumulation without per-frame heading rotation
+        x_inner = np.cumsum(burst_dx)
+        y_inner = np.cumsum(burst_dy)
 
     # ── Stage 2: rigid macro rotation (with curvature thresholding) ──
     if use_rigid_rotation:
@@ -302,7 +298,7 @@ def plot_trajectory_overlay(
     USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = TRAJ_USE_Z_DEGREE,
     USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
     USE_ESCAPE_ONSET_ONLY_XY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
-    USE_ESCAPE_ONSET_ONLY_Z: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
+    dz_integration_range: str = DZ_INTEGRATION_RANGE,
 ) -> plt.Figure:
     """
     One subplot per trial type. Left stimuli in NPG blue, right in NPG red.
@@ -327,34 +323,21 @@ def plot_trajectory_overlay(
         for _tid, grp in subset.groupby("global_trial_id"):
             grp = grp.sort_values("t_rel")
             t_vals = grp["t_rel"].values
-            speed_vals = grp["speed"].values
 
-            # Pass wind-onset offset so burst detection uses the correct window
-            # for multimodal trials (t_rel=0 is TTC, not wind onset).
-            _ttc = grp["target_ttc_ms"].iloc[0] if "target_ttc_ms" in grp.columns else np.nan
-            esc = compute_escape_latency(
-                t_vals, speed_vals,
-                stim_onset_t_rel=float(_ttc) if pd.notna(_ttc) else None,
-            )
-
-            # ── 读取当前试次的分类信息 ──
-            _latency_ms = esc["latency_ms"]
+            # ── 读取当前试次的分类与 interval 信息 ──
             _response_type = grp["response_type"].iloc[0] if "response_type" in grp.columns else ""
+            _onset_ms = grp["interval_onset_ms"].iloc[0] if "interval_onset_ms" in grp.columns else np.nan
+            _offset_ms = grp["interval_offset_ms"].iloc[0] if "interval_offset_ms" in grp.columns else np.nan
 
-            # ── Build escape-onset mask (shared logic) ──
-            _is_escape = (_response_type == "Escape" and not np.isnan(_latency_ms))
+            # ── Build escape-onset mask from pre-computed interval ──
+            _is_escape = (_response_type in ("Escape", "PreWalk") and pd.notna(_onset_ms) and pd.notna(_offset_ms))
             if _is_escape:
-                lat_idx = int(np.argmin(np.abs(t_vals - _latency_ms)))
-                post_onset_speed = speed_vals[lat_idx:]
-                below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
-                if np.any(below_mask):
-                    end_idx = lat_idx + int(np.argmax(below_mask))
-                else:
-                    end_idx = len(speed_vals) - 1
-                if lat_idx >= end_idx:
-                    end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+                onset_idx = int(np.argmin(np.abs(t_vals - _onset_ms)))
+                offset_idx = int(np.argmin(np.abs(t_vals - _offset_ms)))
+                if onset_idx >= offset_idx:
+                    offset_idx = min(onset_idx + 1, len(t_vals) - 1)
                 escape_mask = np.zeros(len(t_vals), dtype=bool)
-                escape_mask[lat_idx:end_idx] = True
+                escape_mask[onset_idx:offset_idx] = True
             else:
                 escape_mask = None
 
@@ -362,7 +345,14 @@ def plot_trajectory_overlay(
             full_mask = np.ones(len(t_vals), dtype=bool)
 
             mask_xy = escape_mask if (USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
-            mask_z = escape_mask if (USE_ESCAPE_ONSET_ONLY_Z and escape_mask is not None) else full_mask
+
+            if _is_escape and dz_integration_range == "escape_interval":
+                mask_z = escape_mask
+            elif _is_escape and dz_integration_range == "trial_to_onset":
+                mask_z = np.zeros(len(t_vals), dtype=bool)
+                mask_z[:onset_idx] = True
+            else:
+                mask_z = full_mask
 
             if not np.any(mask_xy):
                 continue
@@ -727,7 +717,8 @@ def plot_single_trial_kinetics(
     figsize: tuple[float, float] = (6.0, 3.5),
     y_col: str = "speed",
     y_label: str = "Escape Speed (mm/s)",
-    interval_ms: float = np.nan,
+    interval_onset_ms: float = np.nan,
+    interval_offset_ms: float = np.nan,
 ) -> plt.Figure:
     """
     Single-trial kinetics (speed or angular velocity) with latency marker.
@@ -742,17 +733,18 @@ def plot_single_trial_kinetics(
 
     ax.plot(t, y_vals, color=curve_color, lw=1.0, alpha=0.85, label=y_label)
 
-    # ── Latency marker ──
-    if not np.isnan(latency_ms):
-        ax.axvline(x=latency_ms, color="#3C5488", ls="--", lw=0.9, alpha=0.9,
-                   label=f"Latency = {latency_ms:.1f} ms")
-        lat_idx = np.argmin(np.abs(t - latency_ms))
-        ax.scatter([latency_ms], [y_vals[lat_idx]], c="#3C5488", s=30, zorder=5,
+    # ── Escape onset marker (blue dot on 10 mm/s crossing) ──
+    onset_ms = latency_ms if np.isnan(interval_onset_ms) else interval_onset_ms
+    if not np.isnan(onset_ms):
+        ax.axvline(x=onset_ms, color="#3C5488", ls="--", lw=0.9, alpha=0.9,
+                   label=f"Escape onset = {onset_ms:.1f} ms")
+        onset_idx = np.argmin(np.abs(t - onset_ms))
+        ax.scatter([onset_ms], [y_vals[onset_idx]], c="#3C5488", s=30, zorder=5,
                    edgecolors="white", linewidths=0.5)
 
-    # ── Interval shading ──
-    if y_col == "speed" and not np.isnan(interval_ms) and not np.isnan(latency_ms):
-        ax.axvspan(latency_ms, latency_ms + interval_ms, alpha=0.10, color="#E64B35", zorder=0)
+    # ── Interval shading (directly from onset / offset) ──
+    if y_col == "speed" and not np.isnan(interval_onset_ms) and not np.isnan(interval_offset_ms):
+        ax.axvspan(interval_onset_ms, interval_offset_ms, alpha=0.10, color="#E64B35", zorder=0)
 
     # ── Reference lines ──
     if y_col == "speed":
@@ -773,7 +765,10 @@ def plot_single_trial_kinetics(
     ax.set_title(f"Trial {global_trial_index} — {response_type}  (V$_{{max}}$={v_max:.1f} mm/s)", fontweight="bold")
 
     latency_str = f"{latency_ms:.1f}" if not np.isnan(latency_ms) else "N/A"
-    interval_str = f"{interval_ms:.1f}" if not np.isnan(interval_ms) else "N/A"
+    if not np.isnan(interval_onset_ms) and not np.isnan(interval_offset_ms):
+        interval_str = f"{interval_offset_ms - interval_onset_ms:.1f}"
+    else:
+        interval_str = "N/A"
     info_text = f"Latency: {latency_str} ms\nV$_{{max}}$: {v_max:.1f} mm/s\nInterval: {interval_str} ms"
     ax.text(0.98, 0.95, info_text, transform=ax.transAxes, fontsize=6,
             ha="right", va="top",
@@ -790,8 +785,8 @@ def plot_single_trial_kinetics(
 
 def plot_global_trajectory_overlay_fixed(
     df: pd.DataFrame,
-    TRAJECTORY_MAX_RADIUS_MM: float = 120.0,
-    TRAJECTORY_STEP_MM: float = 10.0,
+    TRAJECTORY_MAX_RADIUS_MM: float = 300.0,
+    TRAJECTORY_STEP_MM: float = 30.0,
     figsize: tuple[float, float] = (5.0, 5.0),
     alpha: float = 1.0,
     lw: float = 0.3,
@@ -800,7 +795,7 @@ def plot_global_trajectory_overlay_fixed(
     USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = TRAJ_USE_Z_DEGREE,
     USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
     USE_ESCAPE_ONSET_ONLY_XY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
-    USE_ESCAPE_ONSET_ONLY_Z: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_Z,
+    dz_integration_range: str = DZ_INTEGRATION_RANGE,
 ) -> plt.Figure:
     """
     Unified trajectory overlay — all paradigms on one axes, with left/right
@@ -818,33 +813,21 @@ def plot_global_trajectory_overlay_fixed(
     for _keys, grp in df.groupby(group_cols):
         grp = grp.sort_values("t_rel")
         t_vals = grp["t_rel"].values
-        speed_vals = grp["speed"].values
 
-        # 获取 TTC 以对齐窗口
-        _ttc = grp["target_ttc_ms"].iloc[0] if "target_ttc_ms" in grp.columns else np.nan
-        esc = compute_escape_latency(
-            t_vals, speed_vals,
-            stim_onset_t_rel=float(_ttc) if pd.notna(_ttc) else None,
-        )
-
-        # ── 读取当前试次的分类信息 ──
-        _latency_ms = esc["latency_ms"]
+        # ── 读取当前试次的分类与 interval 信息 ──
         _response_type = grp["response_type"].iloc[0] if "response_type" in grp.columns else ""
+        _onset_ms = grp["interval_onset_ms"].iloc[0] if "interval_onset_ms" in grp.columns else np.nan
+        _offset_ms = grp["interval_offset_ms"].iloc[0] if "interval_offset_ms" in grp.columns else np.nan
 
-        # ── Build escape-onset mask (shared logic) ──
-        _is_escape = (_response_type == "Escape" and not np.isnan(_latency_ms))
+        # ── Build escape-onset mask from pre-computed interval ──
+        _is_escape = (_response_type in ("Escape", "PreWalk") and pd.notna(_onset_ms) and pd.notna(_offset_ms))
         if _is_escape:
-            lat_idx = int(np.argmin(np.abs(t_vals - _latency_ms)))
-            post_onset_speed = speed_vals[lat_idx:]
-            below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
-            if np.any(below_mask):
-                end_idx = lat_idx + int(np.argmax(below_mask))
-            else:
-                end_idx = len(speed_vals) - 1
-            if lat_idx >= end_idx:
-                end_idx = min(lat_idx + 1, len(speed_vals) - 1)
+            onset_idx = int(np.argmin(np.abs(t_vals - _onset_ms)))
+            offset_idx = int(np.argmin(np.abs(t_vals - _offset_ms)))
+            if onset_idx >= offset_idx:
+                offset_idx = min(onset_idx + 1, len(t_vals) - 1)
             escape_mask = np.zeros(len(t_vals), dtype=bool)
-            escape_mask[lat_idx:end_idx] = True
+            escape_mask[onset_idx:offset_idx] = True
         else:
             escape_mask = None
 
@@ -852,7 +835,14 @@ def plot_global_trajectory_overlay_fixed(
         full_mask = np.ones(len(t_vals), dtype=bool)
 
         mask_xy = escape_mask if (USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
-        mask_z = escape_mask if (USE_ESCAPE_ONSET_ONLY_Z and escape_mask is not None) else full_mask
+
+        if _is_escape and dz_integration_range == "escape_interval":
+            mask_z = escape_mask
+        elif _is_escape and dz_integration_range == "trial_to_onset":
+            mask_z = np.zeros(len(t_vals), dtype=bool)
+            mask_z[:onset_idx] = True
+        else:
+            mask_z = full_mask
 
         if not np.any(mask_xy):
             continue

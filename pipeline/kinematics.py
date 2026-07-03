@@ -22,6 +22,7 @@ from .constants import (
     ESCAPE_WINDOW_MS,
     RADIUS_MM,
     SPEED_WINDOW_MS,
+    TRAJ_USE_ANGULAR_VELOCITY_OFFSET,
 )
 
 log = logging.getLogger(__name__)
@@ -144,12 +145,15 @@ def compute_escape_latency(
     t_rel: np.ndarray,
     speed: np.ndarray,
     stim_onset_t_rel: float | None = None,
+    trial_type: str | None = None,
 ) -> dict[str, float | bool]:
     """
     Pure geometric burst-feature extraction — **no baseline veto**.
 
-    1. Measure ``v_max`` in ``[onset, onset + ESCAPE_WINDOW_MS]`` where
-       ``onset = stim_onset_t_rel`` (defaults to 0 when *None*).
+    1. Measure ``v_max`` in the burst window:
+       - For baseline_visual: search the entire stimulus period ``[onset, +∞)``
+       - For others: ``[onset, onset + ESCAPE_WINDOW_MS]``
+       where ``onset = stim_onset_t_rel`` (defaults to 0 when *None*).
     2. If ``v_max > ESCAPE_VMAX_THRESHOLD``: locate the first frame exceeding
        50 mm/s, then search **backwards** through the full time series for the
        last frame below 10 mm/s.  The frame immediately following is the true
@@ -166,17 +170,60 @@ def compute_escape_latency(
         Stimulus onset on the t_rel axis (ms).  For multimodal trials this
         equals ``target_ttc_ms`` (the wind-vs-TTC signed offset); for pure
         visual or pure wind trials leave as *None* to default to 0.
+    trial_type : str or None
+        Trial type string (e.g. ``"baseline_visual"``, ``"looming_wind"``).
+        When ``"baseline_visual"``, the burst window covers the entire
+        post-onset period instead of the fixed ``ESCAPE_WINDOW_MS`` window.
 
     Returns
     -------
     dict with keys: ``v_max`` (float), ``latency_ms`` (float or NaN)
     """
-    # ── Burst window [onset, onset + ESCAPE_WINDOW_MS] ──
+    # ── Burst window ──
     # For multimodal trials, stim_onset_t_rel shifts the window to match the
     # actual wind onset (e.g. -373 ms for the 30-degree paradigm), so
     # wind-triggered escapes before TTC are still detected.
     onset = 0.0 if stim_onset_t_rel is None else stim_onset_t_rel
+
+    _is_baseline_visual = (trial_type is not None and "baseline_visual" in str(trial_type))
+
+    if _is_baseline_visual:
+        # ── Baseline visual: search from trial start to TTC (t_rel <= 0) ──
+        # 1. Find the peak (>50 mm/s) with maximum speed in [trial_start, t=0]
+        # 2. Search BACKWARD from peak for nearest < 10 mm/s → latency
+        # 3. Search FORWARD from peak for nearest < 10 mm/s → escape end
+        burst_mask = t_rel <= 0
+        if not np.any(burst_mask):
+            return {"v_max": np.nan, "latency_ms": np.nan}
+
+        burst_speed = speed[burst_mask]
+        if np.all(np.isnan(burst_speed)):
+            return {"v_max": np.nan, "latency_ms": np.nan}
+
+        v_max = float(np.nanmax(burst_speed))
+        if np.isnan(v_max) or v_max <= ESCAPE_VMAX_THRESHOLD:
+            return {"v_max": v_max, "latency_ms": np.nan}
+
+        # Find peak index in the full array
+        burst_indices = np.where(burst_mask)[0]
+        peak_local = int(np.nanargmax(burst_speed))
+        peak_idx = burst_indices[peak_local]
+
+        # Search BACKWARD from peak for nearest < 10 mm/s
+        # latency = reaction time = first frame >= 10 mm/s (escape onset)
+        search_back = speed[:peak_idx + 1]
+        below_back = search_back < ESCAPE_START_THRESHOLD
+        if np.any(below_back):
+            last_below_idx = int(np.where(below_back)[0][-1])
+            latency_ms = float(t_rel[last_below_idx + 1])
+        else:
+            latency_ms = float(t_rel[0])
+
+        return {"v_max": v_max, "latency_ms": latency_ms}
+
+    # ── Non-baseline-visual: fixed window [onset, onset + ESCAPE_WINDOW_MS] ──
     burst_mask = (t_rel >= onset) & (t_rel <= onset + ESCAPE_WINDOW_MS)
+
     if not np.any(burst_mask):
         return {"v_max": np.nan, "latency_ms": np.nan}
 
@@ -207,14 +254,56 @@ def compute_escape_latency(
     return {"v_max": v_max, "latency_ms": latency_ms}
 
 
+def _refine_offset_by_angular_velocity(
+    t_rel: np.ndarray,
+    angular_velocity: np.ndarray,
+    onset_idx: int,
+    offset_idx: int,
+) -> float | None:
+    """Refine escape offset to the first angular-velocity zero-crossing after its peak.
+
+    Searches the angular velocity within ``[onset_idx, offset_idx]``, locates
+    the peak (by absolute value), then scans forward for the first point where
+    the signal crosses zero.  Returns the refined offset time in ms, or
+    ``None`` if no valid peak / zero-crossing is found.
+    """
+    segment = angular_velocity[onset_idx:offset_idx + 1].copy()
+    # Treat NaN as 0 for peak / crossing detection
+    valid = ~np.isnan(segment)
+    if not np.any(valid):
+        return None
+    seg_abs = np.abs(segment)
+    peak_local = int(np.nanargmax(seg_abs))
+    # Search forward from peak for sign change (zero crossing)
+    for i in range(peak_local, len(segment) - 1):
+        a, b = segment[i], segment[i + 1]
+        if np.isnan(a) or np.isnan(b):
+            continue
+        # Zero crossing: sign changes, or either value is exactly 0
+        if a * b < 0 or a == 0.0 or b == 0.0:
+            return float(t_rel[onset_idx + i + (0 if a == 0.0 else 1)])
+    return None
+
+
 def compute_escape_interval(
     t_rel: np.ndarray,
     speed: np.ndarray,
     latency_ms: float,
-) -> float:
+    trial_type: str | None = None,
+    stim_onset_t_rel: float | None = None,
+    angular_velocity: np.ndarray | None = None,
+) -> dict[str, float]:
     """
-    Compute the escape interval duration — time from 10 mm/s onset to the
-    point where speed falls back below 10 mm/s after the burst.
+    Compute the escape interval.
+
+    For baseline_visual: interval = [peak前最近<10mm/s, peak后最近<10mm/s].
+    Onset is constrained to [stim_onset_t_rel, ttc=0]; offset is unconstrained after peak.
+    For others: interval = [latency, 第一个<10mm/s].
+
+    When *TRAJ_USE_ANGULAR_VELOCITY_OFFSET* is enabled and *angular_velocity*
+    is provided, the offset is refined to the first zero-crossing of angular
+    velocity after its peak within the escape interval (i.e. the point where
+    the rotational burst subsides).
 
     Parameters
     ----------
@@ -223,27 +312,94 @@ def compute_escape_interval(
     speed : np.ndarray
         Instantaneous speed in mm/s.
     latency_ms : float
-        Latency (10 mm/s onset) in ms, as returned by ``compute_escape_latency``.
+        Latency (reaction time) in ms, as returned by ``compute_escape_latency``.
+    trial_type : str or None
+        Trial type string.
+    stim_onset_t_rel : float or None
+        Stimulus onset on the t_rel axis (ms). For baseline_visual, the onset
+        search is constrained to [stim_onset_t_rel, t_rel=0].
+    angular_velocity : np.ndarray or None
+        Per-frame angular velocity in rad/s. Required for the angular-velocity
+        offset refinement; ignored when the feature is disabled.
 
     Returns
     -------
-    float
-        Interval duration in ms (offset − onset).  NaN if latency_ms is NaN
-        or speed never drops back below threshold.
+    dict with keys: ``interval_ms``, ``onset_ms``, ``offset_ms``.
+    All NaN if latency_ms is NaN or speed never drops back below threshold.
     """
+    nan_result = {"interval_ms": np.nan, "onset_ms": np.nan, "offset_ms": np.nan}
+
     if np.isnan(latency_ms):
-        return np.nan
+        return nan_result
 
-    onset_idx = int(np.argmin(np.abs(t_rel - latency_ms)))
-    post_onset_speed = speed[onset_idx:]
-    below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+    _is_baseline_visual = (trial_type is not None and "baseline_visual" in str(trial_type))
 
-    if np.any(below_mask):
-        offset_local = int(np.argmax(below_mask))
-        offset_idx = onset_idx + offset_local
-        return float(t_rel[offset_idx] - t_rel[onset_idx])
+    if _is_baseline_visual:
+        # For baseline_visual: find peak in t_rel <= 0
+        mask = t_rel <= 0
+        if not np.any(mask):
+            return nan_result
+        burst_speed = speed[mask]
+        peak_local = int(np.nanargmax(burst_speed))
+        peak_idx = np.where(mask)[0][peak_local]
 
-    return np.nan
+        # Search BACKWARD from peak for nearest < 10 mm/s → interval onset
+        # Constrain to [stim_onset_t_rel, peak_idx] if stim_onset_t_rel is given
+        if stim_onset_t_rel is not None:
+            lower_bound_idx = int(np.searchsorted(t_rel, stim_onset_t_rel))
+        else:
+            lower_bound_idx = 0
+        search_back = speed[lower_bound_idx:peak_idx + 1]
+        below_back = search_back < ESCAPE_START_THRESHOLD
+        if np.any(below_back):
+            interval_onset_idx = lower_bound_idx + int(np.where(below_back)[0][-1])
+        else:
+            interval_onset_idx = lower_bound_idx
+
+        # Search FORWARD from peak for nearest < 10 mm/s → interval offset
+        # Unconstrained: search the entire trial after the peak
+        search_fwd = speed[peak_idx:]
+        below_fwd = search_fwd < ESCAPE_START_THRESHOLD
+        if np.any(below_fwd):
+            offset_local = int(np.argmax(below_fwd))
+            interval_offset_idx = peak_idx + offset_local
+        else:
+            return nan_result
+
+        onset_ms = float(t_rel[interval_onset_idx])
+        offset_ms = float(t_rel[interval_offset_idx])
+
+        # ── Angular velocity offset refinement ──
+        if TRAJ_USE_ANGULAR_VELOCITY_OFFSET and angular_velocity is not None:
+            refined = _refine_offset_by_angular_velocity(
+                t_rel, angular_velocity, interval_onset_idx, interval_offset_idx,
+            )
+            if refined is not None:
+                offset_ms = refined
+
+        return {"interval_ms": offset_ms - onset_ms, "onset_ms": onset_ms, "offset_ms": offset_ms}
+    else:
+        # For others: interval from latency to first <10mm/s after latency
+        onset_idx = int(np.argmin(np.abs(t_rel - latency_ms)))
+        post_onset_speed = speed[onset_idx:]
+        below_mask = post_onset_speed < ESCAPE_START_THRESHOLD
+        if np.any(below_mask):
+            offset_local = int(np.argmax(below_mask))
+            offset_idx = onset_idx + offset_local
+            onset_ms = float(t_rel[onset_idx])
+            offset_ms = float(t_rel[offset_idx])
+
+            # ── Angular velocity offset refinement ──
+            if TRAJ_USE_ANGULAR_VELOCITY_OFFSET and angular_velocity is not None:
+                refined = _refine_offset_by_angular_velocity(
+                    t_rel, angular_velocity, onset_idx, offset_idx,
+                )
+                if refined is not None:
+                    offset_ms = refined
+
+            return {"interval_ms": offset_ms - onset_ms, "onset_ms": onset_ms, "offset_ms": offset_ms}
+
+    return nan_result
 
 
 # ══════════════════════════════════════════════════════════════════════

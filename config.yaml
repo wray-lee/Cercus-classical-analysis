@@ -2,20 +2,59 @@
 # Cercus Framework — Trajectory Drawing Configuration
 # ══════════════════════════════════════════════════════════════════════
 
+# trajectory:
+#   # Per-frame dynamic heading integration via dz accumulation.
+#   # When false, dx/dy are used raw without heading rotation.
+#   use_z_degree_to_draw: true
+#   # Heading initialisation for non-rigid mode (only effective when use_z_degree_to_draw=true):
+#   # true  — rotate trajectory by the cumulative dz from trial start to escape onset
+#   # false — reset angle to zero at escape onset, integrate heading from onset onward
+#   use_escape_onset_heading: true
+#   # Slice trajectory to the escape-onset interval only
+#   # (latency onset → speed drops below ESCAPE_START_THRESHOLD).
+#   # xy: controls which dx/dy frames are accumulated into the trajectory.
+#   # z:  controls which dz frames are used for heading integration & total yaw.
+#   use_escape_onset_only_xy: true
+
+
+
+#   # 角速度判定: 开启后在escape interval确定后，将escape offset锁定到角速度从峰值回落至0的第一个点
+#   use_angular_velocity_offset: true
+#   # dz integration range for heading & total yaw (rigid mode):
+#   # "full_trial"      — all dz frames
+#   # "escape_interval" — only escape-onset interval
+#   # "trial_to_onset"  — trial start to escape onset
+#   dz_integration_range: "escape_interval"
+#   # Rigid global rotation: ignore per-frame heading, linearly accumulate
+#   # dx/dy into a straight base trajectory, then apply the total yaw
+#   # (sum(dz) / RADIUS_MM) as a single rigid-body rotation.
+#   use_rigid_rotation: true
+
+
+
+#=======================================
+# baseline_visual
+#========================================
+
 trajectory:
-  # Per-frame dynamic heading integration via dz accumulation.
-  # When false, dx/dy are used raw without heading rotation.
   use_z_degree_to_draw: true
-
-  # Rigid global rotation: ignore per-frame heading, linearly accumulate
-  # dx/dy into a straight base trajectory, then apply the total yaw
-  # (sum(dz) / RADIUS_MM) as a single rigid-body rotation.
-  # Takes precedence over use_z_degree_to_draw when true.
-  use_rigid_rotation: true
-
-  # Slice trajectory to the escape-onset interval only
-  # (latency onset → speed drops below ESCAPE_START_THRESHOLD).
-  # xy: controls which dx/dy frames are accumulated into the trajectory.
-  # z:  controls which dz frames are used for heading integration & total yaw.
+  use_escape_onset_heading: true
   use_escape_onset_only_xy: true
-  use_escape_onset_only_z: true
+  use_angular_velocity_offset: true
+  dz_integration_range: "escape_interval"
+  use_rigid_rotation: false
+
+#=======================================
+# traditional logic
+#=======================================
+# trajectory:
+#   use_z_degree_to_draw: true
+#   use_escape_onset_heading: false
+#   use_escape_onset_only_xy: true
+#   use_angular_velocity_offset: true
+#   dz_integration_range: "trial_to_onset"
+#   use_rigid_rotation: true
+
+
+
+
