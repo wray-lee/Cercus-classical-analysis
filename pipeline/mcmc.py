@@ -740,6 +740,143 @@ def compute_variance_reduction(
     return results
 
 
+def compute_probability_enhancement(
+    trace: az.InferenceData,
+    bi_conditions: list[str],
+    uni_conditions: list[str],
+    true_trial_start: float = -5000.0,
+    n_posterior_samples: int = 2000,
+) -> dict[str, Any]:
+    """Compute posterior probability enhancement over the race model bound.
+
+    For each bimodal condition, at every point on a shared TTC grid:
+    - Draws posterior samples of P(bimodal | TTC) = sigmoid(k * (TTC - TTC50))
+    - Constructs the race model bound from visual_only and wind_only posteriors:
+        bound = min(1, P_vis + P_wind)
+    - Computes enhancement = P(bimodal) - bound
+    - Reports P(enhancement > 0 | data) and 95% HDI of enhancement
+
+    Returns
+    -------
+    dict
+        Per-condition enhancement summary with TTC grid, median curves,
+        HDI envelopes, and P(enhancement > 0) at key TTC values.
+    """
+    ttc_lo = true_trial_start
+    ttc_hi = 1000.0
+    ttc_grid = np.linspace(ttc_lo, ttc_hi, 500)
+
+    # ── Extract posteriors ──
+    p_baseline_post = get_p_baseline_posterior(trace, uni_conditions)
+    vis_p = p_baseline_post.get("visual_only")    # flat array of posterior samples
+    wind_p = p_baseline_post.get("wind_only")
+
+    # Race model bound posterior: min(1, P_vis + P_wind) per draw
+    rng = np.random.default_rng(42)
+    n_samples = n_posterior_samples
+
+    if vis_p is not None and wind_p is not None:
+        vis_draws = rng.choice(vis_p, size=n_samples, replace=True)
+        wind_draws = rng.choice(wind_p, size=n_samples, replace=True)
+        bound_draws = np.minimum(1.0, vis_draws + wind_draws)
+    elif vis_p is not None:
+        bound_draws = rng.choice(vis_p, size=n_samples, replace=True)
+    elif wind_p is not None:
+        bound_draws = rng.choice(wind_p, size=n_samples, replace=True)
+    else:
+        log.warning("Probability enhancement skipped: no unimodal baselines found")
+        return {}
+
+    bound_median = float(np.median(bound_draws))
+    bound_hdi = list(compute_hdi(bound_draws))
+
+    results: dict[str, Any] = {
+        "ttc_grid": ttc_grid.tolist(),
+        "race_model_bound": {
+            "median": bound_median,
+            "hdi_95": bound_hdi,
+            "mean": float(bound_draws.mean()),
+        },
+        "conditions": {},
+    }
+
+    # ── Per-bimodal-condition enhancement ──
+    ttc50_post = get_ttc50_posterior(trace, bi_conditions)
+    k_post = get_k_posterior(trace, bi_conditions)
+
+    for i, cond in enumerate(bi_conditions):
+        t50_s = ttc50_post[:, :, i].flatten()
+        k_s = k_post[:, :, i].flatten()
+
+        # Subsample posterior draws
+        n_draws = min(n_samples, len(t50_s))
+        idx = rng.choice(len(t50_s), n_draws, replace=False)
+        t50_draws = t50_s[idx]
+        k_draws = k_s[idx]
+        bound_sub = bound_draws[:n_draws]
+
+        # P(bimodal | TTC) for each draw: shape (n_draws, n_ttc)
+        p_bi = 1.0 / (1.0 + np.exp(
+            -k_draws[:, None] * (ttc_grid[None, :] - t50_draws[:, None])
+        ))
+
+        # Enhancement = P(bimodal) - bound  (bound is constant across TTC)
+        enhancement = p_bi - bound_sub[:, None]
+
+        # Summary statistics at each TTC point
+        enh_median = np.median(enhancement, axis=0)
+        enh_lo = np.percentile(enhancement, 2.5, axis=0)
+        enh_hi = np.percentile(enhancement, 97.5, axis=0)
+        p_positive = (enhancement > 0).mean(axis=0)
+
+        # P(bimodal) curve summary
+        p_bi_median = np.median(p_bi, axis=0)
+        p_bi_lo = np.percentile(p_bi, 2.5, axis=0)
+        p_bi_hi = np.percentile(p_bi, 97.5, axis=0)
+
+        # Key TTC values: TTC=0, TTC50 median, and peak enhancement
+        ttc50_median = float(np.median(t50_draws))
+        idx_ttc0 = int(np.argmin(np.abs(ttc_grid - 0.0)))
+        idx_ttc50 = int(np.argmin(np.abs(ttc_grid - ttc50_median)))
+        idx_peak = int(np.argmax(enh_median))
+
+        cond_entry: dict[str, Any] = {
+            "ttc50_median": ttc50_median,
+            "p_escape_at_ttc0": {
+                "median": float(p_bi_median[idx_ttc0]),
+                "hdi_95": [float(p_bi_lo[idx_ttc0]), float(p_bi_hi[idx_ttc0])],
+            },
+            "enhancement_at_ttc0": {
+                "median": float(enh_median[idx_ttc0]),
+                "hdi_95": [float(enh_lo[idx_ttc0]), float(enh_hi[idx_ttc0])],
+                "prob_positive": float(p_positive[idx_ttc0]),
+            },
+            "enhancement_at_ttc50": {
+                "median": float(enh_median[idx_ttc50]),
+                "hdi_95": [float(enh_lo[idx_ttc50]), float(enh_hi[idx_ttc50])],
+                "prob_positive": float(p_positive[idx_ttc50]),
+            },
+            "enhancement_peak": {
+                "ttc": float(ttc_grid[idx_peak]),
+                "median": float(enh_median[idx_peak]),
+                "hdi_95": [float(enh_lo[idx_peak]), float(enh_hi[idx_peak])],
+                "prob_positive": float(p_positive[idx_peak]),
+            },
+            # Full curves (for plotting)
+            "p_bi_median": p_bi_median.tolist(),
+            "p_bi_hdi_95_lo": p_bi_lo.tolist(),
+            "p_bi_hdi_95_hi": p_bi_hi.tolist(),
+            "enh_median": enh_median.tolist(),
+            "enh_hdi_95_lo": enh_lo.tolist(),
+            "enh_hdi_95_hi": enh_hi.tolist(),
+            "p_positive": p_positive.tolist(),
+        }
+        results["conditions"][cond] = cond_entry
+
+    log.info("Probability enhancement computed for %d bimodal conditions", len(bi_conditions))
+    return results
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Posterior Predictive Checks
 # ══════════════════════════════════════════════════════════════════════
@@ -1884,6 +2021,121 @@ def plot_time_window_of_integration(
     plt.close(fig)
 
 
+def plot_probability_enhancement(
+    enhancement: dict[str, Any],
+    bi_conditions: list[str],
+    uni_conditions: list[str],
+    output_path: Path,
+) -> None:
+    """Plot probability enhancement over the race model bound.
+
+    Two-panel figure:
+    - Top: P(Escape) for each bimodal condition (median + 95% HDI band)
+      overlaid with the race model bound (horizontal band).
+    - Bottom: Enhancement = P(bimodal) - bound with 95% HDI band;
+      horizontal dashed line at 0; shade regions where P(enhancement > 0)
+      exceeds 0.95.
+
+    Parameters
+    ----------
+    enhancement : dict
+        Output of ``compute_probability_enhancement``.
+    bi_conditions : list of str
+        Bimodal condition names.
+    uni_conditions : list of str
+        Unimodal condition names (for palette generation).
+    output_path : Path
+        Output file path.
+    """
+    _apply_publication_style()
+    palette = _generate_color_palette(bi_conditions, uni_conditions)
+
+    if "ttc_grid" not in enhancement or not enhancement.get("conditions"):
+        log.warning("Probability enhancement plot skipped: no data")
+        return
+
+    ttc_grid = np.asarray(enhancement["ttc_grid"])
+    bound = enhancement["race_model_bound"]
+    bound_med = bound["median"]
+    bound_lo, bound_hi = bound["hdi_95"]
+
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(9, 8), sharex=True,
+        gridspec_kw={"height_ratios": [3, 2], "hspace": 0.08},
+    )
+
+    # ── Top panel: P(Escape) curves + race model bound ──
+    # Race model bound band (constant across TTC)
+    ax_top.axhspan(bound_lo, bound_hi, color="#E0E0E0", alpha=0.5, zorder=0)
+    ax_top.axhline(bound_med, color="#666666", lw=2.0, ls="--",
+                    label=f"Race Model Bound ({bound_med:.2f})")
+
+    for cond in bi_conditions:
+        if cond not in enhancement["conditions"]:
+            continue
+        c = enhancement["conditions"][cond]
+        color = palette.get(cond, "#7C878E")
+
+        p_med = np.asarray(c["p_bi_median"])
+        p_lo = np.asarray(c["p_bi_hdi_95_lo"])
+        p_hi = np.asarray(c["p_bi_hdi_95_hi"])
+
+        ax_top.fill_between(ttc_grid, p_lo, p_hi, color=color, alpha=0.15, zorder=1)
+        ax_top.plot(ttc_grid, p_med, color=color, lw=2.5, label=cond, zorder=2)
+
+    ax_top.set_ylabel("P(Escape)")
+    ax_top.set_ylim(-0.05, 1.05)
+    ax_top.set_title("Probability Enhancement over Race Model Bound", fontweight="bold")
+    ax_top.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
+    ax_top.axvline(0, color="grey", ls=":", alpha=0.4, lw=0.75)
+    ax_top.yaxis.grid(True, ls="--", alpha=0.15)
+    ax_top.set_axisbelow(True)
+    ax_top.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
+
+    # ── Bottom panel: Enhancement magnitude ──
+    ax_bot.axhline(0, color="black", ls="-", lw=1.0, alpha=0.6)
+
+    for cond in bi_conditions:
+        if cond not in enhancement["conditions"]:
+            continue
+        c = enhancement["conditions"][cond]
+        color = palette.get(cond, "#7C878E")
+
+        e_med = np.asarray(c["enh_median"])
+        e_lo = np.asarray(c["enh_hdi_95_lo"])
+        e_hi = np.asarray(c["enh_hdi_95_hi"])
+        p_pos = np.asarray(c["p_positive"])
+
+        ax_bot.fill_between(ttc_grid, e_lo, e_hi, color=color, alpha=0.15, zorder=1)
+        ax_bot.plot(ttc_grid, e_med, color=color, lw=2.5, label=cond, zorder=2)
+
+        # Shade regions where P(enhancement > 0) >= 0.95
+        sig = p_pos >= 0.95
+        if np.any(sig):
+            ax_bot.fill_between(
+                ttc_grid, 0, e_med, where=sig,
+                color=color, alpha=0.25, zorder=0,
+            )
+
+    ax_bot.set_xlabel("Time-to-Collision (ms)\n(negative = wind before collision)")
+    ax_bot.set_ylabel("Enhancement\nP(bimodal) − bound")
+    ax_bot.set_ylim(auto=True)
+    ax_bot.axvline(0, color="grey", ls=":", alpha=0.4, lw=0.75)
+    ax_bot.yaxis.grid(True, ls="--", alpha=0.15)
+    ax_bot.set_axisbelow(True)
+    ax_bot.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
+    ax_bot.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
+
+    # ── Canvas purge ──
+    fig.patch.set_facecolor("white")
+    ax_top.set_facecolor("white")
+    ax_bot.set_facecolor("white")
+
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Summary Export
 # ══════════════════════════════════════════════════════════════════════
@@ -1929,12 +2181,14 @@ def generate_summary(
     n_draws: int = N_DRAWS,
     n_tune: int = N_TUNE,
     ppc_results: dict[str, Any] | None = None,
+    probability_enhancement: dict[str, Any] | None = None,
 ) -> dict:
     """Generate JSON summary with full diagnostic metrics.
 
     Includes actual R-hat and ESS values (not just booleans), ROPE-based
     hypothesis tests, common-scale effect sizes, variance reduction on
-    the probability scale, and delay-stratified posterior estimates.
+    the probability scale, delay-stratified posterior estimates, and
+    probability enhancement over the race model bound.
     """
     summary: dict[str, Any] = {
         "model_info": {
@@ -2015,6 +2269,19 @@ def generate_summary(
 
     if ppc_results:
         summary["posterior_predictive"] = ppc_results
+
+    if probability_enhancement:
+        # Strip full curve arrays for JSON — keep only key statistics
+        enh_summary: dict[str, Any] = {
+            "race_model_bound": probability_enhancement.get("race_model_bound", {}),
+            "conditions": {},
+        }
+        for cond, entry in probability_enhancement.get("conditions", {}).items():
+            enh_summary["conditions"][cond] = {
+                k: v for k, v in entry.items()
+                if not isinstance(v, list)  # exclude full curve arrays
+            }
+        summary["probability_enhancement"] = enh_summary
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
@@ -2116,16 +2383,26 @@ def run_mcmc_analysis(
         except Exception as exc:
             log.warning("Posterior predictive check failed: %s", exc)
 
-    # Step 8: Plots
+    # Step 8: Extract survival data & compute probability enhancement
+    try:
+        survival_df, true_trial_start = prepare_survival_data(df)
+    except Exception as exc:
+        log.warning("Survival data preparation failed: %s", exc)
+        survival_df, true_trial_start = None, -5000.0
+
+    prob_enh: dict[str, Any] = {}
+    if len(bi_conditions) > 0 and len(uni_conditions) > 0:
+        try:
+            prob_enh = compute_probability_enhancement(
+                trace, bi_conditions, uni_conditions,
+                true_trial_start=true_trial_start,
+            )
+        except Exception as exc:
+            log.warning("Probability enhancement computation failed: %s", exc)
+
+    # Step 9: Plots
     if plot:
         log.info("Generating plots (%s)...", plot_format)
-
-        # Extract true trial start once from valid trials (shared by KM & psychometric)
-        try:
-            survival_df, true_trial_start = prepare_survival_data(df)
-        except Exception as exc:
-            log.warning("Survival data preparation failed: %s", exc)
-            survival_df, true_trial_start = None, -5000.0
 
         plot_posterior_traces(
             trace, bi_conditions, uni_conditions,
@@ -2162,6 +2439,11 @@ def run_mcmc_analysis(
             var_red, bi_conditions,
             output_dir / f"time_window_of_integration.{plot_format}",
         )
+        if prob_enh:
+            plot_probability_enhancement(
+                prob_enh, bi_conditions, uni_conditions,
+                output_dir / f"probability_enhancement.{plot_format}",
+            )
         # Kaplan-Meier cumulative escape dynamics
         if survival_df is not None:
             try:
@@ -2173,13 +2455,14 @@ def run_mcmc_analysis(
             except Exception as exc:
                 log.warning("Kaplan-Meier plot failed: %s", exc)
 
-    # Step 9: Summary
+    # Step 10: Summary
     summary = generate_summary(
         trace, bi_conditions, uni_conditions,
         ttc50_diff, var_red, convergence,
         output_dir / "mcmc_summary.json",
         n_chains=n_chains, n_draws=n_draws, n_tune=n_tune,
         ppc_results=ppc_results,
+        probability_enhancement=prob_enh,
     )
 
     log.info("=" * 60)

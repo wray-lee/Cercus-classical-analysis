@@ -12,6 +12,18 @@ Cricket escape-response behavioral analysis pipeline. Processes raw kinematics d
 
 Escape latency is defined as the first time speed exceeds 10 mm/s just before reaching 50 mm/s. The escape interval spans from latency onset to the point where speed drops back below 10 mm/s, with optional angular-velocity zero-crossing refinement.
 
+Classification priority order: **NoResponse > PreWalk > Escape**. A trial is routed to the first matching category — e.g. if both PreWalk and Escape conditions are met, the trial is classified as PreWalk. When baseline speed ≥ 10 mm/s and no pre-walk activity is detected, the trial falls back to NoResponse even if a valid burst exists.
+
+### `baseline_visual` Special Handling
+
+For `baseline_visual` (visual-only looming) trials the stimulus onset precedes TTC (`t_rel = 0`), so the standard fixed-window burst detection does not apply. The classifier adapts as follows:
+
+| Aspect | Standard (wind / bimodal) | `baseline_visual` |
+|---|---|---|
+| Burst detection window | `[onset, onset + 250 ms]` | Entire stimulus period (`t_rel ≤ 0`) |
+| PreWalk check anchor | Stimulus onset (`t_rel = 0` or wind onset) | `latency_ms` (escape onset) |
+| Escape baseline check | Speed at stimulus onset | Speed at the frame immediately before `latency_ms` |
+
 ## Project Structure
 
 ```
@@ -98,6 +110,21 @@ Publication-grade plotting (Nature/Science/Cell style). Includes trajectory over
 
 ### `pipeline/mcmc.py`
 Bayesian psychophysics via PyMC/NumPyro. Fits psychometric sigmoid functions to escape probability vs. TTC, tests multisensory integration hypotheses (ROPE-based posterior probability), computes Bayesian optimal integration (variance reduction), and performs survival analysis (Kaplan-Meier, Race Model Inequality).
+
+#### `--binary-mode`
+
+Controls how the ternary classification is collapsed into a binary escape/non-escape response for the Bernoulli likelihood:
+
+| Mode | Escape (= 1) | Non-escape (= 0) |
+|---|---|---|
+| `escape_only` (default) | Escape | PreWalk, NoResponse |
+| `escape_prewalk` | Escape, PreWalk | NoResponse |
+
+Example:
+
+```bash
+python mcmc_analysis.py --input-dir data/ --output-dir results/ --binary-mode escape_prewalk
+```
 
 ## Output Structure
 

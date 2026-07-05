@@ -137,6 +137,11 @@ def plot_trial_panel(
         lat_idx = np.argmin(np.abs(t - latency_ms))
         ax_angvel.scatter([latency_ms], [ang_vel[lat_idx]], c="#3C5488", s=30, zorder=5,
                           edgecolors="white", linewidths=0.5)
+    if not np.isnan(interval_onset_ms) and not np.isnan(interval_offset_ms):
+        ax_angvel.axvspan(interval_onset_ms, interval_offset_ms, alpha=0.10, color="#E64B35", zorder=0)
+    elif not np.isnan(interval_ms) and not np.isnan(latency_ms):
+        offset_t = latency_ms + interval_ms
+        ax_angvel.axvspan(latency_ms, offset_t, alpha=0.10, color="#E64B35", zorder=0)
     ax_angvel.set_ylabel("Angular Velocity (rad/s)")
     ax_angvel.set_xlabel("")
     plt.setp(ax_angvel.get_xticklabels(), visible=False)
