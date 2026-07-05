@@ -747,56 +747,55 @@ def compute_probability_enhancement(
     true_trial_start: float = -5000.0,
     n_posterior_samples: int = 2000,
 ) -> dict[str, Any]:
-    """Compute posterior probability enhancement over the race model bound.
+    """Compute posterior probability enhancement vs each unimodal baseline.
 
-    For each bimodal condition, at every point on a shared TTC grid:
+    For each bimodal condition and each available unimodal baseline
+    (visual_only, wind_only), at every point on a shared TTC grid:
     - Draws posterior samples of P(bimodal | TTC) = sigmoid(k * (TTC - TTC50))
-    - Constructs the race model bound from visual_only and wind_only posteriors:
-        bound = min(1, P_vis + P_wind)
-    - Computes enhancement = P(bimodal) - bound
+    - Draws posterior samples of P(baseline) from the p_baseline posterior
+    - Computes enhancement = P(bimodal) - P(baseline)
     - Reports P(enhancement > 0 | data) and 95% HDI of enhancement
 
     Returns
     -------
     dict
-        Per-condition enhancement summary with TTC grid, median curves,
-        HDI envelopes, and P(enhancement > 0) at key TTC values.
+        ``"ttc_grid"``, ``"baselines"`` (per-baseline summary), and
+        ``"conditions"`` (per-bimodal-condition × per-baseline enhancement).
     """
     ttc_lo = true_trial_start
     ttc_hi = 1000.0
     ttc_grid = np.linspace(ttc_lo, ttc_hi, 500)
 
-    # ── Extract posteriors ──
+    # ── Extract unimodal posteriors ──
     p_baseline_post = get_p_baseline_posterior(trace, uni_conditions)
-    vis_p = p_baseline_post.get("visual_only")    # flat array of posterior samples
-    wind_p = p_baseline_post.get("wind_only")
 
-    # Race model bound posterior: min(1, P_vis + P_wind) per draw
-    rng = np.random.default_rng(42)
-    n_samples = n_posterior_samples
+    available_baselines: dict[str, np.ndarray] = {}
+    for name in ("visual_only", "wind_only"):
+        if name in p_baseline_post:
+            available_baselines[name] = p_baseline_post[name]
 
-    if vis_p is not None and wind_p is not None:
-        vis_draws = rng.choice(vis_p, size=n_samples, replace=True)
-        wind_draws = rng.choice(wind_p, size=n_samples, replace=True)
-        bound_draws = np.minimum(1.0, vis_draws + wind_draws)
-    elif vis_p is not None:
-        bound_draws = rng.choice(vis_p, size=n_samples, replace=True)
-    elif wind_p is not None:
-        bound_draws = rng.choice(wind_p, size=n_samples, replace=True)
-    else:
+    if not available_baselines:
         log.warning("Probability enhancement skipped: no unimodal baselines found")
         return {}
 
-    bound_median = float(np.median(bound_draws))
-    bound_hdi = list(compute_hdi(bound_draws))
+    rng = np.random.default_rng(42)
+    n_samples = n_posterior_samples
+
+    # ── Baseline posterior draws (constant across TTC) ──
+    baseline_draws: dict[str, np.ndarray] = {}
+    baseline_stats: dict[str, dict[str, Any]] = {}
+    for name, samples in available_baselines.items():
+        draws = rng.choice(samples, size=n_samples, replace=True)
+        baseline_draws[name] = draws
+        baseline_stats[name] = {
+            "median": float(np.median(draws)),
+            "hdi_95": list(compute_hdi(draws)),
+            "mean": float(draws.mean()),
+        }
 
     results: dict[str, Any] = {
         "ttc_grid": ttc_grid.tolist(),
-        "race_model_bound": {
-            "median": bound_median,
-            "hdi_95": bound_hdi,
-            "mean": float(bound_draws.mean()),
-        },
+        "baselines": baseline_stats,
         "conditions": {},
     }
 
@@ -808,37 +807,23 @@ def compute_probability_enhancement(
         t50_s = ttc50_post[:, :, i].flatten()
         k_s = k_post[:, :, i].flatten()
 
-        # Subsample posterior draws
         n_draws = min(n_samples, len(t50_s))
         idx = rng.choice(len(t50_s), n_draws, replace=False)
         t50_draws = t50_s[idx]
         k_draws = k_s[idx]
-        bound_sub = bound_draws[:n_draws]
 
-        # P(bimodal | TTC) for each draw: shape (n_draws, n_ttc)
+        # P(bimodal | TTC): shape (n_draws, n_ttc)
         p_bi = 1.0 / (1.0 + np.exp(
             -k_draws[:, None] * (ttc_grid[None, :] - t50_draws[:, None])
         ))
 
-        # Enhancement = P(bimodal) - bound  (bound is constant across TTC)
-        enhancement = p_bi - bound_sub[:, None]
-
-        # Summary statistics at each TTC point
-        enh_median = np.median(enhancement, axis=0)
-        enh_lo = np.percentile(enhancement, 2.5, axis=0)
-        enh_hi = np.percentile(enhancement, 97.5, axis=0)
-        p_positive = (enhancement > 0).mean(axis=0)
-
-        # P(bimodal) curve summary
         p_bi_median = np.median(p_bi, axis=0)
         p_bi_lo = np.percentile(p_bi, 2.5, axis=0)
         p_bi_hi = np.percentile(p_bi, 97.5, axis=0)
 
-        # Key TTC values: TTC=0, TTC50 median, and peak enhancement
         ttc50_median = float(np.median(t50_draws))
         idx_ttc0 = int(np.argmin(np.abs(ttc_grid - 0.0)))
         idx_ttc50 = int(np.argmin(np.abs(ttc_grid - ttc50_median)))
-        idx_peak = int(np.argmax(enh_median))
 
         cond_entry: dict[str, Any] = {
             "ttc50_median": ttc50_median,
@@ -846,34 +831,53 @@ def compute_probability_enhancement(
                 "median": float(p_bi_median[idx_ttc0]),
                 "hdi_95": [float(p_bi_lo[idx_ttc0]), float(p_bi_hi[idx_ttc0])],
             },
-            "enhancement_at_ttc0": {
-                "median": float(enh_median[idx_ttc0]),
-                "hdi_95": [float(enh_lo[idx_ttc0]), float(enh_hi[idx_ttc0])],
-                "prob_positive": float(p_positive[idx_ttc0]),
-            },
-            "enhancement_at_ttc50": {
-                "median": float(enh_median[idx_ttc50]),
-                "hdi_95": [float(enh_lo[idx_ttc50]), float(enh_hi[idx_ttc50])],
-                "prob_positive": float(p_positive[idx_ttc50]),
-            },
-            "enhancement_peak": {
-                "ttc": float(ttc_grid[idx_peak]),
-                "median": float(enh_median[idx_peak]),
-                "hdi_95": [float(enh_lo[idx_peak]), float(enh_hi[idx_peak])],
-                "prob_positive": float(p_positive[idx_peak]),
-            },
             # Full curves (for plotting)
             "p_bi_median": p_bi_median.tolist(),
             "p_bi_hdi_95_lo": p_bi_lo.tolist(),
             "p_bi_hdi_95_hi": p_bi_hi.tolist(),
-            "enh_median": enh_median.tolist(),
-            "enh_hdi_95_lo": enh_lo.tolist(),
-            "enh_hdi_95_hi": enh_hi.tolist(),
-            "p_positive": p_positive.tolist(),
+            "vs": {},
         }
+
+        # ── Enhancement vs each baseline ──
+        for bl_name, bl_draws in baseline_draws.items():
+            bl_sub = bl_draws[:n_draws]
+            enhancement = p_bi - bl_sub[:, None]
+
+            enh_median = np.median(enhancement, axis=0)
+            enh_lo = np.percentile(enhancement, 2.5, axis=0)
+            enh_hi = np.percentile(enhancement, 97.5, axis=0)
+            p_positive = (enhancement > 0).mean(axis=0)
+
+            idx_peak = int(np.argmax(enh_median))
+
+            cond_entry["vs"][bl_name] = {
+                "enhancement_at_ttc0": {
+                    "median": float(enh_median[idx_ttc0]),
+                    "hdi_95": [float(enh_lo[idx_ttc0]), float(enh_hi[idx_ttc0])],
+                    "prob_positive": float(p_positive[idx_ttc0]),
+                },
+                "enhancement_at_ttc50": {
+                    "median": float(enh_median[idx_ttc50]),
+                    "hdi_95": [float(enh_lo[idx_ttc50]), float(enh_hi[idx_ttc50])],
+                    "prob_positive": float(p_positive[idx_ttc50]),
+                },
+                "enhancement_peak": {
+                    "ttc": float(ttc_grid[idx_peak]),
+                    "median": float(enh_median[idx_peak]),
+                    "hdi_95": [float(enh_lo[idx_peak]), float(enh_hi[idx_peak])],
+                    "prob_positive": float(p_positive[idx_peak]),
+                },
+                # Full curves (for plotting)
+                "enh_median": enh_median.tolist(),
+                "enh_hdi_95_lo": enh_lo.tolist(),
+                "enh_hdi_95_hi": enh_hi.tolist(),
+                "p_positive": p_positive.tolist(),
+            }
+
         results["conditions"][cond] = cond_entry
 
-    log.info("Probability enhancement computed for %d bimodal conditions", len(bi_conditions))
+    log.info("Probability enhancement computed for %d bimodal conditions vs %d baseline(s)",
+             len(bi_conditions), len(available_baselines))
     return results
 
 
@@ -2027,14 +2031,15 @@ def plot_probability_enhancement(
     uni_conditions: list[str],
     output_path: Path,
 ) -> None:
-    """Plot probability enhancement over the race model bound.
+    """Plot probability enhancement vs each unimodal baseline.
 
-    Two-panel figure:
+    Two-panel figure with right-side annotation:
     - Top: P(Escape) for each bimodal condition (median + 95% HDI band)
-      overlaid with the race model bound (horizontal band).
-    - Bottom: Enhancement = P(bimodal) - bound with 95% HDI band;
-      horizontal dashed line at 0; shade regions where P(enhancement > 0)
-      exceeds 0.95.
+      overlaid with each unimodal baseline (horizontal dashed lines).
+    - Bottom: Enhancement = P(bimodal) - P(baseline) for each
+      bimodal×baseline pair, with 95% HDI bands; horizontal line at 0;
+      shade regions where P(enhancement > 0) >= 0.95.
+    - Right: Per-pair enhancement conclusions.
 
     Parameters
     ----------
@@ -2055,20 +2060,26 @@ def plot_probability_enhancement(
         return
 
     ttc_grid = np.asarray(enhancement["ttc_grid"])
-    bound = enhancement["race_model_bound"]
-    bound_med = bound["median"]
-    bound_lo, bound_hi = bound["hdi_95"]
+    baselines = enhancement.get("baselines", {})
+    bl_names = sorted(baselines.keys())
+
+    # Linestyle per baseline
+    _BL_LS: dict[str, str] = {"visual_only": "--", "wind_only": ":"}
 
     fig, (ax_top, ax_bot) = plt.subplots(
-        2, 1, figsize=(9, 8), sharex=True,
-        gridspec_kw={"height_ratios": [3, 2], "hspace": 0.08},
+        2, 1, figsize=(14, 8), sharex=True,
+        gridspec_kw={"height_ratios": [3, 2], "hspace": 0.08,
+                      "left": 0.36, "right": 0.72},
     )
 
-    # ── Top panel: P(Escape) curves + race model bound ──
-    # Race model bound band (constant across TTC)
-    ax_top.axhspan(bound_lo, bound_hi, color="#E0E0E0", alpha=0.5, zorder=0)
-    ax_top.axhline(bound_med, color="#666666", lw=2.0, ls="--",
-                    label=f"Race Model Bound ({bound_med:.2f})")
+    # ── Top panel: P(Escape) curves + baseline lines ──
+    for bl_name, bl_stats in baselines.items():
+        bl_med = bl_stats["median"]
+        bl_lo, bl_hi = bl_stats["hdi_95"]
+        ls = _BL_LS.get(bl_name, "--")
+        ax_top.axhspan(bl_lo, bl_hi, color="#E0E0E0", alpha=0.3, zorder=0)
+        ax_top.axhline(bl_med, color="#666666", lw=1.8, ls=ls,
+                        label=f"{bl_name} ({bl_med:.2f})")
 
     for cond in bi_conditions:
         if cond not in enhancement["conditions"]:
@@ -2085,14 +2096,14 @@ def plot_probability_enhancement(
 
     ax_top.set_ylabel("P(Escape)")
     ax_top.set_ylim(-0.05, 1.05)
-    ax_top.set_title("Probability Enhancement over Race Model Bound", fontweight="bold")
-    ax_top.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
+    ax_top.set_title("Probability Enhancement vs Unimodal Baselines", fontweight="bold")
     ax_top.axvline(0, color="grey", ls=":", alpha=0.4, lw=0.75)
     ax_top.yaxis.grid(True, ls="--", alpha=0.15)
     ax_top.set_axisbelow(True)
     ax_top.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
+    ax_top.legend(bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False, fontsize=8)
 
-    # ── Bottom panel: Enhancement magnitude ──
+    # ── Bottom panel: Enhancement per (bimodal × baseline) pair ──
     ax_bot.axhline(0, color="black", ls="-", lw=1.0, alpha=0.6)
 
     for cond in bi_conditions:
@@ -2100,38 +2111,83 @@ def plot_probability_enhancement(
             continue
         c = enhancement["conditions"][cond]
         color = palette.get(cond, "#7C878E")
+        vs = c.get("vs", {})
 
-        e_med = np.asarray(c["enh_median"])
-        e_lo = np.asarray(c["enh_hdi_95_lo"])
-        e_hi = np.asarray(c["enh_hdi_95_hi"])
-        p_pos = np.asarray(c["p_positive"])
+        for bl_name, bl_entry in vs.items():
+            ls = _BL_LS.get(bl_name, "--")
+            e_med = np.asarray(bl_entry["enh_median"])
+            e_lo = np.asarray(bl_entry["enh_hdi_95_lo"])
+            e_hi = np.asarray(bl_entry["enh_hdi_95_hi"])
+            p_pos = np.asarray(bl_entry["p_positive"])
 
-        ax_bot.fill_between(ttc_grid, e_lo, e_hi, color=color, alpha=0.15, zorder=1)
-        ax_bot.plot(ttc_grid, e_med, color=color, lw=2.5, label=cond, zorder=2)
+            label = f"{cond} vs {bl_name}"
+            ax_bot.fill_between(ttc_grid, e_lo, e_hi, color=color, alpha=0.10, zorder=1)
+            ax_bot.plot(ttc_grid, e_med, color=color, lw=2.0, ls=ls, label=label, zorder=2)
 
-        # Shade regions where P(enhancement > 0) >= 0.95
-        sig = p_pos >= 0.95
-        if np.any(sig):
-            ax_bot.fill_between(
-                ttc_grid, 0, e_med, where=sig,
-                color=color, alpha=0.25, zorder=0,
-            )
+            # Shade regions where P(enhancement > 0) >= 0.95
+            sig = p_pos >= 0.95
+            if np.any(sig):
+                ax_bot.fill_between(
+                    ttc_grid, 0, e_med, where=sig,
+                    color=color, alpha=0.20, zorder=0,
+                )
 
     ax_bot.set_xlabel("Time-to-Collision (ms)\n(negative = wind before collision)")
-    ax_bot.set_ylabel("Enhancement\nP(bimodal) − bound")
+    ax_bot.set_ylabel("Enhancement\nP(bimodal) − P(baseline)")
     ax_bot.set_ylim(auto=True)
     ax_bot.axvline(0, color="grey", ls=":", alpha=0.4, lw=0.75)
     ax_bot.yaxis.grid(True, ls="--", alpha=0.15)
     ax_bot.set_axisbelow(True)
     ax_bot.axvspan(-1000, 500, color="#FFE599", alpha=0.8, zorder=0)
-    ax_bot.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
+    ax_bot.legend(bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False, fontsize=8)
+
+    # ── Right-side annotation: per-pair enhancement conclusions ──
+    lines: list[str] = ["Enhancement Summary", "─" * 38]
+    for cond in bi_conditions:
+        if cond not in enhancement["conditions"]:
+            continue
+        c = enhancement["conditions"][cond]
+        vs = c.get("vs", {})
+        if not vs:
+            continue
+
+        lines.append(f"  {cond}  (TTC₅₀={c['ttc50_median']:.0f} ms)")
+
+        for bl_name, bl_entry in vs.items():
+            e0 = bl_entry["enhancement_at_ttc0"]
+            ep = bl_entry["enhancement_peak"]
+            e0_med = e0["median"]
+            e0_lo, e0_hi = e0["hdi_95"]
+            e0_p = e0["prob_positive"]
+            ep_med = ep["median"]
+            ep_ttc = ep["ttc"]
+            ep_p = ep["prob_positive"]
+
+            verdict = "✓" if e0_p >= 0.95 else ("✗" if e0_p <= 0.05 else "~")
+
+            lines.append(f"    vs {bl_name}")
+            lines.append(f"      Δ@0: {e0_med:+.3f} [{e0_lo:+.3f}, {e0_hi:+.3f}]"
+                         f"  P={e0_p:.3f} {verdict}")
+            lines.append(f"      Peak: {ep_med:+.3f} @ {ep_ttc:.0f} ms (P={ep_p:.3f})")
+
+        lines.append("")
+
+    annotation = "\n".join(lines)
+    fig.text(
+        0.01, 0.95, annotation,
+        transform=fig.transFigure,
+        fontsize=8.5, fontfamily="monospace",
+        verticalalignment="top", horizontalalignment="left",
+        bbox=dict(boxstyle="round,pad=0.5", facecolor="#F8F8F8",
+                  edgecolor="#CCCCCC", linewidth=0.8),
+    )
 
     # ── Canvas purge ──
     fig.patch.set_facecolor("white")
     ax_top.set_facecolor("white")
     ax_bot.set_facecolor("white")
 
-    plt.tight_layout()
+    plt.subplots_adjust(right=0.58)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -2273,14 +2329,23 @@ def generate_summary(
     if probability_enhancement:
         # Strip full curve arrays for JSON — keep only key statistics
         enh_summary: dict[str, Any] = {
-            "race_model_bound": probability_enhancement.get("race_model_bound", {}),
+            "baselines": probability_enhancement.get("baselines", {}),
             "conditions": {},
         }
         for cond, entry in probability_enhancement.get("conditions", {}).items():
-            enh_summary["conditions"][cond] = {
+            cond_out: dict[str, Any] = {
                 k: v for k, v in entry.items()
-                if not isinstance(v, list)  # exclude full curve arrays
+                if not isinstance(v, list) and k != "vs"
             }
+            # Strip curve arrays inside each vs- baseline entry
+            vs_out: dict[str, Any] = {}
+            for bl_name, bl_entry in entry.get("vs", {}).items():
+                vs_out[bl_name] = {
+                    k: v for k, v in bl_entry.items()
+                    if not isinstance(v, list)
+                }
+            cond_out["vs"] = vs_out
+            enh_summary["conditions"][cond] = cond_out
         summary["probability_enhancement"] = enh_summary
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
