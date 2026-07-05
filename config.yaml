@@ -18,7 +18,7 @@
 
 
 
-#   # 角速度判定: 开启后在escape interval确定后，将escape offset锁定到角速度从峰值回落至0的第一个点
+#   # if true, the angular velocity offset (from the escape-onset frame) is subtracted from dz before heading integration.
 #   use_angular_velocity_offset: true
 #   # dz integration range for heading & total yaw (rigid mode):
 #   # "full_trial"      — all dz frames
