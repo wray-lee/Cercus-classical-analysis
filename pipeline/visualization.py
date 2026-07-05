@@ -785,8 +785,8 @@ def plot_single_trial_kinetics(
 
 def plot_global_trajectory_overlay_fixed(
     df: pd.DataFrame,
-    TRAJECTORY_MAX_RADIUS_MM: float = 300.0,
-    TRAJECTORY_STEP_MM: float = 30.0,
+    TRAJECTORY_MAX_RADIUS_MM: float = 200.0,
+    TRAJECTORY_STEP_MM: float = 20.0,
     figsize: tuple[float, float] = (5.0, 5.0),
     alpha: float = 1.0,
     lw: float = 0.3,
@@ -873,7 +873,7 @@ def plot_global_trajectory_overlay_fixed(
 
     n_trials = df.groupby(group_cols).ngroups
     ax.set_title(
-        f"Unified Trajectory Overlay (fixed)  (n={n_trials} trials)",
+        f"Unified Trajectory Overlay(n={n_trials} trials)",
         fontweight="bold",
     )
 

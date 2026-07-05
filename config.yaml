@@ -32,17 +32,25 @@
 
 
 
-#=======================================
-# baseline_visual
-#========================================
-
 trajectory:
   use_z_degree_to_draw: true
   use_escape_onset_heading: true
   use_escape_onset_only_xy: true
   use_angular_velocity_offset: false
   dz_integration_range: "escape_interval"
-  use_rigid_rotation: false
+  use_rigid_rotation: true
+
+#=======================================
+# baseline_visual
+#========================================
+
+# trajectory:
+#   use_z_degree_to_draw: true
+#   use_escape_onset_heading: true
+#   use_escape_onset_only_xy: true
+#   use_angular_velocity_offset: false
+#   dz_integration_range: "escape_interval"
+#   use_rigid_rotation: false
 
 #=======================================
 # traditional logic
