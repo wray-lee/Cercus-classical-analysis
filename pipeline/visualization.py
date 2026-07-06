@@ -30,6 +30,7 @@ from .constants import (
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
+    TRAJ_USE_ESCAPE_ONSET_HEADING,
     TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
     TRAJ_USE_RIGID_ROTATION,
     TRAJ_USE_Z_DEGREE,
@@ -119,6 +120,8 @@ def _integrate_body_trajectory(
     use_heading: bool = True,
     use_rigid_rotation: bool = True,
     macro_yaw_override: float | None = None,
+    heading_dz: np.ndarray | None = None,
+    heading_offset: float = 0.0,
     src_idx: np.ndarray | None = None,
     dst_idx: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
@@ -145,28 +148,38 @@ def _integrate_body_trajectory(
         for Stage 2 rigid rotation.  Used by ``escape_onset_heading`` to
         rotate by the cumulative heading at escape onset instead of the
         integrated dz from the selected range.
+    heading_dz : np.ndarray | None
+        Optional separate dz array for Stage 1 per-frame heading integration.
+        When provided, Stage 1 uses this (typically the full escape-interval dz)
+        to preserve trajectory curvature, while Stage 2 uses *burst_dz* for
+        the rigid macro rotation angle.  Used by ``escape_angular_peak`` to
+        decouple curvature from rotation range.
     src_idx, dst_idx : np.ndarray | None
         Frame indices for heading interpolation when dz and dx arrays have
-        different lengths.  *src_idx* maps to burst_dz, *dst_idx* maps to
-        burst_dx.  Defaults to uniform stretch when None.
+        different lengths.  *src_idx* maps to heading_dz/burst_dz, *dst_idx*
+        maps to burst_dx.  Defaults to uniform stretch when None.
     """
     if len(burst_dx) == 0:
         return None, None
 
     # Stage 1 heading integration is controlled by use_heading (from use_z_degree_to_draw).
     # Stage 2 rigid rotation is controlled by use_rigid_rotation, independently of Stage 1.
+    # heading_dz allows decoupling: Stage 1 uses heading_dz for curvature, Stage 2 uses burst_dz for yaw.
+
+    _heading_dz = heading_dz if heading_dz is not None else burst_dz
 
     if use_heading:
         # ── Stage 1: build curved trajectory via per-frame heading integration ──
-        local_heading = np.cumsum(burst_dz) / RADIUS_MM
+        local_heading = np.cumsum(_heading_dz) / RADIUS_MM
         local_heading -= local_heading[0]
+        local_heading += heading_offset  # initial heading from trial start to escape onset
 
         # Interpolate heading onto the xy grid if lengths differ.
         if len(local_heading) != len(burst_dx):
             if src_idx is None:
-                src_idx = np.arange(len(burst_dz))
+                src_idx = np.arange(len(_heading_dz))
             if dst_idx is None:
-                dst_idx = np.linspace(0, len(burst_dz) - 1, len(burst_dx))
+                dst_idx = np.linspace(0, len(_heading_dz) - 1, len(burst_dx))
             if len(src_idx) >= 2:
                 local_heading = np.interp(dst_idx, src_idx, local_heading)
             else:
@@ -247,7 +260,9 @@ def _body_to_traj(
     grp: pd.DataFrame, mask_xy: np.ndarray, *, use_z: bool,
     use_rigid_rotation: bool = False,
     mask_z: np.ndarray | None = None,
+    heading_dz_mask: np.ndarray | None = None,
     macro_yaw_override: float | None = None,
+    heading_offset: float = 0.0,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """DataFrame wrapper around :func:`_integrate_body_trajectory`.
 
@@ -265,14 +280,19 @@ def _body_to_traj(
     burst_dy = dy_body[mask_xy]
     burst_dz = dz_body[mask_z]
 
-    src_idx = np.flatnonzero(mask_z) if len(burst_dz) != len(burst_dx) else None
-    dst_idx = np.flatnonzero(mask_xy) if len(burst_dz) != len(burst_dx) else None
+    heading_dz = dz_body[heading_dz_mask] if heading_dz_mask is not None else None
+
+    src_ref = heading_dz_mask if heading_dz_mask is not None else mask_z
+    src_idx = np.flatnonzero(src_ref) if len(heading_dz if heading_dz is not None else burst_dz) != len(burst_dx) else None
+    dst_idx = np.flatnonzero(mask_xy) if len(heading_dz if heading_dz is not None else burst_dz) != len(burst_dx) else None
 
     return _integrate_body_trajectory(
         burst_dx, burst_dy, burst_dz,
         use_heading=use_z,
         use_rigid_rotation=use_rigid_rotation,
         macro_yaw_override=macro_yaw_override,
+        heading_dz=heading_dz,
+        heading_offset=heading_offset,
         src_idx=src_idx, dst_idx=dst_idx,
     )
 
@@ -394,6 +414,14 @@ def plot_trajectory_overlay(
                 _macro_yaw_override = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
             else:
                 mask_z = full_mask
+            # Stage 1 always uses full escape interval dz for curvature;
+            # mask_z (controlled by dz_integration_range) only affects Stage 2 yaw.
+            _heading_dz_mask = escape_mask if (_is_escape and escape_mask is not None) else None
+            # use_escape_onset_heading: add initial heading offset to Stage 1.
+            # Skip for "escape_onset_heading" range — theta_init is already the Stage 2 angle.
+            _heading_offset = 0.0
+            if TRAJ_USE_ESCAPE_ONSET_HEADING and _is_escape and dz_integration_range != "escape_onset_heading":
+                _heading_offset = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
 
             if not np.any(mask_xy):
                 continue
@@ -407,7 +435,9 @@ def plot_trajectory_overlay(
             rot_x, rot_y = _body_to_traj(
                 grp, mask_xy, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY,
                 use_rigid_rotation=USE_RIGID_ROTATION, mask_z=mask_z,
+                heading_dz_mask=_heading_dz_mask,
                 macro_yaw_override=_macro_yaw_override,
+                heading_offset=_heading_offset,
             )
             if rot_x is None:
                 continue
@@ -895,6 +925,14 @@ def plot_global_trajectory_overlay_fixed(
             _macro_yaw_override = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
         else:
             mask_z = full_mask
+        # Stage 1 always uses full escape interval dz for curvature;
+        # mask_z (controlled by dz_integration_range) only affects Stage 2 yaw.
+        _heading_dz_mask = escape_mask if (_is_escape and escape_mask is not None) else None
+        # use_escape_onset_heading: add initial heading offset to Stage 1.
+        # Skip for "escape_onset_heading" range — theta_init is already the Stage 2 angle.
+        _heading_offset = 0.0
+        if TRAJ_USE_ESCAPE_ONSET_HEADING and _is_escape and dz_integration_range != "escape_onset_heading":
+            _heading_offset = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
 
         if not np.any(mask_xy):
             continue
@@ -904,7 +942,9 @@ def plot_global_trajectory_overlay_fixed(
         traj_x, traj_y = _body_to_traj(
             grp, mask_xy, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY,
             use_rigid_rotation=USE_RIGID_ROTATION, mask_z=mask_z,
+            heading_dz_mask=_heading_dz_mask,
             macro_yaw_override=_macro_yaw_override,
+            heading_offset=_heading_offset,
         )
         if traj_x is None:
             continue

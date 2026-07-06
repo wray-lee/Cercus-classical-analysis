@@ -266,9 +266,10 @@ def _refine_offset_by_angular_velocity(
 ) -> int | None:
     """Return the index of the first angular-velocity zero-crossing after its peak.
 
-    Searches the angular velocity within ``[onset_idx, offset_idx]``, locates
-    the peak (by absolute value), then scans forward for the first point where
-    the signal crosses zero.  Returns the refined offset **index**, or
+    Searches the angular velocity within ``[onset_idx, offset_idx]``,
+    determines the escape direction from the dominant sign, locates the
+    peak in that direction, then scans forward for the first point
+    where the signal crosses zero.  Returns the refined offset **index**, or
     ``None`` if no valid peak / zero-crossing is found.
     """
     segment = angular_velocity[onset_idx:offset_idx + 1].copy()
@@ -276,8 +277,22 @@ def _refine_offset_by_angular_velocity(
     valid = ~np.isnan(segment)
     if not np.any(valid):
         return None
-    seg_abs = np.abs(segment)
-    peak_local = int(np.nanargmax(seg_abs))
+
+    # Determine escape direction from the FIRST peak (local max of |av|)
+    peak_local = None
+    for i in range(len(segment) - 1):
+        a, b = segment[i], segment[i + 1]
+        if np.isnan(a) or np.isnan(b):
+            continue
+        if abs(a) > 0 and abs(a) >= abs(b):
+            peak_local = i
+            break
+    if peak_local is None:
+        peak_local = int(np.nanargmax(np.abs(segment)))
+    escape_sign = np.sign(segment[peak_local])
+    if escape_sign == 0:
+        return None
+
     # Search forward from peak for sign change (zero crossing)
     for i in range(peak_local, len(segment) - 1):
         a, b = segment[i], segment[i + 1]

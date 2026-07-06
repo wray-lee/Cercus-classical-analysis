@@ -236,6 +236,15 @@ def plot_trial_panel(
         else:
             z_start, z_end = 0, len(dz_body)
 
+        # Stage 1 always uses full escape interval dz for curvature;
+        # z range (controlled by dz_integration_range) only affects Stage 2 yaw.
+        _heading_dz = dz_body[escape_start:escape_end] if _is_escape else None
+        # use_escape_onset_heading: add initial heading offset to Stage 1.
+        # Skip for "escape_onset_heading" range — theta_init is already the Stage 2 angle.
+        _heading_offset = 0.0
+        if use_escape_onset_heading and _is_escape and dz_integration_range != "escape_onset_heading":
+            _heading_offset = np.cumsum(dz_body)[escape_start] / RADIUS_MM
+
         burst_dx = dx_body[xy_start:xy_end]
         burst_dy = dy_body[xy_start:xy_end]
         burst_dz = dz_body[z_start:z_end]
@@ -243,6 +252,8 @@ def plot_trial_panel(
         traj_x, traj_y = _integrate_body_trajectory(
             burst_dx, burst_dy, burst_dz, use_rigid_rotation=True,
             macro_yaw_override=_macro_yaw_override,
+            heading_dz=_heading_dz,
+            heading_offset=_heading_offset,
         )
         if traj_x is None:
             traj_x = np.array([])

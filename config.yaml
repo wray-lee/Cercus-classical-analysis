@@ -20,7 +20,8 @@
 
 #   # if true, the angular velocity offset (from the escape-onset frame) is subtracted from dz before heading integration.
 #   use_angular_velocity_offset: true
-#   # dz integration range for heading & total yaw (rigid mode):
+#   # dz integration range for Stage 2 rigid rotation angle only.
+#   # Stage 1 curvature always uses the full escape interval dz.
 #   # "full_trial"            — all dz frames
 #   # "escape_interval"       — only escape-onset interval
 #   # "trial_to_onset"        — trial start to escape onset
@@ -29,9 +30,9 @@
 #   # "escape_onset_heading"  — rotate by cumsum(dz) at escape onset
 #   #                          (same as use_escape_onset_heading in non-rigid)
 #   dz_integration_range: "escape_interval"
-#   # Rigid global rotation: ignore per-frame heading, linearly accumulate
-#   # dx/dy into a straight base trajectory, then apply the total yaw
-#   # (sum(dz) / RADIUS_MM) as a single rigid-body rotation.
+#   # Rigid global rotation: two-stage decoupled design.
+#   # Stage 1: per-frame heading integration (full escape interval dz) for curvature.
+#   # Stage 2: single rigid-body rotation by dz_integration_range-controlled angle.
 #   use_rigid_rotation: true
 
 
@@ -48,22 +49,22 @@
 # baseline_visual
 #========================================
 
-# trajectory:
-#   use_z_degree_to_draw: true
-#   use_escape_onset_heading: true
-#   use_escape_onset_only_xy: true
-#   use_angular_velocity_offset: false
-#   dz_integration_range: "escape_angular_peak"
-#   use_rigid_rotation: true
-
-
 trajectory:
   use_z_degree_to_draw: true
   use_escape_onset_heading: true
   use_escape_onset_only_xy: true
   use_angular_velocity_offset: false
-  dz_integration_range: "escape_interval"
-  use_rigid_rotation: false
+  dz_integration_range: "escape_angular_peak"
+  use_rigid_rotation: true
+
+
+# trajectory:
+#   use_z_degree_to_draw: true
+#   use_escape_onset_heading: true
+#   use_escape_onset_only_xy: true
+#   use_angular_velocity_offset: false
+#   dz_integration_range: "escape_interval"
+#   use_rigid_rotation: false
 
 #=======================================
 # traditional logic

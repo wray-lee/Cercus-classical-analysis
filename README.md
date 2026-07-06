@@ -85,7 +85,7 @@ All trajectory drawing parameters are centralised in `config.yaml` under the `tr
 | `use_z_degree_to_draw` | bool | `true` | Enable per-frame heading integration from dz. When `false`, dx/dy are used raw. |
 | `use_escape_onset_heading` | bool | `true` | Heading initialisation for non-rigid mode. `true` = rotate by cumulative dz from trial start to escape onset; `false` = reset angle to zero at onset. Only effective when `use_z_degree_to_draw=true`. |
 | `use_escape_onset_only_xy` | bool | `true` | Slice dx/dy to the escape interval only. Applies to both Escape and PreWalk trials. |
-| `dz_integration_range` | str | `"escape_interval"` | Range of dz used for heading integration and total yaw (rigid mode). `"full_trial"`, `"escape_interval"`, or `"trial_to_onset"`. |
+| `dz_integration_range` | str | `"escape_interval"` | Range of dz used for Stage 2 rigid rotation angle. `"full_trial"`, `"escape_interval"`, `"trial_to_onset"`, `"escape_angular_peak"`, or `"escape_onset_heading"`. Stage 1 curvature always uses the full escape interval dz. |
 | `use_rigid_rotation` | bool | `false` | Rigid-body rotation mode: accumulate dx/dy linearly, then apply total yaw as a single rotation. Takes precedence over per-frame heading when `true`. |
 | `use_angular_velocity_offset` | bool | `false` | Refine escape interval offset to the first angular-velocity zero-crossing after its peak. |
 
@@ -95,7 +95,15 @@ All trajectory drawing parameters are centralised in `config.yaml` under the `tr
 Per-frame dynamic heading integration. Each frame's dx/dy is rotated by the accumulated dz up to that point. Preserves local curvature and S-turns.
 
 **Rigid** (`use_rigid_rotation: true`):
-Straight-line accumulation of dx/dy, then a single rigid-body rotation by `sum(dz) / RADIUS_MM`. Produces fan-shaped dispersion without per-frame curvature.
+Two-stage decoupled design:
+- **Stage 1 (curvature)**: per-frame heading integration using the full escape interval dz. Preserves S-turns and local trajectory shape.
+- **Stage 2 (rigid rotation)**: applies a single macro rotation whose angle is determined by `dz_integration_range`:
+  - `"escape_interval"` — `sum(dz)` over the escape interval
+  - `"trial_to_onset"` — `sum(dz)` from trial start to escape onset
+  - `"escape_angular_peak"` — `sum(dz)` from onset to the first angular-velocity zero-crossing after the peak (filters out air-ball rebound)
+  - `"escape_onset_heading"` — cumulative heading at escape onset (`cumsum(dz)[onset] / RADIUS`)
+
+The two stages are independent: changing `dz_integration_range` only affects the rotation angle, not the trajectory curvature.
 
 ## Key Modules
 
