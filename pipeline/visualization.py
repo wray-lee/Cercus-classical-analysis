@@ -35,6 +35,7 @@ from .constants import (
     TRAJ_USE_Z_DEGREE,
     _get_unified_side,
 )
+from .kinematics import _refine_offset_by_angular_velocity
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ def _integrate_body_trajectory(
     *,
     use_heading: bool = True,
     use_rigid_rotation: bool = True,
+    macro_yaw_override: float | None = None,
     src_idx: np.ndarray | None = None,
     dst_idx: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
@@ -138,6 +140,11 @@ def _integrate_body_trajectory(
         Whether to apply Stage 1 per-frame heading integration from dz.
     use_rigid_rotation : bool
         Whether to apply Stage 2 macro rotation (implies Stage 1).
+    macro_yaw_override : float | None
+        If provided, overrides the total yaw computed from ``sum(burst_dz)``
+        for Stage 2 rigid rotation.  Used by ``escape_onset_heading`` to
+        rotate by the cumulative heading at escape onset instead of the
+        integrated dz from the selected range.
     src_idx, dst_idx : np.ndarray | None
         Frame indices for heading interpolation when dz and dx arrays have
         different lengths.  *src_idx* maps to burst_dz, *dst_idx* maps to
@@ -178,7 +185,7 @@ def _integrate_body_trajectory(
     # ── Stage 2: rigid macro rotation (with curvature thresholding) ──
     if use_rigid_rotation:
         total_yaw_rad = np.sum(burst_dz) / RADIUS_MM
-        macro_yaw = total_yaw_rad
+        macro_yaw = macro_yaw_override if macro_yaw_override is not None else total_yaw_rad
 
         # ── Curvature Thresholding ──
         # High-intrinsic-curvature trajectories can suffer start-tangent
@@ -214,10 +221,33 @@ def _integrate_body_trajectory(
     return traj_x, traj_y
 
 
+def _build_angular_peak_dz_mask(
+    angular_velocity: np.ndarray,
+    onset_idx: int,
+    offset_idx: int,
+    total_len: int,
+) -> np.ndarray:
+    """Build a dz mask spanning [onset, angular-velocity peak → zero-crossing].
+
+    Reuses :func:`_refine_offset_by_angular_velocity` to locate the first
+    zero-crossing after the angular-velocity peak within the escape interval.
+    Only dz frames in this direction-consistent range are included, filtering
+    out the rebound phase of the air-floating ball.
+    """
+    mask = np.zeros(total_len, dtype=bool)
+    refined = _refine_offset_by_angular_velocity(
+        np.arange(total_len, dtype=float), angular_velocity, onset_idx, offset_idx,
+    )
+    end = refined if refined is not None else offset_idx
+    mask[onset_idx:end + 1] = True
+    return mask
+
+
 def _body_to_traj(
     grp: pd.DataFrame, mask_xy: np.ndarray, *, use_z: bool,
     use_rigid_rotation: bool = False,
     mask_z: np.ndarray | None = None,
+    macro_yaw_override: float | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """DataFrame wrapper around :func:`_integrate_body_trajectory`.
 
@@ -242,6 +272,7 @@ def _body_to_traj(
         burst_dx, burst_dy, burst_dz,
         use_heading=use_z,
         use_rigid_rotation=use_rigid_rotation,
+        macro_yaw_override=macro_yaw_override,
         src_idx=src_idx, dst_idx=dst_idx,
     )
 
@@ -346,11 +377,21 @@ def plot_trajectory_overlay(
 
             mask_xy = escape_mask if (USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
 
+            _macro_yaw_override = None
             if _is_escape and dz_integration_range == "escape_interval":
                 mask_z = escape_mask
             elif _is_escape and dz_integration_range == "trial_to_onset":
                 mask_z = np.zeros(len(t_vals), dtype=bool)
                 mask_z[:onset_idx] = True
+            elif _is_escape and dz_integration_range == "escape_angular_peak":
+                av = grp["angular_velocity"].values if "angular_velocity" in grp.columns else None
+                if av is not None:
+                    mask_z = _build_angular_peak_dz_mask(av, onset_idx, offset_idx, len(t_vals))
+                else:
+                    mask_z = escape_mask
+            elif _is_escape and dz_integration_range == "escape_onset_heading":
+                mask_z = escape_mask
+                _macro_yaw_override = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
             else:
                 mask_z = full_mask
 
@@ -366,6 +407,7 @@ def plot_trajectory_overlay(
             rot_x, rot_y = _body_to_traj(
                 grp, mask_xy, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY,
                 use_rigid_rotation=USE_RIGID_ROTATION, mask_z=mask_z,
+                macro_yaw_override=_macro_yaw_override,
             )
             if rot_x is None:
                 continue
@@ -836,11 +878,21 @@ def plot_global_trajectory_overlay_fixed(
 
         mask_xy = escape_mask if (USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
 
+        _macro_yaw_override = None
         if _is_escape and dz_integration_range == "escape_interval":
             mask_z = escape_mask
         elif _is_escape and dz_integration_range == "trial_to_onset":
             mask_z = np.zeros(len(t_vals), dtype=bool)
             mask_z[:onset_idx] = True
+        elif _is_escape and dz_integration_range == "escape_angular_peak":
+            av = grp["angular_velocity"].values if "angular_velocity" in grp.columns else None
+            if av is not None:
+                mask_z = _build_angular_peak_dz_mask(av, onset_idx, offset_idx, len(t_vals))
+            else:
+                mask_z = escape_mask
+        elif _is_escape and dz_integration_range == "escape_onset_heading":
+            mask_z = escape_mask
+            _macro_yaw_override = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
         else:
             mask_z = full_mask
 
@@ -852,6 +904,7 @@ def plot_global_trajectory_overlay_fixed(
         traj_x, traj_y = _body_to_traj(
             grp, mask_xy, use_z=USE_Z_DEGREE_TO_DRAW_TRAJECTORY,
             use_rigid_rotation=USE_RIGID_ROTATION, mask_z=mask_z,
+            macro_yaw_override=_macro_yaw_override,
         )
         if traj_x is None:
             continue

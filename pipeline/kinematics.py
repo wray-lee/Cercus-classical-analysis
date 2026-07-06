@@ -263,12 +263,12 @@ def _refine_offset_by_angular_velocity(
     angular_velocity: np.ndarray,
     onset_idx: int,
     offset_idx: int,
-) -> float | None:
-    """Refine escape offset to the first angular-velocity zero-crossing after its peak.
+) -> int | None:
+    """Return the index of the first angular-velocity zero-crossing after its peak.
 
     Searches the angular velocity within ``[onset_idx, offset_idx]``, locates
     the peak (by absolute value), then scans forward for the first point where
-    the signal crosses zero.  Returns the refined offset time in ms, or
+    the signal crosses zero.  Returns the refined offset **index**, or
     ``None`` if no valid peak / zero-crossing is found.
     """
     segment = angular_velocity[onset_idx:offset_idx + 1].copy()
@@ -285,7 +285,7 @@ def _refine_offset_by_angular_velocity(
             continue
         # Zero crossing: sign changes, or either value is exactly 0
         if a * b < 0 or a == 0.0 or b == 0.0:
-            return float(t_rel[onset_idx + i + (0 if a == 0.0 else 1)])
+            return onset_idx + i + (0 if a == 0.0 else 1)
     return None
 
 
@@ -375,11 +375,11 @@ def compute_escape_interval(
 
         # ── Angular velocity offset refinement ──
         if TRAJ_USE_ANGULAR_VELOCITY_OFFSET and angular_velocity is not None:
-            refined = _refine_offset_by_angular_velocity(
+            refined_idx = _refine_offset_by_angular_velocity(
                 t_rel, angular_velocity, interval_onset_idx, interval_offset_idx,
             )
-            if refined is not None:
-                offset_ms = refined
+            if refined_idx is not None:
+                offset_ms = float(t_rel[refined_idx])
 
         return {"interval_ms": offset_ms - onset_ms, "onset_ms": onset_ms, "offset_ms": offset_ms}
     else:
@@ -395,11 +395,11 @@ def compute_escape_interval(
 
             # ── Angular velocity offset refinement ──
             if TRAJ_USE_ANGULAR_VELOCITY_OFFSET and angular_velocity is not None:
-                refined = _refine_offset_by_angular_velocity(
+                refined_idx = _refine_offset_by_angular_velocity(
                     t_rel, angular_velocity, onset_idx, offset_idx,
                 )
-                if refined is not None:
-                    offset_ms = refined
+                if refined_idx is not None:
+                    offset_ms = float(t_rel[refined_idx])
 
             return {"interval_ms": offset_ms - onset_ms, "onset_ms": onset_ms, "offset_ms": offset_ms}
 

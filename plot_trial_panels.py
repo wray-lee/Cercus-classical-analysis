@@ -47,7 +47,7 @@ from pipeline.constants import (
     _get_unified_side,
 )
 from pipeline.io import load_and_concat_sessions, scan_and_pair_sessions
-from pipeline.kinematics import preprocess
+from pipeline.kinematics import _refine_offset_by_angular_velocity, preprocess
 from pipeline.visualization import (
     _add_threshold_lines,
     _draw_side_arrows,
@@ -215,10 +215,24 @@ def plot_trial_panel(
         else:
             xy_start, xy_end = 0, len(dx_body)
 
+        _macro_yaw_override = None
         if dz_integration_range == "escape_interval" and _is_escape:
             z_start, z_end = escape_start, escape_end
         elif dz_integration_range == "trial_to_onset" and _is_escape:
             z_start, z_end = 0, escape_start
+        elif dz_integration_range == "escape_angular_peak" and _is_escape:
+            av = trial["angular_velocity"].values if "angular_velocity" in trial.columns else None
+            if av is not None:
+                refined_idx = _refine_offset_by_angular_velocity(
+                    trial["t_rel"].values, av, escape_start, escape_end,
+                )
+                z_start = escape_start
+                z_end = refined_idx + 1 if refined_idx is not None else escape_end
+            else:
+                z_start, z_end = escape_start, escape_end
+        elif dz_integration_range == "escape_onset_heading" and _is_escape:
+            z_start, z_end = escape_start, escape_end
+            _macro_yaw_override = np.cumsum(dz_body)[escape_start] / RADIUS_MM
         else:
             z_start, z_end = 0, len(dz_body)
 
@@ -228,6 +242,7 @@ def plot_trial_panel(
 
         traj_x, traj_y = _integrate_body_trajectory(
             burst_dx, burst_dy, burst_dz, use_rigid_rotation=True,
+            macro_yaw_override=_macro_yaw_override,
         )
         if traj_x is None:
             traj_x = np.array([])
