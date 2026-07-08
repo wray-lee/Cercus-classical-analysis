@@ -1,6 +1,11 @@
 # ══════════════════════════════════════════════════════════════════════
-# Cercus Framework — Trajectory Drawing Configuration
+# Cercus Framework — Configuration
 # ══════════════════════════════════════════════════════════════════════
+
+# ── Escape Detection Thresholds ──────────────────────────────────────
+escape:
+  start_threshold: 10.0   # mm/s — latency onset anchor (speed exceeds this → escape start)
+  vmax_threshold: 166.0    # mm/s — burst floor for valid escape (v_max must exceed this)
 
 # trajectory:
 #   # Per-frame dynamic heading integration via dz accumulation.
@@ -71,7 +76,7 @@ trajectory:
 #=======================================
 # trajectory:
 #   use_z_degree_to_draw: true
-#   use_escape_onset_heading: false
+#   use_escape_onset_heading: true
 #   use_escape_onset_only_xy: true
 #   use_angular_velocity_offset: false
 #   dz_integration_range: "trial_to_onset"

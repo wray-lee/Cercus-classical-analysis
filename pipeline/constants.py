@@ -41,6 +41,7 @@ def _load_config() -> dict:
 
 _cfg = _load_config()
 _traj_cfg = _cfg.get("trajectory", {})
+_escape_cfg = _cfg.get("escape", {})
 
 TRAJ_USE_Z_DEGREE: bool = bool(_traj_cfg.get("use_z_degree_to_draw", True))
 TRAJ_USE_RIGID_ROTATION: bool = bool(_traj_cfg.get("use_rigid_rotation", False))
@@ -176,8 +177,8 @@ RADIUS_MM: float = 30.0
 # Physical-Threshold Constants
 # ──────────────────────────────────────────────────────────────────────
 
-ESCAPE_VMAX_THRESHOLD: float = 50.0       # mm/s — burst floor for valid escape
-ESCAPE_START_THRESHOLD: float = 10.0      # mm/s — latency onset anchor
+ESCAPE_VMAX_THRESHOLD: float = float(_escape_cfg.get("vmax_threshold", 50.0))    # mm/s — burst floor for valid escape
+ESCAPE_START_THRESHOLD: float = float(_escape_cfg.get("start_threshold", 10.0))  # mm/s — latency onset anchor
 PREWALK_THRESHOLD: float = 10.0           # mm/s — pre-stimulus spontaneous activity
 PREWALK_WINDOW_MS: float = 1000.0         # ms — pre-stimulus validation window
 POST_STIM_BUFFER_MS: float = 50.0         # ms — post-stimulus tail buffer

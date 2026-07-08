@@ -776,6 +776,308 @@ def plot_vmax_distribution(df: pd.DataFrame, figsize: tuple[float, float] = (5.0
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Plot 6b — Population V_max Distribution (All Subjects)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _get_trial_vmax(
+    df: pd.DataFrame,
+    response_filter: list[str] | None = None,
+) -> np.ndarray:
+    """Extract per-trial V_max values, optionally filtered by response_type."""
+    work = df if response_filter is None else df[df["response_type"].isin(response_filter)]
+    return (
+        work.groupby(["subject_id", "global_trial_id"])["v_max"]
+        .first().dropna().values
+    )
+
+
+def _setup_vmax_axes(
+    trial_vmax: np.ndarray,
+    x_upper_override: float | None = None,
+    figsize: tuple[float, float] = (5.5, 4.0),
+) -> tuple[plt.Figure, plt.Axes, float]:
+    """Create figure + axes with histogram + KDE.  Returns (fig, ax, x_upper)."""
+    fig, ax = plt.subplots(figsize=figsize)
+
+    x_upper = x_upper_override if x_upper_override else max(
+        np.percentile(trial_vmax, 99) * 1.15, 200
+    )
+
+    bins = np.linspace(0, x_upper, 51)
+    ax.hist(trial_vmax, bins=bins, density=True, color="#D0D0D0", edgecolor="white",
+            linewidth=0.4, alpha=0.85, label="Histogram", zorder=2)
+
+    kde = gaussian_kde(trial_vmax, bw_method="scott")
+    x_kde = np.linspace(0, x_upper, 500)
+    ax.plot(x_kde, kde(x_kde), color="black", lw=1.2, alpha=0.9, label="KDE", zorder=3)
+
+    return fig, ax, x_upper
+
+
+def _draw_gmm_thresholds(
+    ax: plt.Axes,
+    x_upper: float,
+    gmm_start_threshold: float | None = None,
+    gmm_escape_threshold: float | None = None,
+    iqr_gmm_threshold: float | None = None,
+) -> None:
+    """Draw adaptive GMM threshold lines with staggered labels."""
+    label_y = [0.80, 0.70, 0.60]
+    idx = 0
+
+    if gmm_start_threshold is not None:
+        ax.axvline(gmm_start_threshold, color="#E69F00", ls="--", lw=1.0, alpha=0.9, zorder=4)
+        ax.text(gmm_start_threshold + x_upper * 0.01, ax.get_ylim()[1] * label_y[idx],
+                f"GMM start\n{gmm_start_threshold:.0f}", fontsize=6, color="#E69F00", va="top")
+        idx += 1
+
+    if gmm_escape_threshold is not None:
+        ax.axvline(gmm_escape_threshold, color="#DC0000", ls="--", lw=1.0, alpha=0.9, zorder=4)
+        ax.text(gmm_escape_threshold + x_upper * 0.01, ax.get_ylim()[1] * label_y[idx],
+                f"GMM escape\n{gmm_escape_threshold:.0f}", fontsize=6, color="#DC0000", va="top")
+        idx += 1
+
+    if iqr_gmm_threshold is not None:
+        ax.axvline(iqr_gmm_threshold, color="#3C5488", ls="--", lw=1.0, alpha=0.9, zorder=4)
+        ax.text(iqr_gmm_threshold + x_upper * 0.01, ax.get_ylim()[1] * label_y[idx],
+                f"IQR-GMM\n{iqr_gmm_threshold:.0f}", fontsize=6, color="#3C5488", va="top")
+
+
+def plot_population_vmax_gmm(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (5.5, 4.0),
+    gmm_start_threshold: float | None = None,
+    gmm_escape_threshold: float | None = None,
+    iqr_gmm_threshold: float | None = None,
+    draw_fixed_thresholds: bool = True,
+) -> plt.Figure:
+    """V_max distribution of **all trials** with GMM threshold markers.
+
+    Purpose: threshold determination — shows the full distribution including
+    NoResponse / PreWalk / Escape so the three GMM components are visible.
+    """
+    trial_vmax = _get_trial_vmax(df)  # all response types
+
+    if len(trial_vmax) < 2:
+        log.warning("Insufficient V_max values for GMM plot — skipping.")
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No valid V$_{max}$", ha="center", va="center",
+                transform=ax.transAxes, fontsize=12)
+        return fig
+
+    # Dynamic x-range: cover data + all threshold markers
+    all_t = [t for t in [gmm_start_threshold, gmm_escape_threshold, iqr_gmm_threshold] if t]
+    x_upper = max(np.percentile(trial_vmax, 99) * 1.15,
+                  max(all_t) * 1.1 if all_t else 0, 200)
+
+    fig, ax, x_upper = _setup_vmax_axes(trial_vmax, x_upper, figsize)
+
+    # Fixed reference thresholds
+    if draw_fixed_thresholds:
+        ax.axvline(ESCAPE_VMAX_THRESHOLD, color="black", ls="--", lw=0.75, alpha=0.7, zorder=4)
+        ax.text(ESCAPE_VMAX_THRESHOLD + x_upper * 0.01, ax.get_ylim()[1] * 0.92,
+                f"Vmax\n{ESCAPE_VMAX_THRESHOLD:.0f}", fontsize=6, color="black", va="top")
+
+        ax.axvline(ESCAPE_START_THRESHOLD, color="0.5", ls="--", lw=0.75, alpha=0.7, zorder=4)
+        ax.text(ESCAPE_START_THRESHOLD + x_upper * 0.01, ax.get_ylim()[1] * 0.92,
+                f"Start\n{ESCAPE_START_THRESHOLD:.0f}", fontsize=6, color="0.5", va="top")
+
+    _draw_gmm_thresholds(ax, x_upper, gmm_start_threshold, gmm_escape_threshold, iqr_gmm_threshold)
+
+    ax.set_xlim(0, x_upper)
+    ax.set_xlabel("$V_{max}$ (mm/s)")
+    ax.set_ylabel("Probability Density")
+    ax.set_title("$V_{max}$ Distribution — All Trials (Threshold Determination)", fontweight="bold")
+    ax.legend(loc="upper right", frameon=False, fontsize=6)
+
+    n_subjects = df["subject_id"].nunique()
+    ax.text(0.97, 0.70, f"n = {len(trial_vmax)} trials\n({n_subjects} subjects)",
+            transform=ax.transAxes, ha="right", va="top", fontsize=7,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8"))
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+def plot_population_vmax_response(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (5.5, 4.0),
+    auto_threshold: float | None = None,
+    draw_fixed_thresholds: bool = True,
+) -> plt.Figure:
+    """V_max distribution of **Escape + PreWalk** trials only.
+
+    Purpose: effective-response inspection — excludes NoResponse noise to
+    focus on the shape of actual movement responses.
+    """
+    trial_vmax = _get_trial_vmax(df, response_filter=["Escape", "PreWalk"])
+
+    if len(trial_vmax) < 2:
+        log.warning("Insufficient Escape+PreWalk V_max values — skipping.")
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No valid V$_{max}$", ha="center", va="center",
+                transform=ax.transAxes, fontsize=12)
+        return fig
+
+    x_upper = max(np.percentile(trial_vmax, 99) * 1.15,
+                  auto_threshold * 1.1 if auto_threshold else 0, 200)
+
+    fig, ax, x_upper = _setup_vmax_axes(trial_vmax, x_upper, figsize)
+
+    # Fixed reference thresholds
+    if draw_fixed_thresholds:
+        ax.axvline(ESCAPE_VMAX_THRESHOLD, color="black", ls="--", lw=0.75, alpha=0.7, zorder=4)
+        ax.text(ESCAPE_VMAX_THRESHOLD + x_upper * 0.01, ax.get_ylim()[1] * 0.92,
+                f"Vmax\n{ESCAPE_VMAX_THRESHOLD:.0f}", fontsize=6, color="black", va="top")
+
+    # Active threshold used for tagging
+    if auto_threshold is not None:
+        ax.axvline(auto_threshold, color="#DC0000", ls="--", lw=1.0, alpha=0.9, zorder=4)
+        ax.text(auto_threshold + x_upper * 0.01, ax.get_ylim()[1] * 0.80,
+                f"Threshold\n{auto_threshold:.0f}", fontsize=6, color="#DC0000", va="top")
+
+    # Per-type coloring in the info box
+    n_esc = len(_get_trial_vmax(df, response_filter=["Escape"]))
+    n_pw = len(_get_trial_vmax(df, response_filter=["PreWalk"]))
+    n_subjects = df["subject_id"].nunique()
+    ax.text(0.97, 0.70, f"Escape: {n_esc}  PreWalk: {n_pw}\n({n_subjects} subjects)",
+            transform=ax.transAxes, ha="right", va="top", fontsize=7,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8"))
+
+    ax.set_xlim(0, x_upper)
+    ax.set_xlabel("$V_{max}$ (mm/s)")
+    ax.set_ylabel("Probability Density")
+    ax.set_title("$V_{max}$ Distribution — Escape + PreWalk (Effective Responses)", fontweight="bold")
+    ax.legend(loc="upper right", frameon=False, fontsize=6)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 6c — Population Habituation / Fatigue Curve (All Subjects)
+# ══════════════════════════════════════════════════════════════════════
+
+_NPG8 = ["#E64B35", "#4DBBD5", "#00A087", "#3C5488",
+         "#F39B7F", "#8491B4", "#91D1C2", "#DC0000"]
+
+
+def plot_population_habituation(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (10, 4.5),
+) -> plt.Figure:
+    """Population fatigue curve: per-subject lines + mean±SEM ribbon."""
+    trial_df = (
+        df.groupby(["subject_id", "global_trial_index"])
+        .agg(v_max=("v_max", "first"), response_type=("response_type", "first"))
+        .reset_index()
+    )
+    trial_df = trial_df.sort_values(["subject_id", "global_trial_index"])
+
+    subjects = sorted(trial_df["subject_id"].unique())
+    all_indices = sorted(trial_df["global_trial_index"].unique())
+
+    # ── Per-subject lines ──
+    subject_pivots: list[pd.Series] = []
+    for subj in subjects:
+        sdf = trial_df[trial_df["subject_id"] == subj].set_index("global_trial_index")["v_max"]
+        subject_pivots.append(sdf)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, (subj, sdf) in enumerate(zip(subjects, subject_pivots)):
+        color = _NPG8[i % len(_NPG8)]
+        ax.plot(sdf.index, sdf.values, color=color, lw=0.7, alpha=0.35, zorder=1)
+
+    # ── Population mean ± SEM ribbon ──
+    pivot_df = pd.DataFrame({subj: sdf for subj, sdf in zip(subjects, subject_pivots)})
+    pivot_df = pivot_df.reindex(all_indices)
+    mean = pivot_df.mean(axis=1)
+    sem = pivot_df.sem(axis=1)
+
+    ax.plot(mean.index, mean.values, color="black", lw=2.0, alpha=0.9, zorder=3,
+            label="Mean ± SEM")
+    ax.fill_between(mean.index, (mean - sem).values, (mean + sem).values,
+                    color="black", alpha=0.12, zorder=2)
+
+    # ── Threshold lines ──
+    x_max = max(all_indices)
+    ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", linestyle="--", linewidth=0.75, alpha=0.7)
+    ax.text(x_max + 0.3, ESCAPE_VMAX_THRESHOLD, f"{ESCAPE_VMAX_THRESHOLD:.0f}",
+            ha="left", va="center", fontsize=6, color="k", alpha=0.7)
+
+    ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", linestyle="--", linewidth=0.5, alpha=0.5)
+    ax.text(x_max + 0.3, ESCAPE_START_THRESHOLD, f"{ESCAPE_START_THRESHOLD:.0f}",
+            ha="left", va="center", fontsize=6, color="0.5", alpha=0.5)
+
+    ax.set_xlabel("Global Trial Index")
+    ax.set_ylabel("$V_{max}$ (mm/s)")
+    ax.set_title("Population Habituation Curve", fontweight="bold")
+    ax.set_xlim(0.5, x_max + 0.5)
+
+    # ── Per-subject legend (small, in a box) ──
+    from matplotlib.lines import Line2D
+    handles = [Line2D([0], [0], color=_NPG8[i % len(_NPG8)], lw=1.0, label=s)
+               for i, s in enumerate(subjects)]
+    handles.append(Line2D([0], [0], color="black", lw=2.0, label="Mean ± SEM"))
+    ax.legend(handles=handles, loc="upper right", frameon=False, fontsize=5,
+              ncol=max(1, len(subjects) // 4 + 1))
+
+    n_subjects = len(subjects)
+    n_trials = len(trial_df)
+    ax.text(0.02, 0.97, f"{n_subjects} subjects, {n_trials} trials",
+            transform=ax.transAxes, ha="left", va="top", fontsize=7,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8"))
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 6d — Population Behavior Probability Distribution
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_population_behavior_probability(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (4.5, 3.5),
+) -> plt.Figure:
+    """Bar chart of Escape / PreWalk / NoResponse proportions across all subjects."""
+    trial_level = (
+        df.groupby(["subject_id", "global_trial_index"])["response_type"]
+        .first().reset_index()
+    )
+    counts = trial_level["response_type"].value_counts()
+    total = counts.sum()
+
+    categories = ["Escape", "PreWalk", "NoResponse"]
+    values = [counts.get(c, 0) / total if total > 0 else 0.0 for c in categories]
+    colors = [COLOR_ESCAPE, COLOR_PREWALK, COLOR_NO_RESPONSE]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bars = ax.bar(categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85)
+
+    for bar, val in zip(bars, values):
+        if val > 0.02:
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                    f"{val:.1%}", ha="center", va="bottom", fontsize=8)
+
+    n_subjects = df["subject_id"].nunique()
+    ax.set_ylabel("Proportion")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("Behavior Probability Distribution", fontweight="bold")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.text(0.97, 0.97, f"{total} trials\n({n_subjects} subjects)",
+            transform=ax.transAxes, ha="right", va="top", fontsize=7,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8"))
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Plot 7 — Single-Trial Speed Kinetics (Escape or PreWalk)
 # ══════════════════════════════════════════════════════════════════════
 

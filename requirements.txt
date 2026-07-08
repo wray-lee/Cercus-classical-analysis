@@ -2,6 +2,7 @@ numpy
 pandas
 matplotlib
 scipy
+scikit-learn
 pyyaml
 pymc
 arviz

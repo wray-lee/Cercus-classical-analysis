@@ -32,7 +32,7 @@ Cercus-cli/
 ├── plot_trial_panels.py         # Per-trial composite panels (speed, angvel, stimulus, trajectory)
 ├── plot_all_trajectories_fixed.py  # Unified trajectory overlay across all subjects
 ├── mcmc_analysis.py             # Bayesian MCMC psychophysics analysis
-├── population_analysis.py       # Cross-subject batch summary (zero-rendering)
+├── population_analysis.py       # Cross-subject batch: adaptive threshold + population visualization
 ├── config.yaml                  # Trajectory drawing configuration
 ├── requirements.txt
 ├── pipeline/
@@ -60,8 +60,8 @@ python plot_trial_panels.py --input-dir path/to/data/ --save figures/
 # Unified trajectory overlay
 python plot_all_trajectories_fixed.py --input-dir path/to/data/ --save trajectories.svg
 
-# Population summary (no rendering)
-python population_analysis.py --input-dir path/to/data/ --output-csv population_summary.csv
+# Population batch: adaptive threshold + summary CSV + population figures
+python population_analysis.py --input-dir path/to/data/ --output-dir results/
 
 # Bayesian MCMC analysis
 python mcmc_analysis.py --input-dir path/to/data/ --output-dir results/
@@ -116,6 +116,41 @@ Ternary state classifier. Priority order: (1) NoResponse if no valid burst, (2) 
 ### `pipeline/visualization.py`
 Publication-grade plotting (Nature/Science/Cell style). Includes trajectory overlay, speed kinetics, spaghetti plots, behavior probability, habituation curves, V_max distribution, and the two-stage trajectory integration algorithm (local heading + curvature-thresholded rigid rotation).
 
+### `population_analysis.py`
+
+Cross-subject batch processor. Scans an input directory, runs the full preprocess → classify pipeline on every subject, and outputs unified summary CSV plus population-level visualizations.
+
+#### Adaptive V_max Threshold
+
+Computes three candidate thresholds independently on **all trials** (not filtered by classification), then selects one for tagging via a priority cascade. Using all trials decouples the adaptive threshold from the fixed `ESCAPE_VMAX_THRESHOLD`, avoiding circular dependency.
+
+| Priority | Method | Domain | Key Idea |
+|---|---|---|---|
+| 1 | **KDE Valley** | Physical | Fits a KDE curve (`bw_method=0.3`), detects peaks via `argrelmax`, locates the deepest trough between the first two peaks via `argrelmin`. Returns `None` if fewer than 2 peaks are found. |
+| 2 | **Log-GMM (3-component)** | Log-space | Applies `np.log()` to compress the right tail, fits a **3-component** `GaussianMixture` on **all trials** (no classification dependency), producing two intersection points: `start_threshold` (no-response vs movement) and `escape_threshold` (movement vs burst). Back-transforms with `np.exp()`. |
+| 3 | **IQR-GMM** | Physical (adaptive truncation) | Computes `upper_bound = Q3 + 1.5 * IQR` as a data-driven ceiling, truncates outliers above it, then fits a 2-component GMM in the original physical domain. Disabled by default (`_ENABLE_IQR_GMM = False`). |
+| 4 | Hardcoded fallback | — | Falls back to 120 mm/s if all methods fail. |
+
+The Log-GMM produces **two** thresholds from a single fit:
+
+| Threshold | Meaning | Typical range |
+|---|---|---|
+| `start_threshold` | No-response vs any movement | ~20 mm/s |
+| `escape_threshold` | Weak movement vs escape burst | ~160 mm/s |
+
+`escape_threshold` is used for `is_valid_escape` tagging and per-subject escape rates. The V_max distribution plot displays both thresholds (orange = start, red = escape) plus the IQR-GMM threshold (blue) if enabled.
+
+#### Population Visualizations
+
+Three SVG figures are generated (headless rendering via `matplotlib.use("Agg")`):
+
+| Figure | Purpose | Content |
+|---|---|---|
+| `habituation.svg` | Fatigue inspection | Per-subject V_max traces + mean ± SEM ribbon across trial sequence |
+| `vmax_gmm.svg` | **Threshold determination** | All trials (Escape + PreWalk + NoResponse) histogram + KDE, with GMM start (orange `#E69F00`), GMM escape (red `#DC0000`), optional IQR-GMM (blue `#3C5488`), and fixed reference lines (50 / 10 mm/s) |
+| `vmax_response.svg` | **Effective response inspection** | Escape + PreWalk only histogram + KDE, with the active tagging threshold (red) — excludes NoResponse noise |
+| `behavior_prob.svg` | Response proportions | Escape / PreWalk / NoResponse bar chart across all subjects |
+
 ### `pipeline/mcmc.py`
 Bayesian psychophysics via PyMC/NumPyro. Fits psychometric sigmoid functions to escape probability vs. TTC, tests multisensory integration hypotheses (ROPE-based posterior probability), computes Bayesian optimal integration (variance reduction), and performs survival analysis (Kaplan-Meier, Race Model Inequality).
 
@@ -136,6 +171,8 @@ python mcmc_analysis.py --input-dir data/ --output-dir results/ --binary-mode es
 
 ## Output Structure
 
+### Single-subject pipeline (`main.py`)
+
 ```
 figures/
 └── <subject>/
@@ -144,12 +181,25 @@ figures/
     └── no_response/    trial_<N>_noresponse.svg
 ```
 
+### Population batch (`population_analysis.py`)
+
+```
+<output-dir>/
+├── population_summary.csv      # Per-trial metrics with is_valid_escape tagging
+├── subject_escape_rates.csv    # Per-subject escape rate summary
+├── habituation.svg             # Fatigue curve: per-subject lines + mean±SEM ribbon
+├── vmax_gmm.svg                # All trials V_max + GMM threshold lines (threshold determination)
+├── vmax_response.svg           # Escape+PreWalk V_max only (effective response inspection)
+└── behavior_prob.svg           # Escape / PreWalk / NoResponse proportion bar chart
+```
+
 ## Dependencies
 
 | Package | Purpose |
 |---|---|
 | `numpy`, `pandas` | Array computation, DataFrame manipulation |
 | `matplotlib`, `scipy` | Figure generation, Savitzky-Golay smoothing |
+| `scikit-learn` | Gaussian Mixture Model for adaptive V_max threshold |
 | `pyyaml` | `config.yaml` parsing |
 | `pymc`, `arviz` | Bayesian MCMC model specification and diagnostics |
 | `numpyro`, `jax`, `jaxlib` | JAX-based NUTS sampler (10–100× faster, optional) |
