@@ -5,7 +5,7 @@
 # ── Escape Detection Thresholds ──────────────────────────────────────
 escape:
   start_threshold: 10.0   # mm/s — latency onset anchor (speed exceeds this → escape start)
-  vmax_threshold: 166.0    # mm/s — burst floor for valid escape (v_max must exceed this)
+  vmax_threshold: 50.0    # mm/s — burst floor for valid escape (v_max must exceed this)
 
 # trajectory:
 #   # Per-frame dynamic heading integration via dz accumulation.

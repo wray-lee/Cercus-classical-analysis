@@ -29,6 +29,7 @@ from pipeline.classifier import label_trials
 from pipeline.io import export_summary_metrics, load_and_concat_sessions, scan_and_pair_sessions
 from pipeline.kinematics import preprocess
 from pipeline.visualization import (
+    plot_escape_angle_distribution,
     plot_population_behavior_probability,
     plot_population_habituation,
     plot_population_vmax_gmm,
@@ -427,7 +428,11 @@ def main(argv: list[str] | None = None) -> None:
     fig4.savefig(output_dir / "behavior_prob.svg", dpi=300, bbox_inches="tight")
     plt.close(fig4)
 
-    log.info("Figures saved: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg")
+    fig5 = plot_escape_angle_distribution(all_data)
+    fig5.savefig(output_dir / "escape_angle_distribution.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig5)
+
+    log.info("Figures saved: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, escape_angle_distribution.svg")
     log.info("All output in: %s", output_dir)
 
 

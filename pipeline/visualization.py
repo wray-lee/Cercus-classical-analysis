@@ -1275,3 +1275,159 @@ def plot_global_trajectory_overlay_fixed(
     fig.tight_layout(pad=1.0)
     return fig
 
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 10 — Escape Angle Distribution (Escape vs PreWalk)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_escape_angle_distribution(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (6.0, 4.0),
+    bins: int = 36,
+) -> plt.Figure:
+    """Histogram + KDE of final escape angles for Escape and PreWalk trials.
+
+    The escape angle is defined as the angle (in degrees) from the origin
+    to the trajectory endpoint: ``atan2(traj_y[-1], traj_x[-1])``.
+    This reveals the directional dispersion pattern of escape responses.
+    """
+    group_cols = ["subject_id", "global_trial_id"] if "subject_id" in df.columns else ["global_trial_id"]
+    escape_types = ["Escape", "PreWalk"]
+    df_esc = df[df["response_type"].isin(escape_types)].copy()
+
+    if df_esc.empty:
+        log.warning("No Escape/PreWalk trials for angle distribution plot.")
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No Escape / PreWalk trials", ha="center", va="center",
+                transform=ax.transAxes, fontsize=12)
+        return fig
+
+    angles_by_type: dict[str, list[float]] = {"Escape": [], "PreWalk": []}
+
+    for keys, grp in df_esc.groupby(group_cols):
+        grp = grp.sort_values("t_rel")
+        response_type = grp["response_type"].iloc[0]
+        if response_type not in angles_by_type:
+            continue
+
+        t_vals = grp["t_rel"].values
+        _onset_ms = grp["interval_onset_ms"].iloc[0] if "interval_onset_ms" in grp.columns else np.nan
+        _offset_ms = grp["interval_offset_ms"].iloc[0] if "interval_offset_ms" in grp.columns else np.nan
+
+        _is_valid = pd.notna(_onset_ms) and pd.notna(_offset_ms)
+        if _is_valid:
+            onset_idx = int(np.argmin(np.abs(t_vals - _onset_ms)))
+            offset_idx = int(np.argmin(np.abs(t_vals - _offset_ms)))
+            if onset_idx >= offset_idx:
+                offset_idx = min(onset_idx + 1, len(t_vals) - 1)
+            escape_mask = np.zeros(len(t_vals), dtype=bool)
+            escape_mask[onset_idx:offset_idx] = True
+        else:
+            escape_mask = None
+
+        full_mask = np.ones(len(t_vals), dtype=bool)
+        mask_xy = escape_mask if (TRAJ_USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
+
+        _macro_yaw_override = None
+        if _is_valid and DZ_INTEGRATION_RANGE == "escape_interval":
+            mask_z = escape_mask
+        elif _is_valid and DZ_INTEGRATION_RANGE == "trial_to_onset":
+            mask_z = np.zeros(len(t_vals), dtype=bool)
+            mask_z[:onset_idx] = True
+        elif _is_valid and DZ_INTEGRATION_RANGE == "escape_angular_peak":
+            av = grp["angular_velocity"].values if "angular_velocity" in grp.columns else None
+            if av is not None:
+                mask_z = _build_angular_peak_dz_mask(av, onset_idx, offset_idx, len(t_vals))
+            else:
+                mask_z = escape_mask
+        elif _is_valid and DZ_INTEGRATION_RANGE == "escape_onset_heading":
+            mask_z = escape_mask
+            _macro_yaw_override = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
+        else:
+            mask_z = full_mask
+
+        _heading_dz_mask = escape_mask if (_is_valid and escape_mask is not None) else None
+        _heading_offset = 0.0
+        if TRAJ_USE_ESCAPE_ONSET_HEADING and _is_valid and DZ_INTEGRATION_RANGE != "escape_onset_heading":
+            _heading_offset = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
+
+        if not np.any(mask_xy):
+            continue
+
+        traj_x, traj_y = _body_to_traj(
+            grp, mask_xy, use_z=TRAJ_USE_Z_DEGREE,
+            use_rigid_rotation=TRAJ_USE_RIGID_ROTATION, mask_z=mask_z,
+            heading_dz_mask=_heading_dz_mask,
+            macro_yaw_override=_macro_yaw_override,
+            heading_offset=_heading_offset,
+        )
+        if traj_x is None or len(traj_x) < 2:
+            continue
+
+        angle_deg = float(np.degrees(np.arctan2(traj_y[-1], traj_x[-1])))
+        angles_by_type[response_type].append(angle_deg)
+
+    esc_angles = np.array(angles_by_type["Escape"])
+    pw_angles = np.array(angles_by_type["PreWalk"])
+
+    if len(esc_angles) == 0 and len(pw_angles) == 0:
+        log.warning("No valid trajectory endpoints for angle distribution.")
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No valid escape angles", ha="center", va="center",
+                transform=ax.transAxes, fontsize=12)
+        return fig
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bin_edges = np.linspace(-180, 180, bins + 1)
+
+    # Optional KDE x-grid
+    x_kde = np.linspace(-180, 180, 300)
+
+    import matplotlib.colors as mcolors
+
+    # Cell style high-contrast palette
+    color_esc = COLOR_ESCAPE   # #ED0000 (Crimson Red)
+    color_pw = COLOR_PREWALK   # #00468B (Navy Blue)
+
+    # 独立控制透明度：面透明(35%)，边框不透明(100%)
+    fc_esc = mcolors.to_rgba(color_esc, 0.35)
+    fc_pw = mcolors.to_rgba(color_pw, 0.35)
+
+    # 中心参考线
+    ax.axvline(0, color="#9CA3AF", linestyle="--", linewidth=1.0, alpha=0.5, zorder=0)
+
+    if len(esc_angles) > 0:
+        # 直方图：每个 Bin 都有清晰的不透明边框
+        ax.hist(esc_angles, bins=bin_edges, density=True,
+                facecolor=fc_esc, edgecolor=color_esc, linewidth=1.2,
+                label=f"Escape (n={len(esc_angles)})", zorder=1)
+        # KDE 密度曲线
+        if len(esc_angles) > 1:
+            kde_esc = gaussian_kde(esc_angles, bw_method="scott")
+            ax.plot(x_kde, kde_esc(x_kde), color=color_esc, lw=2.5, alpha=0.9, zorder=3)
+
+    if len(pw_angles) > 0:
+        # 直方图：每个 Bin 都有清晰的不透明边框
+        ax.hist(pw_angles, bins=bin_edges, density=True,
+                facecolor=fc_pw, edgecolor=color_pw, linewidth=1.2,
+                label=f"PreWalk (n={len(pw_angles)})", zorder=1)
+        # KDE 密度曲线
+        if len(pw_angles) > 1:
+            kde_pw = gaussian_kde(pw_angles, bw_method="scott")
+            ax.plot(x_kde, kde_pw(x_kde), color=color_pw, lw=2.5, alpha=0.9, zorder=3)
+
+    ax.set_xlabel("Escape Angle (°)")
+    ax.set_ylabel("Probability Density")
+    ax.set_title("Final Escape Angle Distribution", fontweight="bold")
+    ax.set_xlim(-180, 180)
+    ax.set_xticks(np.arange(-180, 181, 45))
+    ax.legend(loc="upper right", frameon=False, fontsize=9)
+
+    # 极简背景网格：使用超浅实线取代虚线，符合现代顶刊规范
+    ax.yaxis.grid(True, color="#E5E7EB", linestyle="-", linewidth=0.5, alpha=0.8)
+    ax.set_axisbelow(True)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+

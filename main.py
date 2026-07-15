@@ -27,6 +27,7 @@ from pipeline.io import export_summary_metrics, load_and_concat_sessions, scan_a
 from pipeline.kinematics import preprocess
 from pipeline.visualization import (
     plot_behavior_probability,
+    plot_escape_angle_distribution,
     plot_habituation_curve,
     plot_single_trial_kinetics,
     plot_spaghetti_kinetics,
@@ -237,6 +238,12 @@ def main(argv: list[str] | None = None) -> None:
             fig_vmax.savefig(subject_dir / "vmax_distribution_diagnostic.svg", bbox_inches="tight")
             plt.close(fig_vmax)
             log.info("V_max distribution diagnostic saved to %s", subject_dir)
+
+            # ── Escape angle distribution (Escape vs PreWalk) ──
+            fig_angle = plot_escape_angle_distribution(df)
+            fig_angle.savefig(subject_dir / "escape_angle_distribution.svg", bbox_inches="tight")
+            plt.close(fig_angle)
+            log.info("Escape angle distribution saved to %s", subject_dir)
 
             # ── Individual Escape trial export ──
             _generate_individual_trial_figures(
