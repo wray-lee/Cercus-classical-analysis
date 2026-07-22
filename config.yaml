@@ -2,10 +2,17 @@
 # Cercus Framework — Configuration
 # ══════════════════════════════════════════════════════════════════════
 
+# ── Visualization Style ──────────────────────────────────────────────
+# bar_label_style controls how percentage labels are shown on bar charts.
+#   "inline"     — label inside bar (default, intuitive)
+#   "axis"       — label via horizontal dashed line to y-axis (publication style)
+visualization:
+  bar_label_style: "inline"
+
 # ── Escape Detection Thresholds ──────────────────────────────────────
 escape:
   start_threshold: 10.0   # mm/s — latency onset anchor (speed exceeds this → escape start)
-  vmax_threshold: 50.0    # mm/s — burst floor for valid escape (v_max must exceed this)
+  vmax_threshold: 98.0    # mm/s — burst floor for valid escape (v_max must exceed this)
 
 # trajectory:
 #   # Per-frame dynamic heading integration via dz accumulation.

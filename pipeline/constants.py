@@ -6,6 +6,7 @@ Centralised configuration for thresholds, geometry, and Nature/Science rcParams.
 
 from __future__ import annotations
 
+import enum
 import logging
 from pathlib import Path
 
@@ -42,6 +43,25 @@ def _load_config() -> dict:
 _cfg = _load_config()
 _traj_cfg = _cfg.get("trajectory", {})
 _escape_cfg = _cfg.get("escape", {})
+_viz_cfg = _cfg.get("visualization", {})
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Visualization Style Enum
+# ──────────────────────────────────────────────────────────────────────
+
+class BarLabelStyle(enum.Enum):
+    """Bar chart percentage label placement style."""
+    INLINE = "inline"      # label inside bar (intuitive)
+    AXIS = "axis"          # label via dashed line to y-axis (publication style)
+
+
+BAR_LABEL_STYLE: BarLabelStyle = BarLabelStyle(_viz_cfg.get("bar_label_style", "inline"))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Trajectory Configuration
+# ──────────────────────────────────────────────────────────────────────
 
 TRAJ_USE_Z_DEGREE: bool = bool(_traj_cfg.get("use_z_degree_to_draw", True))
 TRAJ_USE_RIGID_ROTATION: bool = bool(_traj_cfg.get("use_rigid_rotation", False))
@@ -131,6 +151,11 @@ COLOR_OSCI_HW: str = "#E69F00"       # Sand Orange (hardware stimulus background
 COLOR_ESCAPE: str = "#ED0000"
 COLOR_PREWALK: str = "#00468B"
 COLOR_NO_RESPONSE: str = "#7C878E"
+# Stillness binary pair (plot_prewalk_stillness): neutral rock-grey for the
+# "without" state so it reads as a true present/absent contrast, not a lighter
+# shade of the same blue (avoids the original #B0C4DE light-steel-blue look).
+COLOR_WITH_STILLNESS: str = COLOR_PREWALK      # deep navy — the signal state
+COLOR_NO_STILLNESS: str = "#5B6770"            # neutral rock-grey — absence
 
 
 # ── NPG (Nature Publishing Group) colour palette ─────────────────────

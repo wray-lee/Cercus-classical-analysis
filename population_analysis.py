@@ -32,8 +32,10 @@ from pipeline.visualization import (
     plot_escape_angle_distribution,
     plot_population_behavior_probability,
     plot_population_habituation,
+    plot_population_polar_histogram,
     plot_population_vmax_gmm,
     plot_population_vmax_response,
+    plot_prewalk_stillness,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -428,11 +430,19 @@ def main(argv: list[str] | None = None) -> None:
     fig4.savefig(output_dir / "behavior_prob.svg", dpi=300, bbox_inches="tight")
     plt.close(fig4)
 
+    fig4b = plot_prewalk_stillness(all_data)
+    fig4b.savefig(output_dir / "prewalk_stillness.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig4b)
+
     fig5 = plot_escape_angle_distribution(all_data)
     fig5.savefig(output_dir / "escape_angle_distribution.svg", dpi=300, bbox_inches="tight")
     plt.close(fig5)
 
-    log.info("Figures saved: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, escape_angle_distribution.svg")
+    fig6 = plot_population_polar_histogram(all_data)
+    fig6.savefig(output_dir / "polar_direction_histogram.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig6)
+
+    log.info("Figures saved: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, escape_angle_distribution.svg, polar_direction_histogram.svg")
     log.info("All output in: %s", output_dir)
 
 

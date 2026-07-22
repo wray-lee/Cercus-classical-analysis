@@ -8,25 +8,31 @@ from __future__ import annotations
 
 import logging
 
+import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import gaussian_kde
+from scipy.stats import circmean, gaussian_kde
 
 from .constants import (
+    BAR_LABEL_STYLE,
     COLOR_CONTROL,
     COLOR_ESCAPE,
     COLOR_LEFT,
     COLOR_NO_RESPONSE,
+    COLOR_NO_STILLNESS,
     COLOR_OSCI_HW,
     COLOR_OSCI_VIS,
     COLOR_PREWALK,
     COLOR_RIGHT,
+    COLOR_WITH_STILLNESS,
     DZ_INTEGRATION_RANGE,
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
+    PREWALK_THRESHOLD,
+    PREWALK_WINDOW_MS,
     RADIUS_MM,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
@@ -1042,26 +1048,82 @@ def plot_population_habituation(
 def plot_population_behavior_probability(
     df: pd.DataFrame,
     figsize: tuple[float, float] = (4.5, 3.5),
+    bar_label_style: str | None = None,
 ) -> plt.Figure:
-    """Bar chart of Escape / PreWalk / NoResponse proportions across all subjects."""
+    """Bar chart of Escape / PreWalk / NoResponse proportions across all subjects.
+
+    Adds individual scatter points (jittered) showing each subject's
+    probability for each behavior type to visualize individual variation.
+
+    Parameters
+    ----------
+    bar_label_style :
+        Override the default label placement.  If ``None``, the value from
+        ``config.yaml`` (``visualization.bar_label_style``) is used.
+        ``"inline"``  → label inside the bar (intuitive).
+        ``"axis"``    → label via dashed line to y-axis (publication style).
+    """
     trial_level = (
         df.groupby(["subject_id", "global_trial_index"])["response_type"]
         .first().reset_index()
     )
+
+    # ── Overall proportions ──
     counts = trial_level["response_type"].value_counts()
     total = counts.sum()
-
     categories = ["Escape", "PreWalk", "NoResponse"]
     values = [counts.get(c, 0) / total if total > 0 else 0.0 for c in categories]
     colors = [COLOR_ESCAPE, COLOR_PREWALK, COLOR_NO_RESPONSE]
 
+    # ── Per-subject proportions ──
+    subject_probs = (
+        trial_level.groupby("subject_id")["response_type"]
+        .value_counts(normalize=True)
+        .unstack(fill_value=0.0)
+    )
+
     fig, ax = plt.subplots(figsize=figsize)
     bars = ax.bar(categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85)
 
+    # ── Scatter individual subject probabilities ──
+    rng = np.random.default_rng(42)
+    scatter_size = 20
+    scatter_alpha = 0.35
+    jitter_width = 0.15
+
+    for i, (cat, color) in enumerate(zip(categories, colors)):
+        if cat in subject_probs.columns:
+            subj_vals = subject_probs[cat].values
+        else:
+            subj_vals = np.zeros(len(subject_probs))
+
+        jitter = rng.uniform(-jitter_width, jitter_width, size=len(subj_vals))
+        ax.scatter(
+            np.full(len(subj_vals), i) + jitter,
+            subj_vals,
+            s=scatter_size,
+            c=color,
+            alpha=scatter_alpha,
+            edgecolors="white",
+            linewidths=0.5,
+            zorder=5,
+        )
+
+    _style = bar_label_style if bar_label_style is not None else BAR_LABEL_STYLE.value
+
     for bar, val in zip(bars, values):
         if val > 0.02:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                    f"{val:.1%}", ha="center", va="bottom", fontsize=8)
+            if _style == "axis":
+                # Publication style: dashed line from bar tip to y-axis + label on left
+                ax.plot([0, bar.get_x() + bar.get_width() / 2],
+                        [val, val], "k--", lw=0.5, alpha=0.4, zorder=1)
+                ax.text(0.02, val, f"{val:.1%}", ha="left", va="center",
+                        fontsize=7, color="black", fontweight="bold", zorder=10)
+            else:
+                # Inline style: label inside bar near bottom (away from scatter cloud at top).
+                ax.text(bar.get_x() + bar.get_width() / 2, 0.03,
+                        f"{val:.1%}", ha="center", va="bottom", fontsize=8,
+                        color="white", fontweight="bold", zorder=10)
 
     n_subjects = df["subject_id"].nunique()
     ax.set_ylabel("Proportion")
@@ -1069,11 +1131,153 @@ def plot_population_behavior_probability(
     ax.set_title("Behavior Probability Distribution", fontweight="bold")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.text(0.97, 0.97, f"{total} trials\n({n_subjects} subjects)",
-            transform=ax.transAxes, ha="right", va="top", fontsize=7,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8"))
 
     fig.tight_layout(pad=1.0)
+    fig.text(1.02, 0.5, f"{total} trials\n({n_subjects} subjects)",
+             transform=ax.transAxes, ha="left", va="center", fontsize=7,
+             color="0.4")
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 6b — PreWalk Stillness Before Escape Onset
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_prewalk_stillness(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (4.5, 3.5),
+    stillness_threshold: float = ESCAPE_START_THRESHOLD,
+    bar_label_style: str | None = None,
+) -> plt.Figure:
+    """Proportion of PreWalk trials with a stillness point (speed < threshold)
+    in the 1-second window before escape onset.
+
+    For each PreWalk trial, checks whether any frame in
+    [interval_onset_ms - 1000, interval_onset_ms) has speed below
+    *stillness_threshold* (default: ESCAPE_START_THRESHOLD = 10 mm/s).
+
+    Parameters
+    ----------
+    bar_label_style :
+        Override the default label placement.  If ``None``, the value from
+        ``config.yaml`` (``visualization.bar_label_style``) is used.
+        ``"inline"``  → label inside the bar (intuitive).
+        ``"axis"``    → label via dashed line to y-axis (publication style).
+    """
+    trial_level = (
+        df.groupby(["subject_id", "global_trial_index"])
+        .agg(
+            response_type=("response_type", "first"),
+            interval_onset_ms=("interval_onset_ms", "first"),
+        )
+        .reset_index()
+    )
+    prewalk_trials = trial_level[trial_level["response_type"] == "PreWalk"].copy()
+
+    if prewalk_trials.empty:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No PreWalk trials", ha="center", va="center",
+                transform=ax.transAxes, fontsize=10, color="0.5")
+        return fig
+
+    # ── Detect stillness per trial ──
+    has_stillness: dict[tuple, bool] = {}
+    prewalk_keys = set(zip(prewalk_trials["subject_id"], prewalk_trials["global_trial_index"]))
+
+    for (subj, tidx), grp in df.groupby(["subject_id", "global_trial_index"]):
+        if (subj, tidx) not in prewalk_keys:
+            continue
+        onset_ms = grp["interval_onset_ms"].iloc[0]
+        if pd.isna(onset_ms):
+            continue
+        window_mask = (grp["t_rel"] >= onset_ms - PREWALK_WINDOW_MS) & (grp["t_rel"] < onset_ms)
+        window_speed = grp.loc[window_mask, "speed"].dropna()
+        has_stillness[(subj, tidx)] = bool((window_speed < stillness_threshold).any())
+
+    prewalk_trials["has_stillness"] = prewalk_trials.apply(
+        lambda r: has_stillness.get((r["subject_id"], r["global_trial_index"]), False), axis=1
+    )
+
+    # ── Aggregate ──
+    n_with = prewalk_trials["has_stillness"].sum()
+    n_without = len(prewalk_trials) - n_with
+    n_total = len(prewalk_trials)
+    prop_with = n_with / n_total if n_total > 0 else 0.0
+
+    # Per-subject proportions
+    subject_props = (
+        prewalk_trials.groupby("subject_id")["has_stillness"]
+        .mean()
+        .reset_index()
+        .rename(columns={"has_stillness": "prop_stillness"})
+    )
+
+    # ── Plot ──
+    fig, ax = plt.subplots(figsize=figsize)
+    categories = ["With Stillness", "Without Stillness"]
+    values = [prop_with, 1.0 - prop_with]
+    bar_colors = [COLOR_WITH_STILLNESS, COLOR_NO_STILLNESS]  # deep navy vs neutral rock-grey
+
+    bars = ax.bar(categories, values, color=bar_colors, width=0.55, edgecolor="none", alpha=0.85)
+
+    # Scatter per-subject proportions (subtle, behind labels)
+    rng = np.random.default_rng(42)
+    jitter_width = 0.15
+    for i, col in enumerate(["prop_stillness"]):
+        subj_vals = subject_props[col].values
+        jitter = rng.uniform(-jitter_width, jitter_width, size=len(subj_vals))
+        ax.scatter(
+            np.full(len(subj_vals), i) + jitter,
+            subj_vals,
+            s=20,
+            c=bar_colors[i],
+            alpha=0.35,
+            edgecolors="white",
+            linewidths=0.5,
+            zorder=5,
+        )
+    # Mirror: "Without" = 1 - "With"
+    subj_without = 1.0 - subject_props["prop_stillness"].values
+    jitter2 = rng.uniform(-jitter_width, jitter_width, size=len(subj_without))
+    ax.scatter(
+        np.full(len(subj_without), 1) + jitter2,
+        subj_without,
+        s=20,
+        c=bar_colors[1],
+        alpha=0.35,
+        edgecolors="white",
+        linewidths=0.5,
+        zorder=5,
+    )
+
+    _style = bar_label_style if bar_label_style is not None else BAR_LABEL_STYLE.value
+
+    for bar, val, n in zip(bars, values, [n_with, n_without]):
+        if val > 0.02:
+            if _style == "axis":
+                # Publication style: dashed line from bar tip to y-axis + label on left
+                ax.plot([0, bar.get_x() + bar.get_width() / 2],
+                        [val, val], "k--", lw=0.5, alpha=0.4, zorder=1)
+                ax.text(0.02, val, f"{val:.1%} ({n})", ha="left", va="center",
+                        fontsize=7, color="black", fontweight="bold", zorder=10)
+            else:
+                # Inline style: label inside bar near bottom (away from scatter cloud at top).
+                ax.text(bar.get_x() + bar.get_width() / 2, 0.03,
+                        f"{val:.1%}\n({n})", ha="center", va="bottom", fontsize=7,
+                        color="white", fontweight="bold", zorder=10)
+
+    n_subjects = prewalk_trials["subject_id"].nunique()
+    ax.set_ylabel("Proportion of PreWalk Trials")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("PreWalk: Stillness Before Escape Onset", fontweight="bold")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    fig.tight_layout(pad=1.0)
+    fig.text(1.02, 0.5, f"{n_total} PreWalk trials\n({n_subjects} subjects)",
+             transform=ax.transAxes, ha="left", va="center", fontsize=7,
+             color="0.4")
     return fig
 
 
@@ -1384,8 +1588,6 @@ def plot_escape_angle_distribution(
     # Optional KDE x-grid
     x_kde = np.linspace(-180, 180, 300)
 
-    import matplotlib.colors as mcolors
-
     # Cell style high-contrast palette
     color_esc = COLOR_ESCAPE   # #ED0000 (Crimson Red)
     color_pw = COLOR_PREWALK   # #00468B (Navy Blue)
@@ -1419,7 +1621,7 @@ def plot_escape_angle_distribution(
 
     ax.set_xlabel("Escape Angle (°)")
     ax.set_ylabel("Probability Density")
-    ax.set_title("Final Escape Angle Distribution", fontweight="bold")
+    ax.set_title("Escape Angle Distribution", fontweight="bold")
     ax.set_xlim(-180, 180)
     ax.set_xticks(np.arange(-180, 181, 45))
     ax.legend(loc="upper right", frameon=False, fontsize=9)
@@ -1431,3 +1633,210 @@ def plot_escape_angle_distribution(
     fig.tight_layout(pad=1.0)
     return fig
 
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 8 — Aligned Population Polar Direction Histogram
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_population_polar_histogram(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (6.0, 4.8),
+    bins: int = 36,
+) -> plt.Figure:
+    """
+    360° polar rose of population escape-direction dispersion.
+
+    All stimuli are mirrored to the right (Ipsi). Escape / PreWalk endpoint
+    bearings are overlaid as proportional rose histograms (percent of trials
+    per bin) with boundary-corrected wrapped-KDE outlines; arrows mark each
+    group's circular mean direction, their length proportional to the mean
+    resultant length R.
+    """
+    group_cols = ["subject_id", "global_trial_id"] if "subject_id" in df.columns else ["global_trial_id"]
+    escape_types = ["Escape", "PreWalk"]
+    df_esc = df[df["response_type"].isin(escape_types)].copy()
+
+    angles_by_type: dict[str, list[float]] = {"Escape": [], "PreWalk": []}
+
+    for keys, grp in df_esc.groupby(group_cols):
+        grp = grp.sort_values("t_rel")
+        response_type = grp["response_type"].iloc[0]
+
+        t_vals = grp["t_rel"].values
+        _onset_ms = grp["interval_onset_ms"].iloc[0] if "interval_onset_ms" in grp.columns else np.nan
+        _offset_ms = grp["interval_offset_ms"].iloc[0] if "interval_offset_ms" in grp.columns else np.nan
+
+        _is_valid = pd.notna(_onset_ms) and pd.notna(_offset_ms)
+        if _is_valid:
+            onset_idx = int(np.argmin(np.abs(t_vals - _onset_ms)))
+            offset_idx = int(np.argmin(np.abs(t_vals - _offset_ms)))
+            if onset_idx >= offset_idx:
+                offset_idx = min(onset_idx + 1, len(t_vals) - 1)
+            escape_mask = np.zeros(len(t_vals), dtype=bool)
+            escape_mask[onset_idx:offset_idx] = True
+        else:
+            escape_mask = None
+
+        full_mask = np.ones(len(t_vals), dtype=bool)
+        mask_xy = escape_mask if (TRAJ_USE_ESCAPE_ONSET_ONLY_XY and escape_mask is not None) else full_mask
+
+        # 获取 dz 掩码与宏观旋转参数
+        _macro_yaw_override = None
+        if _is_valid and DZ_INTEGRATION_RANGE == "escape_interval":
+            mask_z = escape_mask
+        elif _is_valid and DZ_INTEGRATION_RANGE == "trial_to_onset":
+            mask_z = np.zeros(len(t_vals), dtype=bool)
+            mask_z[:onset_idx] = True
+        elif _is_valid and DZ_INTEGRATION_RANGE == "escape_angular_peak":
+            av = grp["angular_velocity"].values if "angular_velocity" in grp.columns else None
+            if av is not None:
+                mask_z = _build_angular_peak_dz_mask(av, onset_idx, offset_idx, len(t_vals))
+            else:
+                mask_z = escape_mask
+        elif _is_valid and DZ_INTEGRATION_RANGE == "escape_onset_heading":
+            mask_z = escape_mask
+            _macro_yaw_override = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
+        else:
+            mask_z = full_mask
+
+        _heading_dz_mask = escape_mask if (_is_valid and escape_mask is not None) else None
+        _heading_offset = 0.0
+        if TRAJ_USE_ESCAPE_ONSET_HEADING and _is_valid and DZ_INTEGRATION_RANGE != "escape_onset_heading":
+            _heading_offset = np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / RADIUS_MM
+
+        if not np.any(mask_xy):
+            continue
+
+        traj_x, traj_y = _body_to_traj(
+            grp, mask_xy, use_z=TRAJ_USE_Z_DEGREE,
+            use_rigid_rotation=TRAJ_USE_RIGID_ROTATION, mask_z=mask_z,
+            heading_dz_mask=_heading_dz_mask,
+            macro_yaw_override=_macro_yaw_override,
+            heading_offset=_heading_offset,
+        )
+        if traj_x is None or len(traj_x) < 2:
+            continue
+
+        # 核心对齐：统一将刺激映射到右侧 (Ipsi)
+        ss = _get_unified_side(grp)
+        if ss == "left":
+            traj_x = -traj_x  # X轴水平镜像
+
+        # 计算极坐标夹角：arctan2(X, Y) 确保正前方(Y轴)为0度，右侧为90度，左侧为-90度
+        angle_rad = float(np.arctan2(traj_x[-1], traj_y[-1]))
+        angles_by_type[response_type].append(angle_rad)
+
+    esc = np.asarray(angles_by_type["Escape"])
+    pw = np.asarray(angles_by_type["PreWalk"])
+
+    if esc.size == 0 and pw.size == 0:
+        log.warning("No valid trials for polar direction histogram.")
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No valid escape trials", ha="center", va="center",
+                transform=ax.transAxes, fontsize=12, color="0.5")
+        return fig
+
+    from matplotlib.patches import Patch
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
+
+    # ── Canvas: single overlay rose (0° = forward, 90° = Ipsi, clockwise) ──
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="polar")
+
+    ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)
+    # set_thetagrids, not set_xticks: the unordered tick list would collapse
+    # the theta view interval to a quarter circle and clip the outer spine
+    ax.set_thetagrids([0, 90, 180, 270],
+                      ["0°", "90°\nIpsi", "±180°", "−90°\nContra"],
+                      fontsize=9, color="0.2")
+    ax.tick_params(axis="x", pad=6)
+
+    # Recessive solid hairline grid — never dashed
+    ax.grid(True, color="0.88", linewidth=0.7, linestyle="-")
+    ax.set_axisbelow(True)
+
+    bin_edges = np.linspace(-np.pi, np.pi, bins + 1)
+    bin_width = 2 * np.pi / bins
+
+    series = [
+        (name, angles, color)
+        for name, angles, color in
+        [("Escape", esc, COLOR_ESCAPE), ("PreWalk", pw, COLOR_PREWALK)]
+        if angles.size > 0
+    ]
+
+    # Percent of trials per bin → common scale across groups
+    radii_by_name: dict[str, np.ndarray] = {}
+    for name, angles, _color in series:
+        counts, _ = np.histogram(angles, bins=bin_edges)
+        radii_by_name[name] = counts / angles.size * 100.0
+    rmax = max(r.max() for r in radii_by_name.values()) * 1.30
+
+    legend_handles: list[Patch] = []
+    for name, angles, color in series:
+        # Rose: translucent wash fill, adjacent bins separated by surface gaps
+        ax.bar(bin_edges[:-1], radii_by_name[name], width=bin_width, align="edge",
+               facecolor=mcolors.to_rgba(color, 0.30),
+               edgecolor="white", linewidth=0.7, zorder=2)
+
+        # Wrapped-KDE outline (corrected for the ±180° boundary)
+        if angles.size > 1 and np.std(angles) > 1e-6:
+            kde = gaussian_kde(angles, bw_method="scott")
+            x_kde = np.linspace(-np.pi, np.pi, 361)
+            dens = kde(x_kde) + kde(x_kde - 2 * np.pi) + kde(x_kde + 2 * np.pi)
+            dens[0] = dens[-1] = 0.5 * (dens[0] + dens[-1])
+            ax.plot(x_kde, dens * bin_width * 100.0, color=color, lw=2.0,
+                    solid_capstyle="round", zorder=4)
+
+        # Circular mean vector — straight radial shaft, length ∝ resultant R.
+        # Journal-style marker: a hairline shaft with a thin single white halo
+        # (not the heavy capsule the default `-|>` halo gives), straight (no
+        # Bézier curl), and a small filled head. annotate handles the head size
+        # in display pt so it stays ~9pt regardless of R or the radial scale.
+        mu = float(circmean(angles, high=np.pi, low=-np.pi))
+        resultant = float(np.abs(np.exp(1j * angles).mean()))
+        arrow = ax.annotate(
+            "", xy=(mu, resultant * rmax), xytext=(mu, 0.03 * rmax),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=color,
+                lw=1.4,
+                mutation_scale=10,
+                shrinkA=0, shrinkB=0,
+                connectionstyle="arc3,rad=0",  # straight shaft, no Bézier curl
+            ),
+            zorder=5,
+        )
+        arrow.arrow_patch.set_path_effects([
+            path_effects.withStroke(linewidth=2.6, foreground="white")
+        ])
+
+        legend_handles.append(Patch(
+            facecolor=mcolors.to_rgba(color, 0.30), edgecolor=color, linewidth=1.2,
+            label=f"{name} (n = {angles.size})\nμ = {np.degrees(mu):.0f}°, R = {resultant:.2f}",
+        ))
+
+    # ── Radial scale: percent of trials, labels on the emptiest spoke ──
+    ax.set_ylim(0, rmax)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, prune="lower"))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{v:g}%"))
+    combined = np.sum(np.stack([radii_by_name[name] for name, _a, _c in series]), axis=0)
+    spokes = np.arange(0, 360, 45)
+    spoke_bins = [min(int(((np.deg2rad(s) + np.pi) % (2 * np.pi)) / bin_width), bins - 1)
+                  for s in spokes]
+    spoke_mass = [combined[max(b - 1, 0):b + 2].sum() for b in spoke_bins]
+    ax.set_rlabel_position(float(spokes[int(np.argmin(spoke_mass))]))
+    ax.tick_params(axis="y", labelsize=7, colors="0.45", pad=1)
+    for lbl in ax.get_yticklabels():
+        lbl.set_path_effects([
+            path_effects.withStroke(linewidth=2.0, foreground="white")
+        ])
+
+    ax.set_title("Escape Direction Distribution", fontweight="bold", pad=22)
+
+    fig.legend(handles=legend_handles, loc="upper right", bbox_to_anchor=(0.99, 0.99),
+               frameon=False, fontsize=8, handlelength=1.4, labelspacing=0.6)
+
+    return fig
