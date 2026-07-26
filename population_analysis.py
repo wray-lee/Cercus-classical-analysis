@@ -33,6 +33,8 @@ from pipeline.visualization import (
     plot_population_behavior_probability,
     plot_population_habituation,
     plot_population_polar_histogram,
+    plot_population_spaghetti_kinetics,
+    plot_population_speed_kinetics,
     plot_population_vmax_gmm,
     plot_population_vmax_response,
     plot_prewalk_stillness,
@@ -434,6 +436,16 @@ def main(argv: list[str] | None = None) -> None:
     fig4b.savefig(output_dir / "prewalk_stillness.svg", dpi=300, bbox_inches="tight")
     plt.close(fig4b)
 
+    # ── Population speed kinetics by response type (Escape / PreWalk / NoResponse) ──
+    fig_speed = plot_population_speed_kinetics(all_data)
+    fig_speed.savefig(output_dir / "speed_kinetics.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_speed)
+
+    # ── Population spaghetti kinetics by response type ──
+    fig_spaghetti = plot_population_spaghetti_kinetics(all_data)
+    fig_spaghetti.savefig(output_dir / "spaghetti_kinetics.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_spaghetti)
+
     fig5 = plot_escape_angle_distribution(all_data)
     fig5.savefig(output_dir / "escape_angle_distribution.svg", dpi=300, bbox_inches="tight")
     plt.close(fig5)
@@ -442,7 +454,7 @@ def main(argv: list[str] | None = None) -> None:
     fig6.savefig(output_dir / "polar_direction_histogram.svg", dpi=300, bbox_inches="tight")
     plt.close(fig6)
 
-    log.info("Figures saved: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, escape_angle_distribution.svg, polar_direction_histogram.svg")
+    log.info("Figures saved: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg")
     log.info("All output in: %s", output_dir)
 
 

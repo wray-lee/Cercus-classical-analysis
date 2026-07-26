@@ -544,6 +544,201 @@ def plot_speed_kinetics(
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Plot 2b — Population Speed Kinetics by Response Type
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_population_speed_kinetics(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (10, 6),
+    y_col: str = "speed",
+    y_label: str = "Speed (mm/s)",
+    t_window: tuple[float, float] = (-1000.0, 500.0),
+) -> plt.Figure:
+    """Population-level speed kinetics split by response type (Escape / PreWalk / NoResponse).
+
+    Three-panel figure (4:1 height ratio) with shared X axis.
+    Upper panel: mean ± SEM per response type, colour-coded.
+    Lower panel: oscilloscope-style stimulus waveform.
+
+    Parameters
+    ----------
+    t_window :
+        Time range [t_min, t_max] relative to TTC (ms).  Defaults to
+        [-1000, 500] which captures the pre-stimulus baseline and the
+        post-stimulus burst without excessive tail.
+    """
+    # Trim to requested window so the plot doesn't stretch far past the action.
+    df = df[(df["t_rel"] >= t_window[0]) & (df["t_rel"] <= t_window[1])].copy()
+    if df.empty:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No data in requested time window", ha="center", va="center",
+                transform=ax.transAxes, fontsize=10, color="0.5")
+        return fig
+
+    fig = plt.figure(figsize=figsize)
+    gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
+    ax_main = fig.add_subplot(gs[0])
+    ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
+
+    t_bin = 5.0
+    t_min = df["t_rel"].min()
+    t_max = df["t_rel"].max()
+    bins = np.arange(t_min, t_max + t_bin, t_bin)
+    df_binned = df.copy()
+    df_binned["t_bin"] = pd.cut(df_binned["t_rel"], bins=bins, labels=bins[:-1], include_lowest=True)
+    df_binned["t_bin"] = df_binned["t_bin"].astype(float)
+
+    # Colour map by response type
+    response_colors = {
+        "Escape": COLOR_ESCAPE,
+        "PreWalk": COLOR_PREWALK,
+        "NoResponse": COLOR_NO_RESPONSE,
+    }
+
+    for response_type, color in response_colors.items():
+        subset = df_binned[df_binned["response_type"] == response_type]
+        if subset.empty:
+            continue
+        trial_means = subset.groupby(["subject_id", "global_trial_id", "t_bin"])[y_col].mean().reset_index()
+        agg = trial_means.groupby("t_bin")[y_col]
+        mean = agg.mean()
+        sem = agg.sem().fillna(0)
+        t_vals = mean.index.values
+        ax_main.plot(t_vals, mean.values, color=color, lw=1.2, label=response_type)
+        ax_main.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
+                             color=color, alpha=0.15, edgecolor="none")
+
+    ax_main.set_ylabel(y_label)
+    ax_main.legend(loc="upper right", frameon=False)
+    ax_main.set_xlabel("")
+    plt.setp(ax_main.get_xticklabels(), visible=False)
+
+    if y_col == "speed":
+        _add_threshold_lines(ax_main)
+    else:
+        ax_main.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
+
+    # ── Lower panel: oscilloscope waveforms ──
+    for cond in df["type"].dropna().unique():
+        _draw_oscilloscope_channels(ax_stim, df, cond)
+    ax_stim.legend(loc="upper right", frameon=False, ncol=2)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 2c — Population Spaghetti Kinetics by Response Type
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_population_spaghetti_kinetics(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (12, 8),
+    y_col: str = "speed",
+    y_label: str = "Speed (mm/s)",
+    t_window: tuple[float, float] = (-1000.0, 500.0),
+) -> plt.Figure:
+    """Population-level spaghetti plot split by response type (Escape / PreWalk / NoResponse).
+
+    Each response type gets its own panel.  Individual trials are drawn as
+    faint translucent lines; the population mean ± SEM is overlaid in white
+    halo + solid colour.
+
+    Parameters
+    ----------
+    t_window :
+        Time range [t_min, t_max] relative to TTC (ms).  Defaults to
+        [-1000, 500].
+    """
+    df = df[(df["t_rel"] >= t_window[0]) & (df["t_rel"] <= t_window[1])].copy()
+    if df.empty:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(0.5, 0.5, "No data in requested time window", ha="center", va="center",
+                transform=ax.transAxes, fontsize=10, color="0.5")
+        return fig
+
+    response_types = ["Escape", "PreWalk", "NoResponse"]
+    response_colors = {
+        "Escape": COLOR_ESCAPE,
+        "PreWalk": COLOR_PREWALK,
+        "NoResponse": COLOR_NO_RESPONSE,
+    }
+
+    n_panels = len(response_types)
+    fig = plt.figure(figsize=(figsize[0] * n_panels / 3, figsize[1]))
+    gs = gridspec.GridSpec(2, n_panels, height_ratios=[4, 1], hspace=0.1, wspace=0.15, figure=fig)
+
+    ax_upper: list[plt.Axes] = []
+    ax_lower: list[plt.Axes] = []
+    for j in range(n_panels):
+        sharey = ax_upper[0] if ax_upper else None
+        ax_u = fig.add_subplot(gs[0, j], sharey=sharey)
+        ax_upper.append(ax_u)
+        ax_l = fig.add_subplot(gs[1, j], sharex=ax_u)
+        ax_lower.append(ax_l)
+
+    for j, response_type in enumerate(response_types):
+        ax = ax_upper[j]
+        subset = df[df["response_type"] == response_type]
+        color = response_colors[response_type]
+
+        if subset.empty:
+            ax.set_title(response_type, fontweight="bold")
+            continue
+
+        # ── Individual trial spaghetti (faint) ──
+        for (_subj, _tid), grp in subset.groupby(["subject_id", "global_trial_id"]):
+            grp_sorted = grp.sort_values("t_rel")
+            ax.plot(grp_sorted["t_rel"], grp_sorted[y_col],
+                    color=color, lw=0.3, alpha=0.15)
+
+        # ── Population mean ± SEM ──
+        t_bin = 5.0
+        t_min = subset["t_rel"].min()
+        t_max = subset["t_rel"].max()
+        bins = np.arange(t_min, t_max + t_bin, t_bin)
+        binned = subset.copy()
+        binned["t_bin"] = pd.cut(binned["t_rel"], bins=bins, labels=bins[:-1], include_lowest=True)
+        binned["t_bin"] = binned["t_bin"].astype(float)
+
+        trial_means = binned.groupby(["subject_id", "global_trial_id", "t_bin"])[y_col].mean().reset_index()
+        agg = trial_means.groupby("t_bin")[y_col]
+        mean = agg.mean()
+        sem = agg.sem().fillna(0)
+        t_vals = mean.index.values
+
+        ax.plot(t_vals, mean.values, color="white", lw=4.0, alpha=0.8, solid_capstyle="round")
+        ax.plot(t_vals, mean.values, color=color, lw=2.0, alpha=1.0, label=response_type)
+        ax.fill_between(t_vals, (mean - sem).values, (mean + sem).values,
+                        color=color, alpha=0.2, edgecolor="none")
+
+        ax.set_title(response_type, fontweight="bold")
+        if j == 0:
+            ax.set_ylabel(y_label)
+        else:
+            plt.setp(ax.get_yticklabels(), visible=False)
+        plt.setp(ax.get_xticklabels(), visible=False)
+        ax.legend(loc="upper right", frameon=False)
+
+        if y_col == "speed":
+            _add_threshold_lines(ax)
+        else:
+            ax.axhline(y=0, color="0.5", linestyle="--", linewidth=0.5, alpha=0.4)
+
+    # ── Oscilloscope channels (shared across all panels) ──
+    for j in range(n_panels):
+        for cond in df["type"].dropna().unique():
+            _draw_oscilloscope_channels(ax_lower[j], df, cond)
+        if j == 0:
+            ax_lower[j].legend(loc="upper right", frameon=False, ncol=2)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Plot 3 — Spaghetti Kinetics with Dual-Threshold Lines
 # ══════════════════════════════════════════════════════════════════════
 
@@ -1121,9 +1316,11 @@ def plot_population_behavior_probability(
                         fontsize=7, color="black", fontweight="bold", zorder=10)
             else:
                 # Inline style: label inside bar near bottom (away from scatter cloud at top).
+                # Black text with white halo for readability on any bar color.
                 ax.text(bar.get_x() + bar.get_width() / 2, 0.03,
                         f"{val:.1%}", ha="center", va="bottom", fontsize=8,
-                        color="white", fontweight="bold", zorder=10)
+                        color="black", fontweight="bold", zorder=10,
+                        path_effects=[path_effects.withStroke(linewidth=2.0, foreground="white")])
 
     n_subjects = df["subject_id"].nunique()
     ax.set_ylabel("Proportion")
@@ -1263,9 +1460,11 @@ def plot_prewalk_stillness(
                         fontsize=7, color="black", fontweight="bold", zorder=10)
             else:
                 # Inline style: label inside bar near bottom (away from scatter cloud at top).
+                # Black text with white halo for readability on any bar color.
                 ax.text(bar.get_x() + bar.get_width() / 2, 0.03,
                         f"{val:.1%}\n({n})", ha="center", va="bottom", fontsize=7,
-                        color="white", fontweight="bold", zorder=10)
+                        color="black", fontweight="bold", zorder=10,
+                        path_effects=[path_effects.withStroke(linewidth=2.0, foreground="white")])
 
     n_subjects = prewalk_trials["subject_id"].nunique()
     ax.set_ylabel("Proportion of PreWalk Trials")
