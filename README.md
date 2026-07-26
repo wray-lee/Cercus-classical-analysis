@@ -6,9 +6,9 @@ Cricket escape-response behavioral analysis pipeline. Processes raw kinematics d
 
 | Type | Criteria |
 |---|---|
-| **Escape** | Pre-stimulus speed < 10 mm/s; post-stimulus V_max > 50 mm/s within 250 ms |
-| **PreWalk** | Pre-stimulus speed > 10 mm/s in the 1-s window before onset; post-stimulus V_max > 50 mm/s within 250 ms |
-| **NoResponse** | Post-stimulus V_max ≤ 50 mm/s within 250 ms |
+| **Escape** | Pre-stimulus speed < 10 mm/s; post-stimulus V_max > (gmm threshold) mm/s within 250 ms |
+| **PreWalk** | Pre-stimulus speed > 10 mm/s in the 1-s window before onset; post-stimulus V_max > (gmm threshold) mm/s within 250 ms |
+| **NoResponse** | Post-stimulus V_max ≤ (gmm threshold) mm/s within 250 ms |
 
 Escape latency is defined as the first time speed exceeds 10 mm/s just before reaching 50 mm/s. The escape interval spans from latency onset to the point where speed drops back below 10 mm/s, with optional angular-velocity zero-crossing refinement.
 
