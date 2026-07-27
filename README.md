@@ -114,7 +114,13 @@ Pure physics layer. Integrates body-frame dx/dy/dz into trajectories with Savitz
 Ternary state classifier. Priority order: (1) NoResponse if no valid burst, (2) PreWalk if pre-stimulus activity exceeds threshold, (3) Escape if baseline is quiescent. Adds `response_type`, `v_max`, `latency_ms`, `interval_onset_ms`, `interval_offset_ms` columns.
 
 ### `pipeline/visualization.py`
-Publication-grade plotting (Nature/Science/Cell style). Includes trajectory overlay, speed kinetics, spaghetti plots, behavior probability, habituation curves, V_max distribution, and the two-stage trajectory integration algorithm (local heading + curvature-thresholded rigid rotation).
+Publication-grade plotting (Nature/Science/Cell style). Includes trajectory overlay, speed kinetics, spaghetti plots (line and heatmap variants), behavior probability, habituation curves, V_max distribution, escape angle distribution, polar direction histogram (with Rayleigh test p-value), and the two-stage trajectory integration algorithm (local heading + curvature-thresholded rigid rotation).
+
+Key functions:
+- `plot_population_speed_kinetics()` — Mean ± SEM speed curves by response type (Escape/PreWalk/NoResponse), aligned to TTC
+- `plot_population_spaghetti_kinetics()` — Individual trial spaghetti + mean overlay by response type
+- `plot_spaghetti_kinetics_heatmap()` — **Onset-aligned heatmap** (re-aligns time to `interval_onset_ms=0`, uses trial density instead of alpha lines to avoid overplotting)
+- `plot_population_polar_histogram()` — 360° polar rose with circular mean μ, resultant R, and **Rayleigh test p-value** for non-uniformity
 
 ### `population_analysis.py`
 
@@ -142,7 +148,7 @@ The Log-GMM produces **two** thresholds from a single fit:
 
 #### Population Visualizations
 
-Three SVG figures are generated (headless rendering via `matplotlib.use("Agg")`):
+Multiple SVG figures are generated (headless rendering via `matplotlib.use("Agg")`):
 
 | Figure | Purpose | Content |
 |---|---|---|
@@ -150,6 +156,12 @@ Three SVG figures are generated (headless rendering via `matplotlib.use("Agg")`)
 | `vmax_gmm.svg` | **Threshold determination** | All trials (Escape + PreWalk + NoResponse) histogram + KDE, with GMM start (orange `#E69F00`), GMM escape (red `#DC0000`), optional IQR-GMM (blue `#3C5488`), and fixed reference lines (50 / 10 mm/s) |
 | `vmax_response.svg` | **Effective response inspection** | Escape + PreWalk only histogram + KDE, with the active tagging threshold (red) — excludes NoResponse noise |
 | `behavior_prob.svg` | Response proportions | Escape / PreWalk / NoResponse bar chart across all subjects |
+| `prewalk_stillness.svg` | PreWalk stillness analysis | Proportion of PreWalk trials with stillness before escape onset |
+| `speed_kinetics.svg` | Population speed kinetics | Mean ± SEM speed curves by response type (Escape/PreWalk/NoResponse), aligned to TTC |
+| `spaghetti_kinetics.svg` | Population spaghetti plots | Individual trials + mean overlay by response type, aligned to TTC |
+| `spaghetti_kinetics_heatmap.svg` | **Onset-aligned heatmap** | Trial density heatmap aligned to escape onset (`interval_onset_ms = 0`), with overlaid mean ± SEM. Avoids overplotting for large trial counts (e.g. 4464 trials). Three panels: Escape / PreWalk / NoResponse. |
+| `escape_angle_distribution.svg` | Escape direction | Histogram + KDE of final escape angles (degrees) for Escape vs PreWalk |
+| `polar_direction_histogram.svg` | **Polar direction** | 360° rose plot of escape endpoint bearings (Ipsi-mirrored). Shows circular mean μ, resultant length R, and **Rayleigh test p-value** for non-uniformity. Escape and PreWalk overlaid with proportional rose histograms. |
 
 ### `pipeline/mcmc.py`
 Bayesian psychophysics via PyMC/NumPyro. Fits psychometric sigmoid functions to escape probability vs. TTC, tests multisensory integration hypotheses (ROPE-based posterior probability), computes Bayesian optimal integration (variance reduction), and performs survival analysis (Kaplan-Meier, Race Model Inequality).
@@ -185,12 +197,18 @@ figures/
 
 ```
 <output-dir>/
-├── population_summary.csv      # Per-trial metrics with is_valid_escape tagging
-├── subject_escape_rates.csv    # Per-subject escape rate summary
-├── habituation.svg             # Fatigue curve: per-subject lines + mean±SEM ribbon
-├── vmax_gmm.svg                # All trials V_max + GMM threshold lines (threshold determination)
-├── vmax_response.svg           # Escape+PreWalk V_max only (effective response inspection)
-└── behavior_prob.svg           # Escape / PreWalk / NoResponse proportion bar chart
+├── population_summary.csv          # Per-trial metrics with is_valid_escape tagging
+├── subject_escape_rates.csv        # Per-subject escape rate summary
+├── habituation.svg                 # Fatigue curve: per-subject lines + mean±SEM ribbon
+├── vmax_gmm.svg                    # All trials V_max + GMM threshold lines
+├── vmax_response.svg               # Escape+PreWalk V_max only
+├── behavior_prob.svg               # Escape / PreWalk / NoResponse proportion bar chart
+├── prewalk_stillness.svg           # PreWalk stillness proportion analysis
+├── speed_kinetics.svg              # Population speed kinetics by response type
+├── spaghetti_kinetics.svg          # Population spaghetti plots by response type
+├── spaghetti_kinetics_heatmap.svg  # **Onset-aligned heatmap** (density visualization)
+├── escape_angle_distribution.svg   # Histogram of escape angles
+└── polar_direction_histogram.svg   # **Polar rose with Rayleigh p-value**
 ```
 
 ## Dependencies

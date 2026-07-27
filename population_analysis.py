@@ -38,6 +38,8 @@ from pipeline.visualization import (
     plot_population_vmax_gmm,
     plot_population_vmax_response,
     plot_prewalk_stillness,
+    plot_spaghetti_kinetics_heatmap,
+    plot_trial_stacked_heatmap,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -406,8 +408,14 @@ def main(argv: list[str] | None = None) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    # Create subdirectories
+    pop_dir = output_dir / "population"
+    heatmap_dir = pop_dir / "heatmap"
+    pop_dir.mkdir(parents=True, exist_ok=True)
+    heatmap_dir.mkdir(parents=True, exist_ok=True)
+
     fig1 = plot_population_habituation(all_data)
-    fig1.savefig(output_dir / "habituation.svg", dpi=300, bbox_inches="tight")
+    fig1.savefig(pop_dir / "habituation.svg", dpi=300, bbox_inches="tight")
     plt.close(fig1)
 
     fig2 = plot_population_vmax_gmm(
@@ -417,7 +425,7 @@ def main(argv: list[str] | None = None) -> None:
         iqr_gmm_threshold=iqr_gmm_threshold,
         draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
     )
-    fig2.savefig(output_dir / "vmax_gmm.svg", dpi=300, bbox_inches="tight")
+    fig2.savefig(pop_dir / "vmax_gmm.svg", dpi=300, bbox_inches="tight")
     plt.close(fig2)
 
     fig3 = plot_population_vmax_response(
@@ -425,36 +433,54 @@ def main(argv: list[str] | None = None) -> None:
         auto_threshold=auto_vmax_threshold,
         draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
     )
-    fig3.savefig(output_dir / "vmax_response.svg", dpi=300, bbox_inches="tight")
+    fig3.savefig(pop_dir / "vmax_response.svg", dpi=300, bbox_inches="tight")
     plt.close(fig3)
 
     fig4 = plot_population_behavior_probability(all_data)
-    fig4.savefig(output_dir / "behavior_prob.svg", dpi=300, bbox_inches="tight")
+    fig4.savefig(pop_dir / "behavior_prob.svg", dpi=300, bbox_inches="tight")
     plt.close(fig4)
 
     fig4b = plot_prewalk_stillness(all_data)
-    fig4b.savefig(output_dir / "prewalk_stillness.svg", dpi=300, bbox_inches="tight")
+    fig4b.savefig(pop_dir / "prewalk_stillness.svg", dpi=300, bbox_inches="tight")
     plt.close(fig4b)
 
     # ── Population speed kinetics by response type (Escape / PreWalk / NoResponse) ──
     fig_speed = plot_population_speed_kinetics(all_data)
-    fig_speed.savefig(output_dir / "speed_kinetics.svg", dpi=300, bbox_inches="tight")
+    fig_speed.savefig(pop_dir / "speed_kinetics.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_speed)
 
     # ── Population spaghetti kinetics by response type ──
     fig_spaghetti = plot_population_spaghetti_kinetics(all_data)
-    fig_spaghetti.savefig(output_dir / "spaghetti_kinetics.svg", dpi=300, bbox_inches="tight")
+    fig_spaghetti.savefig(pop_dir / "spaghetti_kinetics.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_spaghetti)
 
+    # ── Heatmap figures go to heatmap/ subdirectory ──
+
+    # ── Population spaghetti kinetics heatmap (onset-aligned, density) ──
+    fig_heatmap = plot_spaghetti_kinetics_heatmap(all_data)
+    fig_heatmap.savefig(heatmap_dir / "spaghetti_density_heatmap.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_heatmap)
+
+    # ── Trial-stacked heatmap (TTC-aligned) ──
+    fig_trial_ttc = plot_trial_stacked_heatmap(all_data, align="ttc", t_window=(-1.0, 2.0))
+    fig_trial_ttc.savefig(heatmap_dir / "trial_stacked_heatmap_ttc.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_trial_ttc)
+
+    # ── Trial-stacked heatmap (onset-aligned) ──
+    fig_trial_onset = plot_trial_stacked_heatmap(all_data, align="onset", t_window=(-0.5, 0.5))
+    fig_trial_onset.savefig(heatmap_dir / "trial_stacked_heatmap_onset.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_trial_onset)
+
     fig5 = plot_escape_angle_distribution(all_data)
-    fig5.savefig(output_dir / "escape_angle_distribution.svg", dpi=300, bbox_inches="tight")
+    fig5.savefig(pop_dir / "escape_angle_distribution.svg", dpi=300, bbox_inches="tight")
     plt.close(fig5)
 
     fig6 = plot_population_polar_histogram(all_data)
-    fig6.savefig(output_dir / "polar_direction_histogram.svg", dpi=300, bbox_inches="tight")
+    fig6.savefig(pop_dir / "polar_direction_histogram.svg", dpi=300, bbox_inches="tight")
     plt.close(fig6)
 
-    log.info("Figures saved: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg")
+    log.info("Figures saved to %s/: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg", pop_dir.name)
+    log.info("Heatmaps saved to %s/heatmap/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name)
     log.info("All output in: %s", output_dir)
 
 

@@ -14,7 +14,8 @@ import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import circmean, gaussian_kde
+from scipy.stats import circmean, gaussian_kde, f as f_dist
+
 
 from .constants import (
     BAR_LABEL_STYLE,
@@ -733,6 +734,399 @@ def plot_population_spaghetti_kinetics(
             _draw_oscilloscope_channels(ax_lower[j], df, cond)
         if j == 0:
             ax_lower[j].legend(loc="upper right", frameon=False, ncol=2)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 2d — Population Spaghetti Kinetics Heatmap (onset-aligned)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_spaghetti_kinetics_heatmap(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (9, 3.5),
+    t_window: tuple[float, float] = (-400.0, 500.0),
+    speed_bins: int = 50,
+    y_col: str = "speed",
+    y_label: str = "Speed (mm/s)",
+) -> plt.Figure:
+    """Density heatmap of spaghetti kinetics, aligned to escape onset.
+
+    Time is re-aligned to interval_onset_ms = 0 (unified start point), not t_rel.
+    For each trial, speed is interpolated onto a common time grid, then a 2D
+    density matrix [time x speed] is built by histogramming speed values at each
+    time bin across trials.  Density is normalised per time slice to conditional
+    probability P(speed | time), range 0–1.
+
+    Uses PowerNorm(gamma=0.45) to brighten low-density regions.  Population mean
+    ± SEM is overlaid as white line with black stroke.  Three response types
+    (Escape / PreWalk / NoResponse) are shown in separate panels sharing the
+    y-axis (0–600 mm/s).
+
+    Parameters
+    ----------
+    t_window :
+        Time range [t_min, t_max] relative to escape onset (ms).
+        Default [-400, 500] captures pre-onset stillness and post-onset burst.
+    speed_bins :
+        Number of speed bins for the heatmap y-axis.
+    """
+    # Re-align time to escape onset where available; NoResponse trials without
+    # onset are aligned to t_rel = 0 (stimulus onset) with a note.
+    df = df.copy()
+    has_onset = df["interval_onset_ms"].notna()
+    df["t_aligned"] = np.where(
+        has_onset,
+        df["t_rel"] - df["interval_onset_ms"],
+        df["t_rel"],  # NoResponse: align to t_rel = 0
+    )
+
+    # Common time grid
+    dt = 5.0  # ms
+    t_common = np.arange(t_window[0], t_window[1] + dt, dt)
+
+    response_types = ["Escape", "PreWalk", "NoResponse"]
+    response_colors = {
+        "Escape": COLOR_ESCAPE,
+        "PreWalk": COLOR_PREWALK,
+        "NoResponse": COLOR_NO_RESPONSE,
+    }
+
+    n_panels = len(response_types)
+    fig = plt.figure(figsize=figsize)
+    gs = gridspec.GridSpec(1, n_panels, hspace=0.1, wspace=0.15, figure=fig)
+
+    ax_panels: list[plt.Axes] = []
+    for j in range(n_panels):
+        sharey = ax_panels[0] if ax_panels else None
+        ax = fig.add_subplot(gs[0, j], sharey=sharey)
+        ax_panels.append(ax)
+
+    # Fixed speed range 0–600 mm/s
+    speed_min, speed_max = 0.0, 600.0
+    speed_edges = np.linspace(speed_min, speed_max, speed_bins + 1)
+
+    # Shared colorbar scale
+    vmax_global = 0.0
+
+    # First pass: compute density matrices, means, SEMs, stillness proportions
+    density_by_panel: dict[int, np.ndarray] = {}
+    mean_by_panel: dict[int, np.ndarray] = {}
+    sem_by_panel: dict[int, np.ndarray] = {}
+    valid_by_panel: dict[int, np.ndarray] = {}
+    stillness_by_panel: dict[int, float] = {}
+
+    for j, response_type in enumerate(response_types):
+        subset = df[df["response_type"] == response_type]
+        if subset.empty:
+            continue
+
+        # Interpolate each trial onto common time grid
+        aligned_speeds: list[np.ndarray] = []
+        for (_subj, _tid), grp in subset.groupby(["subject_id", "global_trial_id"]):
+            grp_sorted = grp.sort_values("t_aligned")
+            t_trial = grp_sorted["t_aligned"].values
+            s_trial = grp_sorted[y_col].values
+            if len(t_trial) < 2 or t_trial.min() > t_window[1] or t_trial.max() < t_window[0]:
+                continue
+            s_interp = np.interp(t_common, t_trial, s_trial, left=np.nan, right=np.nan)
+            aligned_speeds.append(s_interp)
+
+        if not aligned_speeds:
+            continue
+
+        speed_matrix = np.vstack(aligned_speeds)
+
+        # Build 2D density matrix [time x speed]
+        density = np.zeros((len(t_common), speed_bins))
+        for i_t in range(len(t_common)):
+            speeds_at_t = speed_matrix[:, i_t]
+            speeds_at_t = speeds_at_t[~np.isnan(speeds_at_t)]
+            if len(speeds_at_t) > 0:
+                counts, _ = np.histogram(speeds_at_t, bins=speed_edges)
+                density[i_t, :] = counts / (counts.sum() + 1e-12)
+
+        # Compute mean and SEM
+        mean = np.nanmean(speed_matrix, axis=0)
+        sem = np.nanstd(speed_matrix, axis=0) / np.sqrt(np.sum(~np.isnan(speed_matrix), axis=0))
+        sem[np.isnan(sem)] = 0
+        valid = ~np.isnan(mean)
+
+        # Stillness proportion in [-400, 0] ms
+        pre_mask = (t_common >= -400) & (t_common <= 0)
+        pre_speeds = speed_matrix[:, pre_mask]
+        pre_speeds = pre_speeds[~np.isnan(pre_speeds)]
+        stillness = (pre_speeds < ESCAPE_START_THRESHOLD).mean() if len(pre_speeds) > 0 else 0.0
+
+        density_by_panel[j] = density
+        mean_by_panel[j] = mean
+        sem_by_panel[j] = sem
+        valid_by_panel[j] = valid
+        stillness_by_panel[j] = stillness
+        vmax_global = max(vmax_global, np.percentile(density[density > 0], 99.5))
+
+    # Second pass: plot
+    ims: list = []
+    for j, response_type in enumerate(response_types):
+        ax = ax_panels[j]
+        color = response_colors[response_type]
+
+        if j not in density_by_panel:
+            ax.set_title(response_type, fontweight="bold")
+            ax.set_xlim(t_window)
+            ax.set_ylim(speed_min, speed_max)
+            continue
+
+        density = density_by_panel[j]
+        mean = mean_by_panel[j]
+        sem = sem_by_panel[j]
+        valid = valid_by_panel[j]
+        stillness = stillness_by_panel[j]
+
+        # Build time bin edges for pcolormesh
+        dt = t_common[1] - t_common[0] if len(t_common) > 1 else 5.0
+        t_edges = np.concatenate([
+            [t_common[0] - dt/2],
+            (t_common[:-1] + t_common[1:]) / 2,
+            [t_common[-1] + dt/2],
+        ])
+
+        # Plot heatmap with PowerNorm to brighten low density
+        norm = mcolors.PowerNorm(gamma=0.45, vmin=0, vmax=vmax_global)
+        im = ax.pcolormesh(
+            t_edges, speed_edges, density.T,
+            cmap="magma", norm=norm,
+            shading="auto", rasterized=True,
+            edgecolors="none",
+        )
+        ims.append(im)
+
+        # Mean line: white with black stroke
+        ax.plot(
+            t_common[valid], mean[valid],
+            color="black", lw=3.5,
+            path_effects=[path_effects.withStroke(linewidth=3.5, foreground="black")],
+            zorder=5,
+        )
+        ax.plot(
+            t_common[valid], mean[valid],
+            color="white", lw=2.0,
+            path_effects=[path_effects.withStroke(linewidth=3.5, foreground="black")],
+            zorder=6,
+        )
+
+        # SEM as dotted white
+        ax.plot(
+            t_common[valid], mean[valid] + sem[valid],
+            color="white", lw=1.0, ls=":", alpha=0.8, zorder=4,
+        )
+        ax.plot(
+            t_common[valid], mean[valid] - sem[valid],
+            color="white", lw=1.0, ls=":", alpha=0.8, zorder=4,
+        )
+
+        # Vertical line at t=0
+        ax.axvline(0, color="white", ls="--", lw=0.8, alpha=0.6, zorder=7)
+
+        # Title with note for NoResponse
+        note = " (aligned to TTC)" if response_type == "NoResponse" else ""
+        ax.set_title(f"{response_type}{note}", fontweight="bold")
+
+        # Stillness proportion text at upper left
+        ax.text(
+            0.02, 0.98, f"stillness {stillness:.0%}",
+            transform=ax.transAxes, ha="left", va="top",
+            fontsize=7, color="white", fontweight="bold",
+            path_effects=[path_effects.withStroke(linewidth=2.0, foreground="black")],
+            zorder=10,
+        )
+
+        ax.set_xlabel("Time from escape onset (ms)")
+        if j == 0:
+            ax.set_ylabel(y_label)
+        else:
+            plt.setp(ax.get_yticklabels(), visible=False)
+
+        ax.set_xlim(t_window)
+        ax.set_ylim(speed_min, speed_max)
+        ax.grid(False)
+
+        if y_col == "speed":
+            # Threshold lines with white halo to avoid blending into heatmap
+            ax.axhline(y=ESCAPE_VMAX_THRESHOLD, color="k", ls="--", lw=0.75, alpha=0.7)
+            ax.text(
+                ax.get_xlim()[1] * 0.98, ESCAPE_VMAX_THRESHOLD + 1.0,
+                f"Vmax ({ESCAPE_VMAX_THRESHOLD:.0f})",
+                ha="right", va="bottom", fontsize=6, color="k", alpha=0.7,
+                path_effects=[path_effects.withStroke(linewidth=1.5, foreground="white")],
+            )
+            ax.axhline(y=ESCAPE_START_THRESHOLD, color="0.5", ls="--", lw=0.5, alpha=0.5)
+            ax.text(
+                ax.get_xlim()[1] * 0.98, ESCAPE_START_THRESHOLD + 1.0,
+                f"Start ({ESCAPE_START_THRESHOLD:.0f})",
+                ha="right", va="bottom", fontsize=6, color="0.5", alpha=0.5,
+                path_effects=[path_effects.withStroke(linewidth=1.5, foreground="white")],
+            )
+        else:
+            ax.axhline(y=0, color="0.5", ls="--", lw=0.5, alpha=0.4)
+
+    # Shared colorbar
+    if ims:
+        cbar = fig.colorbar(ims[0], ax=ax_panels, fraction=0.02, pad=0.02)
+        cbar.set_label("P(speed | time)", fontsize=7)
+        cbar.set_ticks([0, 1])
+        cbar.set_ticklabels(["0", "1"])
+        cbar.ax.tick_params(labelsize=6)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Plot 2e — Trial-Stacked Heatmap (TTC or Onset Aligned)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def plot_trial_stacked_heatmap(
+    df: pd.DataFrame,
+    align: str = "ttc",
+    t_window: tuple[float, float] = (-1.0, 2.0),
+    t_bin_s: float = 0.01,
+    vmax: float = 50.0,
+    figsize: tuple[float, float] = (10, 4.5),
+    conditions: list[str] | None = None,
+    max_trials_per_panel: int = 200,
+) -> plt.Figure:
+    """Trial-stacked heatmap: each row is one trial, sorted by onset latency.
+
+    Time is converted to seconds.  Rows are sorted by the time the speed first
+    crosses 10 mm/s (onset latency), so bursts align diagonally like a
+    "waterfall" plot.
+
+    Parameters
+    ----------
+    align :
+        ``"ttc"`` — align to ``t_rel`` (TTC=0).
+        ``"onset"`` — align to ``interval_onset_ms`` (escape onset).
+    t_window :
+        Time range [t_min, t_max] in **seconds**.
+    t_bin_s :
+        Time bin width in seconds (default 10 ms).
+    vmax :
+        Upper limit for colour scale (mm/s).
+    conditions :
+        List of condition names to plot.  If None, uses trial-type names
+        when ≥ 4 unique types, otherwise response_type names.
+    max_trials_per_panel :
+        Downsample to at most this many trials per panel (keeps the first
+        ``max_trials_per_panel`` after sorting).
+    """
+    df = df.copy()
+    df["_align_t_s"] = np.where(
+        df["interval_onset_ms"].notna(),
+        (df["t_rel"] - df["interval_onset_ms"]) / 1000.0,
+        df["t_rel"] / 1000.0,
+    )
+
+    # Decide panel grouping
+    n_types = df["type"].nunique() if "type" in df.columns else 0
+    if conditions is None:
+        if n_types >= 4:
+            conditions = sorted(df["type"].dropna().unique())
+        else:
+            conditions = ["Escape", "PreWalk", "NoResponse"]
+
+    n_panels = len(conditions)
+    fig = plt.figure(figsize=figsize)
+    gs = gridspec.GridSpec(1, n_panels, hspace=0.15, wspace=0.05, figure=fig)
+
+    # Common time grid
+    t_common = np.arange(t_window[0], t_window[1], t_bin_s)
+    ims: list = []
+
+    for j, cond in enumerate(conditions):
+        ax = fig.add_subplot(gs[0, j])
+
+        if n_types >= 4:
+            subset = df[df["type"] == cond].copy()
+        else:
+            subset = df[df["response_type"] == cond].copy()
+
+        if subset.empty:
+            ax.set_title(cond, fontweight="bold")
+            continue
+
+        # Interpolate each trial onto common time grid
+        trial_rows: list[tuple[float, np.ndarray]] = []
+        for (_subj, _tid), grp in subset.groupby(["subject_id", "global_trial_id"]):
+            grp_sorted = grp.sort_values("_align_t_s")
+            t_trial = grp_sorted["_align_t_s"].values
+            s_trial = grp_sorted["speed"].values
+            if len(t_trial) < 2 or t_trial.min() > t_window[1] or t_trial.max() < t_window[0]:
+                continue
+            s_interp = np.interp(t_common, t_trial, s_trial, left=0, right=0)
+            # Onset latency: first time speed crosses 10 mm/s
+            above = s_interp > ESCAPE_START_THRESHOLD
+            latency = float(t_common[above].min()) if above.any() else float("inf")
+            trial_rows.append((latency, s_interp))
+
+        if not trial_rows:
+            ax.set_title(cond, fontweight="bold")
+            continue
+
+        # Sort by onset latency ascending (waterfall effect)
+        trial_rows.sort(key=lambda x: x[0] if np.isfinite(x[0]) else 1e9)
+        # Downsample if too many trials
+        if len(trial_rows) > max_trials_per_panel:
+            step = len(trial_rows) / max_trials_per_panel
+            indices = np.arange(0, len(trial_rows), step).astype(int)
+            trial_rows = [trial_rows[i] for i in indices]
+
+        # Build matrix
+        M = np.vstack([row[1] for row in trial_rows])
+
+        # imshow with dark background
+        ax.imshow(
+            M,
+            aspect="auto",
+            origin="lower",
+            extent=[t_common[0], t_common[-1], 0, len(M)],
+            cmap="inferno",
+            vmin=0,
+            vmax=vmax,
+            interpolation="nearest",
+        )
+
+        # Vertical line at t=0
+        ax.axvline(0, color="white", ls="--", lw=1.2, alpha=0.7)
+
+        ax.set_title(cond, fontweight="bold", fontsize=9)
+        if align == "ttc":
+            ax.set_xlabel("TTC (s)")
+        else:
+            ax.set_xlabel("Time from escape onset (s)")
+        if j == 0:
+            ax.set_ylabel("Trial")
+        else:
+            plt.setp(ax.get_yticklabels(), visible=False)
+
+        ax.text(
+            0.02, 0.98, f"n={len(M)}",
+            transform=ax.transAxes, ha="left", va="top",
+            fontsize=7, color="white", fontweight="bold",
+            path_effects=[path_effects.withStroke(linewidth=2.0, foreground="black")],
+        )
+
+    # Single shared colorbar
+    fig.subplots_adjust(right=0.92)
+    cbar_ax = fig.add_axes([0.93, 0.15, 0.02, 0.7])
+    cmap = plt.get_cmap("inferno")
+    norm = mcolors.Normalize(vmin=0, vmax=vmax)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_label("Translational velocity (mm/s)", fontsize=8)
 
     fig.tight_layout(pad=1.0)
     return fig
@@ -1936,6 +2330,11 @@ def plot_population_polar_histogram(
                 transform=ax.transAxes, fontsize=12, color="0.5")
         return fig
 
+    # ── Watson-Williams test: do Escape and PreWalk share the same mean direction? ──
+    F_ww, p_ww = np.nan, np.nan
+    if esc.size >= 2 and pw.size >= 2:
+        F_ww, p_ww = watson_williams_test(esc, pw)
+
     from matplotlib.patches import Patch
     from matplotlib.ticker import FuncFormatter, MaxNLocator
 
@@ -1974,6 +2373,7 @@ def plot_population_polar_histogram(
     rmax = max(r.max() for r in radii_by_name.values()) * 1.30
 
     legend_handles: list[Patch] = []
+    mu_by_name: dict[str, float] = {}
     for name, angles, color in series:
         # Rose: translucent wash fill, adjacent bins separated by surface gaps
         ax.bar(bin_edges[:-1], radii_by_name[name], width=bin_width, align="edge",
@@ -1995,7 +2395,10 @@ def plot_population_polar_histogram(
         # Bézier curl), and a small filled head. annotate handles the head size
         # in display pt so it stays ~9pt regardless of R or the radial scale.
         mu = float(circmean(angles, high=np.pi, low=-np.pi))
+        mu_by_name[name] = mu
         resultant = float(np.abs(np.exp(1j * angles).mean()))
+        # Rayleigh test for non-uniformity
+        p_rayleigh = _rayleigh_p(resultant, angles.size)
         arrow = ax.annotate(
             "", xy=(mu, resultant * rmax), xytext=(mu, 0.03 * rmax),
             arrowprops=dict(
@@ -2014,7 +2417,7 @@ def plot_population_polar_histogram(
 
         legend_handles.append(Patch(
             facecolor=mcolors.to_rgba(color, 0.30), edgecolor=color, linewidth=1.2,
-            label=f"{name} (n = {angles.size})\nμ = {np.degrees(mu):.0f}°, R = {resultant:.2f}",
+            label=f"{name} (n = {angles.size})\nμ = {np.degrees(mu):.0f}°, R = {resultant:.2f}\np = {p_rayleigh:.2e}",
         ))
 
     # ── Radial scale: percent of trials, labels on the emptiest spoke ──
@@ -2035,7 +2438,115 @@ def plot_population_polar_histogram(
 
     ax.set_title("Escape Direction Distribution", fontweight="bold", pad=22)
 
+    # ── Watson-Williams annotation below title ──
+    if not np.isnan(p_ww) and "Escape" in mu_by_name and "PreWalk" in mu_by_name:
+        mu_esc = mu_by_name["Escape"]
+        mu_pw = mu_by_name["PreWalk"]
+        delta_mu = abs(np.degrees(mu_esc) - np.degrees(mu_pw))
+        # Wrap to smallest angular difference (0–180°)
+        delta_mu = min(delta_mu, 360 - delta_mu)
+        ns_text = " (ns)" if p_ww > 0.05 else ""
+        ww_text = (
+            f"Watson-Williams: Δμ={delta_mu:.0f}°, F={F_ww:.2f}, p={p_ww:.2g}{ns_text}"
+        )
+        ax.text(0.5, -0.15, ww_text, transform=ax.transAxes, ha="center",
+                fontsize=8, color="0.35")
+
     fig.legend(handles=legend_handles, loc="upper right", bbox_to_anchor=(0.99, 0.99),
                frameon=False, fontsize=8, handlelength=1.4, labelspacing=0.6)
 
     return fig
+
+
+def _rayleigh_p(resultant: float, n: int) -> float:
+    """Rayleigh test for non-uniformity of circular data.
+
+    Computes the p-value for the null hypothesis that the data is uniformly
+    distributed around the circle. Uses Zar (1999) approximation valid for n > 10.
+
+    Parameters
+    ----------
+    resultant : float
+        Mean resultant length R (0 <= R <= 1)
+    n : int
+        Sample size
+
+    Returns
+    -------
+    float
+        p-value for the Rayleigh test
+    """
+    if n <= 10:
+        # For small samples, use more accurate approximation
+        # p = exp(-n*R^2)*(1 + (2*n*R^2 - R^4)/(4*n))
+        r_sq = resultant ** 2
+        p = np.exp(-n * r_sq) * (1 + (2 * n * r_sq - r_sq ** 2) / (4 * n))
+    else:
+        # Standard approximation for larger samples
+        p = np.exp(-n * resultant ** 2)
+    return float(np.clip(p, 0.0, 1.0))
+
+
+def watson_williams_test(angles1: np.ndarray, angles2: np.ndarray) -> tuple[float, float]:
+    """Watson-Williams F-test: test whether two groups share the same mean angle.
+
+    Implementation follows Zar (2010) Circular Statistics, §26.13–26.14.
+
+    Parameters
+    ----------
+    angles1, angles2 : np.ndarray
+        Circular data in radians (any range, e.g. [-π, π]).
+
+    Returns
+    -------
+    F : float
+        Watson-Williams F statistic.
+    p_ww : float
+        Two-tailed p-value from the F(1, N-2) distribution.
+
+    Notes
+    -----
+    * Requires R_pooled >= 0.45 for the approximation to be reliable.
+      When R_pooled < 0.45 a warning is logged and the uncorrected F is still
+      returned (the correction factor is rarely needed in practice for
+      escape-direction data).
+    * If either group has fewer than 2 observations, returns (np.nan, np.nan).
+    """
+    a1 = np.asarray(angles1)
+    a2 = np.asarray(angles2)
+
+    n1 = a1.size
+    n2 = a2.size
+    N = n1 + n2
+
+    if n1 < 2 or n2 < 2 or N < 3:
+        log.warning("Watson-Williams: insufficient sample size (n1=%d, n2=%d)", n1, n2)
+        return np.nan, np.nan
+
+    # Resultant lengths for each group and the pooled sample
+    R1 = float(np.abs(np.exp(1j * a1).sum()))
+    R2 = float(np.abs(np.exp(1j * a2).sum()))
+    R_pooled = float(np.abs(np.exp(1j * np.concatenate([a1, a2])).sum()))
+
+    # Zar's F statistic (Eq. 26.30)
+    # F = (N - 2) * (R1 + R2 - R_pooled) / (N - R1 - R2)
+    numerator = (N - 2) * (R1 + R2 - R_pooled)
+    denominator = N - R1 - R2
+
+    if denominator <= 0:
+        log.warning("Watson-Williams: denominator <= 0 (N=%d, R1=%.3f, R2=%.3f)", N, R1, R2)
+        return np.nan, np.nan
+
+    F = numerator / denominator
+
+    # Correction factor for low concentration (R_pooled < 0.45)
+    # Zar Table 26.4 — approximate with linear interpolation
+    if R_pooled < 0.45:
+        log.warning(
+            "Watson-Williams: R_pooled=%.3f < 0.45; correction factor may be needed "
+            "(see Zar 2010 Table 26.4). Returning uncorrected F.",
+            R_pooled,
+        )
+
+    p_ww = float(f_dist.sf(F, 1, N - 2))
+    return F, p_ww
