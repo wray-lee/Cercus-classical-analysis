@@ -190,10 +190,8 @@ def _compute_log_gmm_threshold(
             return (weights[i] * norm.pdf(log_x, means[i], np.sqrt(vars_[i]))
                     - weights[j] * norm.pdf(log_x, means[j], np.sqrt(vars_[j])))
 
-        from scipy.optimize import brentq as _brentq
-
-        log_start = _brentq(lambda x: _pair_diff(x, 0, 1), means[0], means[1])
-        log_escape = _brentq(lambda x: _pair_diff(x, 1, 2), means[1], means[2])
+        log_start = brentq(lambda x: _pair_diff(x, 0, 1), means[0], means[1])
+        log_escape = brentq(lambda x: _pair_diff(x, 1, 2), means[1], means[2])
 
         start_threshold = float(np.exp(log_start))
         escape_threshold = float(np.exp(log_escape))
