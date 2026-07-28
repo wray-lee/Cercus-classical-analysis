@@ -1,0 +1,11 @@
+# ══════════════════════════════════════════════════════════════════════
+# Cercus Framework — Visualization Configuration
+# ══════════════════════════════════════════════════════════════════════
+# Visualization style settings.
+# These values can be overridden by user config.yaml in project root.
+
+# ── Bar Label Style ──
+# Options:
+#   "inline"  — label inside bar (default, intuitive)
+#   "axis"    — label via horizontal dashed line to y-axis (publication style)
+bar_label_style: "inline"

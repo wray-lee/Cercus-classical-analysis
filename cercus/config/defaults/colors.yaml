@@ -1,0 +1,33 @@
+# Color configuration for Cercus CLI visualization
+# Color values in hex format
+
+# Trial type colors
+escape: "#ED0000"
+prewalk: "#00468B"
+no_response: "#7C878E"
+
+# Turn direction colors
+left: "#00468B"
+right: "#ED0000"
+
+# Group/condition colors
+control: "#7C878E"
+
+# Oscillation analysis colors
+osci_vis: "#ADB6B6"
+osci_hw: "#E69F00"
+
+# Stillness condition colors
+with_stillness: "#00468B"
+no_stillness: "#5B6770"
+
+# NPG (Nature Publishing Group) color palette
+npg_palette:
+  - "#E69F00"  # Orange
+  - "#56B4E9"  # Sky Blue
+  - "#009E73"  # Green
+  - "#F0E442"  # Yellow
+  - "#0072B2"  # Blue
+  - "#D55E00"  # Vermillion
+  - "#CC79A7"  # Pink
+  - "#999999"  # Grey

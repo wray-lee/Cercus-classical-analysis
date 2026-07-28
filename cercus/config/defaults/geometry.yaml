@@ -1,0 +1,22 @@
+# ══════════════════════════════════════════════════════════════════════
+# Cercus Framework — Geometry Configuration
+# ══════════════════════════════════════════════════════════════════════
+# Physical geometry and timing constants.
+# These values can be overridden by user config.yaml in project root.
+
+# ── Arena Geometry ──
+RADIUS_MM: 30.0                    # mm — arena radius
+
+# ── Trajectory Plot Constants ──
+TRAJECTORY_MAX_RADIUS_MM: 120.0    # mm — maximum display radius for trajectories
+TRAJECTORY_STEP_MM: 10.0            # mm — trajectory step size
+
+# ── Speed Calculation ──
+SPEED_WINDOW_MS: 100.0              # ms — speed calculation window
+
+# ── Legacy Settings ──
+LEGACY_TRIAL_DURATION_MS: 5829.6    # ms — legacy trial duration
+
+# ── Visualization Defaults ──
+HEATMAP_VMAX: 50.0                  # Default vmax for trial stacked heatmap color scale
+HEATMAP_SPEED_MAX: 600.0            # Maximum speed for y-axis in kinetics plots

@@ -1,0 +1,126 @@
+# ══════════════════════════════════════════════════════════════════════
+# Cercus Framework — Trajectory Configuration
+# ══════════════════════════════════════════════════════════════════════
+# Trajectory rendering and integration settings.
+# These values can be overridden by user config.yaml in project root.
+#
+# This file also documents the alternative trajectory presets that
+# are available. Uncomment the desired preset in config.yaml to
+# activate it.
+# ══════════════════════════════════════════════════════════════════════
+
+
+
+#=======================================
+# baseline_visual
+#========================================
+
+trajectory:
+  use_z_degree_to_draw: true
+  use_escape_onset_heading: false
+  use_escape_onset_only_xy: true
+  use_angular_velocity_offset: false
+  dz_integration_range: "escape_angular_peak"
+  use_rigid_rotation: true
+
+
+# trajectory:
+#   use_z_degree_to_draw: true
+#   use_escape_onset_heading: true
+#   use_escape_onset_only_xy: true
+#   use_angular_velocity_offset: false
+#   dz_integration_range: "escape_interval"
+#   use_rigid_rotation: false
+
+#=======================================
+# traditional logic
+#=======================================
+# trajectory:
+#   use_z_degree_to_draw: true
+#   use_escape_onset_heading: true
+#   use_escape_onset_only_xy: true
+#   use_angular_velocity_offset: false
+#   dz_integration_range: "trial_to_onset"
+#   use_rigid_rotation: true
+#=======================================
+#=======================================
+
+# ── Active Trajectory Preset (baseline_visual) ──
+# Per-frame dynamic heading integration via dz accumulation.
+# When false, dx/dy are used raw without heading rotation.
+#use_z_degree_to_draw: true
+
+# Heading initialisation for non-rigid mode (only effective when
+# use_z_degree_to_draw=true):
+#   true  — rotate trajectory by the cumulative dz from trial start
+#           to escape onset
+#   false — reset angle to zero at escape onset, integrate heading
+#           from onset onward
+#use_escape_onset_heading: false
+
+# Slice trajectory to the escape-onset interval only
+# (latency onset → speed drops below ESCAPE_START_THRESHOLD).
+#   xy: controls which dx/dy frames are accumulated into the trajectory.
+#   z:  controls which dz frames are used for heading integration &
+#       total yaw.
+#use_escape_onset_only_xy: true
+
+# If true, the angular velocity offset (from the escape-onset frame)
+# is subtracted from dz before heading integration.
+#use_angular_velocity_offset: false
+
+# dz integration range for Stage 2 rigid rotation angle only.
+# Stage 1 curvature always uses the full escape interval dz.
+#   "full_trial"            — all dz frames
+#   "escape_interval"       — only escape-onset interval
+#   "trial_to_onset"        — trial start to escape onset
+#   "escape_angular_peak"   — onset → angular-velocity peak → zero-crossing
+#                             (filters out air-ball rebound)
+#   "escape_onset_heading"  — rotate by cumsum(dz) at escape onset
+#                             (same as use_escape_onset_heading in non-rigid)
+#dz_integration_range: "escape_angular_peak"
+
+# Rigid global rotation: two-stage decoupled design.
+#   Stage 1: per-frame heading integration (full escape interval dz)
+#            for curvature.
+#   Stage 2: single rigid-body rotation by dz_integration_range-
+#            controlled angle.
+#use_rigid_rotation: true
+
+# ══════════════════════════════════════════════════════════════════════
+# Alternative Presets (documenting other trajectory configurations)
+# ══════════════════════════════════════════════════════════════════════
+# To use a different preset, replace the active settings above with
+# the desired preset's values in config.yaml.
+
+# ── Preset 1: Traditional heading alignment ──
+# use_z_degree_to_draw: true
+# use_escape_onset_heading: true
+# use_escape_onset_only_xy: true
+# use_angular_velocity_offset: false
+# dz_integration_range: "escape_interval"
+# use_rigid_rotation: true
+
+# ── Preset 2: Curvature-only (no rigid rotation) ──
+# use_z_degree_to_draw: true
+# use_escape_onset_heading: true
+# use_escape_onset_only_xy: true
+# use_angular_velocity_offset: false
+# dz_integration_range: "escape_interval"
+# use_rigid_rotation: false
+
+# ── Preset 3: Traditional logic (trial_to_onset dz) ──
+# use_z_degree_to_draw: true
+# use_escape_onset_heading: true
+# use_escape_onset_only_xy: true
+# use_angular_velocity_offset: false
+# dz_integration_range: "trial_to_onset"
+# use_rigid_rotation: true
+
+# ── Preset 4: angular_velocity_offset enabled ──
+# use_z_degree_to_draw: true
+# use_escape_onset_heading: true
+# use_escape_onset_only_xy: true
+# use_angular_velocity_offset: true
+# dz_integration_range: "escape_interval"
+# use_rigid_rotation: true

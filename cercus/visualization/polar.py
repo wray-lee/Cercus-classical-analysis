@@ -348,6 +348,29 @@ def plot_population_polar_histogram(
     if esc.size >= 2 and pw.size >= 2:
         F_ww, p_ww = watson_williams_test(esc, pw)
 
+    def concentration_bootstrap(a1, a2, n_boot=5000, seed=0):
+        rng = np.random.default_rng(seed)
+        R1 = np.abs(np.exp(1j * a1).mean())
+        R2 = np.abs(np.exp(1j * a2).mean())
+        obs = R1 - R2
+        pooled = np.concatenate([a1, a2])
+        n1 = len(a1)
+        diffs = []
+        for _ in range(n_boot):
+            rng.shuffle(pooled)
+            b1 = pooled[:n1]
+            b2 = pooled[n1:]
+            diffs.append(
+                np.abs(np.exp(1j * b1).mean()) - np.abs(np.exp(1j * b2).mean())
+            )
+        diffs = np.array(diffs)
+        p = (np.abs(diffs) >= abs(obs)).mean()
+        return R1, R2, obs, float(p)
+
+    R1, R2, delta_R, p_conc = np.nan, np.nan, np.nan, np.nan
+    if esc.size >= 2 and pw.size >= 2:
+        R1, R2, delta_R, p_conc = concentration_bootstrap(esc, pw)
+
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(111, projection="polar")
 
@@ -433,12 +456,13 @@ def plot_population_polar_histogram(
             [path_effects.withStroke(linewidth=2.6, foreground="white")]
         )
 
+        p_rayleigh_str = "p < 1e-15" if p_rayleigh < 1e-15 else f"p = {p_rayleigh:.2e}"
         legend_handles.append(
             Patch(
                 facecolor=mcolors.to_rgba(color, 0.30),
                 edgecolor=color,
                 linewidth=1.2,
-                label=f"{name} (n = {angles.size})\nμ = {np.degrees(mu):.0f}°, R = {resultant:.2f}\np = {p_rayleigh:.2e}",
+                label=f"{name} (n = {angles.size})\nμ = {np.degrees(mu):.0f}°, R = {resultant:.2f}\n{p_rayleigh_str}",
             )
         )
 
@@ -468,13 +492,15 @@ def plot_population_polar_histogram(
         mu_pw = mu_by_name["PreWalk"]
         delta_mu = abs(np.degrees(mu_esc) - np.degrees(mu_pw))
         delta_mu = min(delta_mu, 360 - delta_mu)
-        ns_text = " (ns)" if p_ww > 0.05 else ""
+        ns_ww = " (ns)" if p_ww > 0.05 else ""
+        conc_sig = " (ns)" if p_conc > 0.05 else " **" if p_conc < 0.01 else " *"
         ww_text = (
-            f"Watson-Williams: Δμ={delta_mu:.0f}°, F={F_ww:.2f}, p={p_ww:.2g}{ns_text}"
+            f"Watson-Williams: Δμ={delta_mu:.0f}°, F={F_ww:.2f}, p={p_ww:.2g}{ns_ww} | "
+            f"Concentration: ΔR={delta_R:.2f}, p={p_conc:.3g}{conc_sig}"
         )
         ax.text(
-            0.5, -0.15, ww_text, transform=ax.transAxes,
-            ha="center", fontsize=8, color="0.35",
+            0.5, -0.18, ww_text, transform=ax.transAxes,
+            ha="center", fontsize=7.5, color="0.35",
         )
 
     fig.legend(

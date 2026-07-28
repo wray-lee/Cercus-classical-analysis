@@ -21,6 +21,7 @@ from pipeline.constants import (
     COLOR_PREWALK,
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
+    HEATMAP_VMAX,
 )
 
 log = logging.getLogger(__name__)
@@ -307,7 +308,7 @@ def plot_trial_stacked_heatmap(
     align: str = "ttc",
     t_window: tuple[float, float] = (-1.0, 2.0),
     t_bin_s: float = 0.01,
-    vmax: float = 50.0,
+    vmax: float = HEATMAP_VMAX,
     figsize: tuple[float, float] = (12, 4.5),
     conditions: list[str] | None = None,
     max_trials_per_panel: int = 200,

@@ -1,0 +1,23 @@
+# ══════════════════════════════════════════════════════════════════════
+# Cercus Framework — Threshold Configuration
+# ══════════════════════════════════════════════════════════════════════
+# Physical thresholds for escape detection and classification.
+# These values can be overridden by user config.yaml in project root.
+
+# ── Escape Detection Thresholds ──
+escape:
+  start_threshold: 10.0    # mm/s — latency onset anchor (speed exceeds this → escape start)
+  vmax_threshold: 98.0     # mm/s — burst floor for valid escape (v_max must exceed this)
+  window_ms: 250.0         # ms — post-stimulus burst detection window
+
+# ── PreWalk Detection Thresholds ──
+prewalk:
+  threshold: 10.0            # mm/s — pre-stimulus spontaneous activity
+  window_ms: 1000.0        # ms — pre-stimulus validation window
+
+# ── Baseline & Buffer Settings ──
+baseline:
+  quiet_mm_s: 3.0          # mm/s — threshold for true quiescent baseline
+
+post_stim:
+  buffer_ms: 50.0          # ms — post-stimulus tail buffer

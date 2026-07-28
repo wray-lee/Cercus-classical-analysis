@@ -11,5 +11,6 @@ lifelines
 jax
 jaxlib
 typer
+pydantic
 # Optional: Install for 10-100x faster MCMC sampling
 # pip install numpyro jax jaxlib

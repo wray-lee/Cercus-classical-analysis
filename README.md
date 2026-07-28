@@ -25,11 +25,18 @@ Cercus-cli/
 │   │       ├── latency.py           # Escape latency backward-search & interval detection
 │   │       └── trajectory_integration.py  # Dual-stage trajectory integration (Stage 1+2)
 │   ├── config/
-│   │   └── settings.py              # Pydantic TrajectoryConfig with cross-field validation
+│   │   ├── __init__.py              # Unified config loader (YAML → SimpleNamespace)
+│   │   ├── settings.py              # Pydantic TrajectoryConfig with cross-field validation
+│   │   └── defaults/                # Default YAML configurations
+│   │       ├── thresholds.yaml      # Escape/PreWalk detection thresholds
+│   │       ├── geometry.yaml        # Arena geometry, timing, heatmap viz defaults
+│   │       ├── colors.yaml          # Color palette (Lancet / NPG style)
+│   │       ├── trajectory.yaml      # Trajectory presets (with all alternatives documented)
+│   │       └── visualization.yaml   # Visualization style (bar labels, etc.)
 │   ├── constants/
-│   │   ├── colors.py                # Color palette (Lancet / NPG style)
-│   │   ├── thresholds.py            # Physical thresholds
-│   │   └── geometry.py              # Geometry & timing constants
+│   │   ├── colors.py                # Color constants (loaded from YAML)
+│   │   ├── thresholds.py            # Physical thresholds (loaded from YAML)
+│   │   └── geometry.py              # Geometry & timing constants (loaded from YAML)
 │   ├── classification/              # (Future) Strategy-based classifier
 │   └── cli/
 │       └── app.py                   # Unified Typer CLI with commands: single, population, mcmc, ...
@@ -45,7 +52,7 @@ Cercus-cli/
 ├── plot_all_trajectories_fixed.py   # Unified trajectory overlay
 ├── mcmc_analysis.py                 # MCMC psychophysics analysis
 ├── population_analysis.py           # Cross-subject batch: adaptive threshold + population viz
-├── config.yaml                      # Trajectory drawing configuration
+├── config.yaml                      # User overrides (merged with cercus/config/defaults/)
 ├── tests/
 │   ├── test_visualization_regression.py  # Hash-based plot regression tests
 │   └── test_classifier_golden.py         # 10 synthetic golden trials for classifier
@@ -89,9 +96,52 @@ python mcmc_analysis.py --input-dir path/to/data/ --output results/
 | `from cercus.visualization import plot_speed_kinetics` | `from pipeline.visualization import plot_speed_kinetics` |
 | `from cercus.core.domain import Trial, ResponseType` | — |
 | `from cercus.config.settings import TrajectoryConfig` | — |
+| `from cercus.config import get_config, reload_config` | — |
+| `from cercus.config import get_thresholds, get_geometry, get_colors` | — |
 | `from cercus.core.kinematics.trajectory_integration import integrate_body_trajectory` | `from pipeline.visualization import _integrate_body_trajectory` |
 
 The old `pipeline.visualization` import paths still work but emit a `DeprecationWarning`.
+
+## Configuration System
+
+All configurable parameters are stored as YAML files in `cercus/config/defaults/`:
+
+| File | Contents |
+|---|---|
+| `thresholds.yaml` | Escape/PreWalk detection thresholds (`vmax_threshold`, `start_threshold`, etc.) |
+| `geometry.yaml` | Arena geometry (`RADIUS_MM`), trajectory plot settings, speed window |
+| `colors.yaml` | Color palette (escape, prewalk, left/right, NPG palette, etc.) |
+| `trajectory.yaml` | Trajectory rendering presets (with all alternative presets documented) |
+| `visualization.yaml` | Visualization style (`bar_label_style`, etc.) |
+
+### User Overrides
+
+Create a `config.yaml` in the project root to override any default. Only include values you want to change:
+
+```yaml
+# Example: change escape detection threshold
+escape:
+  vmax_threshold: 98.0
+
+# Example: switch trajectory preset
+trajectory:
+  use_escape_onset_heading: true
+  dz_integration_range: "escape_interval"
+```
+
+For full trajectory preset documentation and alternatives, see `cercus/config/defaults/trajectory.yaml`.
+
+### Python Access
+
+```python
+from cercus.config import get_config, reload_config
+from cercus.constants.thresholds import ESCAPE_VMAX_THRESHOLD
+from cercus.constants.geometry import RADIUS_MM
+from cercus.constants.colors import COLOR_ESCAPE
+
+# Force reload after external config changes
+reload_config()
+```
 
 ## Standardized Classification Criteria
 
@@ -290,6 +340,7 @@ rm tests/baselines/*.sha256 && pytest tests/test_visualization_regression.py -v
 | `lifelines` | Kaplan-Meier survival analysis |
 | `pydantic` | Configuration model validation (TrajectoryConfig) |
 | `typer` | Unified CLI application |
+| `numpy`, `pandas`, `matplotlib`, `scipy`, `scikit-learn`, `pyyaml` | Core scientific stack |
 
 ## License
 

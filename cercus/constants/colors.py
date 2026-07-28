@@ -2,35 +2,82 @@
 Cercus Framework — Color Constants
 ===================================
 Centralized color palette (Lancet / Cell / NPG style).
+
+⚠️  These values are now loaded from config/defaults/colors.yaml
+    and can be overridden in the project root config.yaml.
 """
 
-# ── Per-Stimulus Side ──
-COLOR_LEFT: str = "#00468B"          # Navy Blue
-COLOR_RIGHT: str = "#ED0000"         # Crimson Red
-COLOR_CONTROL: str = "#7C878E"       # Slate Grey
+from __future__ import annotations
 
-# ── Stimulus Waveform Channels ──
-COLOR_OSCI_VIS: str = "#ADB6B6"      # Cool Grey (visual stimulus background)
-COLOR_OSCI_HW: str = "#E69F00"       # Sand Orange (hardware stimulus background)
+from cercus.config import get_colors
 
-# ── Response Type ──
-COLOR_ESCAPE: str = "#ED0000"
-COLOR_PREWALK: str = "#00468B"
-COLOR_NO_RESPONSE: str = "#7C878E"
+# ═══════════════════════════════════════════════════════════════════════
+# Per-Stimulus Side
+# ═══════════════════════════════════════════════════════════════════════
 
-# ── Stillness Binary Pair ──
-COLOR_WITH_STILLNESS: str = COLOR_PREWALK      # deep navy — the signal state
-COLOR_NO_STILLNESS: str = "#5B6770"            # neutral rock-grey — absence
+_COLOR_LEFT = get_colors().left
+COLOR_LEFT: str = str(_COLOR_LEFT)
 
-# ── NPG (Nature Publishing Group) Colour Palette ──
-# Colour-blind friendly, widely used in top-tier journals.
-NPG_PALETTE: list[str] = [
-    "#E64B35",   # Red
-    "#4DBBD5",   # Cyan
-    "#00A087",   # Teal
-    "#3C5488",   # Navy Blue
-    "#F39B7F",   # Salmon
-    "#8491B4",   # Slate Blue
-    "#91D1C2",   # Mint
-    "#DC0000",   # Dark Red
+_COLOR_RIGHT = get_colors().right
+COLOR_RIGHT: str = str(_COLOR_RIGHT)
+
+_COLOR_CONTROL = get_colors().control
+COLOR_CONTROL: str = str(_COLOR_CONTROL)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stimulus Waveform Channels
+# ═══════════════════════════════════════════════════════════════════════
+
+_COLOR_OSCI_VIS = get_colors().osci_vis
+COLOR_OSCI_VIS: str = str(_COLOR_OSCI_VIS)
+
+_COLOR_OSCI_HW = get_colors().osci_hw
+COLOR_OSCI_HW: str = str(_COLOR_OSCI_HW)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Response Type
+# ═══════════════════════════════════════════════════════════════════════
+
+_COLOR_ESCAPE = get_colors().escape
+COLOR_ESCAPE: str = str(_COLOR_ESCAPE)
+
+_COLOR_PREWALK = get_colors().prewalk
+COLOR_PREWALK: str = str(_COLOR_PREWALK)
+
+_COLOR_NO_RESPONSE = get_colors().no_response
+COLOR_NO_RESPONSE: str = str(_COLOR_NO_RESPONSE)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stillness Binary Pair
+# ═══════════════════════════════════════════════════════════════════════
+
+_COLOR_WITH_STILLNESS = get_colors().with_stillness
+COLOR_WITH_STILLNESS: str = str(_COLOR_WITH_STILLNESS)
+
+_COLOR_NO_STILLNESS = get_colors().no_stillness
+COLOR_NO_STILLNESS: str = str(_COLOR_NO_STILLNESS)
+
+# ═══════════════════════════════════════════════════════════════════════
+# NPG (Nature Publishing Group) Colour Palette
+# ═══════════════════════════════════════════════════════════════════════
+
+_NPG_PALETTE = get_colors().npg_palette
+NPG_PALETTE: list[str] = list(_NPG_PALETTE)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Backward Compatibility Aliases
+# ═══════════════════════════════════════════════════════════════════════
+
+__all__ = [
+    "COLOR_LEFT",
+    "COLOR_RIGHT",
+    "COLOR_CONTROL",
+    "COLOR_OSCI_VIS",
+    "COLOR_OSCI_HW",
+    "COLOR_ESCAPE",
+    "COLOR_PREWALK",
+    "COLOR_NO_RESPONSE",
+    "COLOR_WITH_STILLNESS",
+    "COLOR_NO_STILLNESS",
+    "NPG_PALETTE",
 ]

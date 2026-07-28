@@ -29,6 +29,8 @@ from cercus.constants.colors import (
     NPG_PALETTE,
 )
 from cercus.constants.geometry import (
+    HEATMAP_SPEED_MAX,
+    HEATMAP_VMAX,
     LEGACY_TRIAL_DURATION_MS,
     RADIUS_MM,
     SPEED_WINDOW_MS,
