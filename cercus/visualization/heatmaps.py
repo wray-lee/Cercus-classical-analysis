@@ -219,21 +219,21 @@ def plot_spaghetti_kinetics_heatmap(
         note = " (aligned to TTC)" if response_type == "NoResponse" else ""
         ax.set_title(f"{response_type}{note}", fontweight="bold")
 
-        ax.text(
-            0.02,
-            0.98,
-            f"stillness {stillness:.0%}",
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=7,
-            color="white",
-            fontweight="bold",
-            path_effects=[
-                path_effects.withStroke(linewidth=2.0, foreground="black")
-            ],
-            zorder=10,
-        )
+        # ax.text(
+        #     0.02,
+        #     0.98,
+        #     f"stillness {stillness:.0%}",
+        #     transform=ax.transAxes,
+        #     ha="left",
+        #     va="top",
+        #     fontsize=7,
+        #     color="white",
+        #     fontweight="bold",
+        #     path_effects=[
+        #         path_effects.withStroke(linewidth=2.0, foreground="black")
+        #     ],
+        #     zorder=10,
+        # )
 
         ax.set_xlabel("Time from escape onset (ms)")
         if j == 0:
