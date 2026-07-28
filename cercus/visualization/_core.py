@@ -28,6 +28,12 @@ from pipeline.constants import (
     COLOR_RIGHT,
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
+    RADIUS_MM,
+    TRAJ_USE_ESCAPE_ONSET_HEADING,
+    TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
+    TRAJ_USE_RIGID_ROTATION,
+    TRAJ_USE_Z_DEGREE,
+    DZ_INTEGRATION_RANGE,
 )
 
 log = logging.getLogger(__name__)
@@ -216,6 +222,104 @@ def draw_oscilloscope_channels(ax: plt.Axes, df: pd.DataFrame, cond: str) -> Non
     ax.set_ylabel("")
     ax.set_xlabel("Time relative to TTC (ms)")
     ax.grid(False)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Trajectory Mask Computation (shared helper)
+# ══════════════════════════════════════════════════════════════════════
+
+
+def compute_trajectory_masks(
+    grp: pd.DataFrame,
+    onset_ms: float,
+    offset_ms: float,
+    *,
+    use_escape_onset_only_xy: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
+    use_escape_onset_heading: bool = TRAJ_USE_ESCAPE_ONSET_HEADING,
+    use_z_degree: bool = TRAJ_USE_Z_DEGREE,
+    use_rigid_rotation: bool = TRAJ_USE_RIGID_ROTATION,
+    dz_integration_range: str = DZ_INTEGRATION_RANGE,
+    radius_mm: float = RADIUS_MM,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, float, np.ndarray | None] | None:
+    """Compute trajectory masks and call body_to_traj for one trial group.
+
+    Returns (traj_x, traj_y, mask_xy, mask_z, heading_offset, macro_yaw_override)
+    or None if the trial has no valid trajectory.
+    """
+    t_vals = grp["t_rel"].values
+
+    _is_valid = pd.notna(onset_ms) and pd.notna(offset_ms)
+    if _is_valid:
+        onset_idx = int(np.argmin(np.abs(t_vals - onset_ms)))
+        offset_idx = int(np.argmin(np.abs(t_vals - offset_ms)))
+        if onset_idx >= offset_idx:
+            offset_idx = min(onset_idx + 1, len(t_vals) - 1)
+        escape_mask = np.zeros(len(t_vals), dtype=bool)
+        escape_mask[onset_idx:offset_idx] = True
+    else:
+        escape_mask = None
+        onset_idx = 0
+
+    full_mask = np.ones(len(t_vals), dtype=bool)
+    mask_xy = (
+        escape_mask
+        if (use_escape_onset_only_xy and escape_mask is not None)
+        else full_mask
+    )
+
+    _macro_yaw_override = None
+    if _is_valid and dz_integration_range == "escape_interval":
+        mask_z = escape_mask
+    elif _is_valid and dz_integration_range == "trial_to_onset":
+        mask_z = np.zeros(len(t_vals), dtype=bool)
+        mask_z[:onset_idx] = True
+    elif _is_valid and dz_integration_range == "escape_angular_peak":
+        av = (
+            grp["angular_velocity"].values
+            if "angular_velocity" in grp.columns
+            else None
+        )
+        if av is not None:
+            mask_z = build_angular_peak_dz_mask(
+                av, onset_idx, offset_idx, len(t_vals)
+            )
+        else:
+            mask_z = escape_mask
+    elif _is_valid and dz_integration_range == "escape_onset_heading":
+        mask_z = escape_mask
+        _macro_yaw_override = (
+            np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / radius_mm
+        )
+    else:
+        mask_z = full_mask
+
+    _heading_dz_mask = (
+        escape_mask if (_is_valid and escape_mask is not None) else None
+    )
+    _heading_offset = 0.0
+    if (
+        use_escape_onset_heading
+        and _is_valid
+        and dz_integration_range != "escape_onset_heading"
+    ):
+        _heading_offset = (
+            np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / radius_mm
+        )
+
+    if not np.any(mask_xy):
+        return None
+
+    traj_x, traj_y = body_to_traj(
+        grp,
+        mask_xy,
+        use_z=use_z_degree,
+        use_rigid_rotation=use_rigid_rotation,
+        mask_z=mask_z,
+        heading_dz_mask=_heading_dz_mask,
+        macro_yaw_override=_macro_yaw_override,
+        heading_offset=_heading_offset,
+    )
+    return traj_x, traj_y, mask_xy, mask_z, _heading_offset, _macro_yaw_override
 
 
 # ══════════════════════════════════════════════════════════════════════
