@@ -308,7 +308,7 @@ def plot_trial_stacked_heatmap(
     t_window: tuple[float, float] = (-1.0, 2.0),
     t_bin_s: float = 0.01,
     vmax: float = 50.0,
-    figsize: tuple[float, float] = (10, 4.5),
+    figsize: tuple[float, float] = (12, 4.5),
     conditions: list[str] | None = None,
     max_trials_per_panel: int = 200,
 ) -> plt.Figure:
@@ -330,7 +330,7 @@ def plot_trial_stacked_heatmap(
     n_panels = len(conditions)
     fig = plt.figure(figsize=figsize)
     gs = gridspec.GridSpec(
-        1, n_panels, hspace=0.15, wspace=0.05, figure=fig
+        1, n_panels, hspace=0.15, wspace=0.25, figure=fig
     )
 
     t_common = np.arange(t_window[0], t_window[1], t_bin_s)
@@ -402,6 +402,7 @@ def plot_trial_stacked_heatmap(
             ax.set_xlabel("Time from escape onset (s)")
         if j == 0:
             ax.set_ylabel("Trial")
+            ax.set_yticks([])
         else:
             plt.setp(ax.get_yticklabels(), visible=False)
 
