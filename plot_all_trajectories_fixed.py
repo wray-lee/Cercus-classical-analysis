@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root directory containing per-subject session CSVs.",
     )
     p.add_argument(
-        "--save", required=True,
+        "--output", required=True,
         help="Path to save the output figure (e.g. fixed_trajectories.svg).",
     )
     p.add_argument(
@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     input_dir = Path(args.input_dir)
-    save_path = Path(args.save)
+    save_path = Path(args.output)
 
     if not input_dir.is_dir():
         raise FileNotFoundError(f"--input-dir does not exist: {input_dir}")

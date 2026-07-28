@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root directory containing per-subject session CSVs.",
     )
     p.add_argument(
-        "--output-dir", required=True,
+        "--output", required=True,
         help="Directory for all output files (CSV + figures). Created if it doesn't exist.",
     )
     return p
@@ -267,7 +267,7 @@ def _compute_iqr_gmm_threshold(vmax_values: np.ndarray) -> float | None:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not input_dir.is_dir():

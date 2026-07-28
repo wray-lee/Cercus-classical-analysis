@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--control-type", default="baseline_visual_test", help="Trial type for control condition.")
     p.add_argument("--stim-type", default="looming_wind", help="Trial type for stimulus condition.")
-    p.add_argument("--save", default=None, help="Directory to save SVG figures. Omit to show interactively.")
+    p.add_argument("--output", default=None, help="Directory to save SVG figures. Omit to show interactively.")
     return p
 
 
@@ -176,8 +176,8 @@ def main(argv: list[str] | None = None) -> None:
         log.info("Trial types in data: %s", types_present)
 
         # ── Summary metrics CSV export ──
-        if args.save:
-            subject_dir = Path(args.save) / subject_name
+        if args.output:
+            subject_dir = Path(args.output) / subject_name
             export_summary_metrics(df, subject_dir / f"{subject_name}_summary_metrics.csv")
 
         # ── Module 3: output routing ──
@@ -203,8 +203,8 @@ def main(argv: list[str] | None = None) -> None:
                 log.info("  Mean peak: %.1f mm/s", peaks.mean())
                 log.info("════════════════════════════════════════════════")
 
-        if args.save:
-            subject_dir = Path(args.save) / subject_name
+        if args.output:
+            subject_dir = Path(args.output) / subject_name
 
             # ── Escape figures ──
             _generate_response_figures(

@@ -1,0 +1,4 @@
+"""
+Cercus Framework — Constants Package
+=====================================
+"""

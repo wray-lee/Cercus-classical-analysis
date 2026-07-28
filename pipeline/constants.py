@@ -1,7 +1,8 @@
 """
 Cercus Framework — Shared Constants, Colors & Publication Style
 ===============================================================
-Centralised configuration for thresholds, geometry, and Nature/Science rcParams.
+*** DEPRECATED *** — Import from ``cercus.constants`` or ``cercus.config`` instead.
+Retained for backward compatibility.
 """
 
 from __future__ import annotations
@@ -14,12 +15,38 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
+from cercus.constants.colors import (
+    COLOR_CONTROL,
+    COLOR_ESCAPE,
+    COLOR_LEFT,
+    COLOR_NO_RESPONSE,
+    COLOR_NO_STILLNESS,
+    COLOR_OSCI_HW,
+    COLOR_OSCI_VIS,
+    COLOR_PREWALK,
+    COLOR_RIGHT,
+    COLOR_WITH_STILLNESS,
+    NPG_PALETTE,
+)
+from cercus.constants.geometry import (
+    LEGACY_TRIAL_DURATION_MS,
+    RADIUS_MM,
+    SPEED_WINDOW_MS,
+    TRAJECTORY_MAX_RADIUS_MM,
+    TRAJECTORY_STEP_MM,
+)
+from cercus.constants.thresholds import (
+    ESCAPE_START_THRESHOLD,
+    ESCAPE_VMAX_THRESHOLD,
+    ESCAPE_WINDOW_MS,
+    POST_STIM_BUFFER_MS,
+    PREWALK_THRESHOLD,
+    PREWALK_WINDOW_MS,
+)
+
 _log = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────
-# YAML Configuration Loader
-# ──────────────────────────────────────────────────────────────────────
+# ── YAML Configuration Loader ──
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
@@ -46,22 +73,17 @@ _escape_cfg = _cfg.get("escape", {})
 _viz_cfg = _cfg.get("visualization", {})
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Visualization Style Enum
-# ──────────────────────────────────────────────────────────────────────
+# ── Visualization Style Enum ──
 
 class BarLabelStyle(enum.Enum):
-    """Bar chart percentage label placement style."""
-    INLINE = "inline"      # label inside bar (intuitive)
-    AXIS = "axis"          # label via dashed line to y-axis (publication style)
+    INLINE = "inline"
+    AXIS = "axis"
 
 
 BAR_LABEL_STYLE: BarLabelStyle = BarLabelStyle(_viz_cfg.get("bar_label_style", "inline"))
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Trajectory Configuration
-# ──────────────────────────────────────────────────────────────────────
+# ── Trajectory Configuration ──
 
 TRAJ_USE_Z_DEGREE: bool = bool(_traj_cfg.get("use_z_degree_to_draw", True))
 TRAJ_USE_RIGID_ROTATION: bool = bool(_traj_cfg.get("use_rigid_rotation", False))
@@ -76,28 +98,17 @@ if DZ_INTEGRATION_RANGE not in _DZ_RANGE_VALID:
     DZ_INTEGRATION_RANGE = "escape_interval"
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Publication-Grade Global Style (Nature / Science / Cell)
-# ──────────────────────────────────────────────────────────────────────
+# ── Publication-Grade Global Style ──
 
 
 def _apply_publication_style() -> None:
-    """Inject publication-grade rcParams for Nature/Science/Cell standards.
-
-    Covers four global constraints:
-    1. Canvas: dpi=300, white background, hidden top/right spines.
-    2. Typography: Helvetica/Arial sans-serif, hierarchical font sizes.
-    3. Rendering: tight_layout-compatible defaults, high-contrast edges.
-    4. Colour: NPG palette defined separately as ``NPG_PALETTE``.
-    """
+    """Inject publication-grade rcParams for Nature/Science/Cell standards."""
     rc = plt.rcParams
-    # ── Font family (sans-serif, Helvetica/Arial preferred) ──
     rc["font.family"] = "sans-serif"
     rc["font.sans-serif"] = ["Helvetica", "Arial", "DejaVu Sans"]
     rc["svg.fonttype"] = "none"
     rc["pdf.fonttype"] = 42
 
-    # ── Hierarchical font sizes ──
     rc["font.size"] = 10
     rc["axes.titlesize"] = 14
     rc["axes.titleweight"] = "bold"
@@ -107,14 +118,12 @@ def _apply_publication_style() -> None:
     rc["xtick.labelsize"] = 10
     rc["ytick.labelsize"] = 10
 
-    # ── Line widths & spine visibility ──
     rc["lines.linewidth"] = 1.5
     rc["axes.linewidth"] = 1.2
     rc["axes.spines.top"] = False
     rc["axes.spines.right"] = False
     rc["axes.edgecolor"] = "#000000"
 
-    # ── Ticks ──
     rc["xtick.direction"] = "out"
     rc["ytick.direction"] = "out"
     rc["xtick.major.size"] = 4
@@ -124,108 +133,35 @@ def _apply_publication_style() -> None:
     rc["xtick.minor.size"] = 2
     rc["ytick.minor.size"] = 2
 
-    # ── Legend ──
     rc["legend.frameon"] = False
     rc["legend.borderaxespad"] = 0
 
-    # ── Canvas: high DPI, transparent background ──
     rc["figure.dpi"] = 150
     rc["savefig.dpi"] = 300
     rc["savefig.bbox"] = "tight"
     rc["savefig.transparent"] = True
-    # rc["figure.facecolor"] = "#FFFFFF"
-    # rc["axes.facecolor"] = "#FFFFFF"
-    # rc["savefig.facecolor"] = "#FFFFFF"
     rc["axes.grid"] = False
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Colour Palette (Lancet / Cell style)
-# ──────────────────────────────────────────────────────────────────────
-
-COLOR_LEFT: str = "#00468B"          # Navy Blue
-COLOR_RIGHT: str = "#ED0000"         # Crimson Red
-COLOR_CONTROL: str = "#7C878E"       # Slate Grey
-COLOR_OSCI_VIS: str = "#ADB6B6"      # Cool Grey (visual stimulus background)
-COLOR_OSCI_HW: str = "#E69F00"       # Sand Orange (hardware stimulus background)
-COLOR_ESCAPE: str = "#ED0000"
-COLOR_PREWALK: str = "#00468B"
-COLOR_NO_RESPONSE: str = "#7C878E"
-# Stillness binary pair (plot_prewalk_stillness): neutral rock-grey for the
-# "without" state so it reads as a true present/absent contrast, not a lighter
-# shade of the same blue (avoids the original #B0C4DE light-steel-blue look).
-COLOR_WITH_STILLNESS: str = COLOR_PREWALK      # deep navy — the signal state
-COLOR_NO_STILLNESS: str = "#5B6770"            # neutral rock-grey — absence
-
-
-# ── NPG (Nature Publishing Group) colour palette ─────────────────────
-# Colour-blind friendly, widely used in top-tier journals.
-
-NPG_PALETTE: list[str] = [
-    "#E64B35",   # Red
-    "#4DBBD5",   # Cyan
-    "#00A087",   # Teal
-    "#3C5488",   # Navy Blue
-    "#F39B7F",   # Salmon
-    "#8491B4",   # Slate Blue
-    "#91D1C2",   # Mint
-    "#DC0000",   # Dark Red
-]
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Event / Trial Metadata Keys
-# ──────────────────────────────────────────────────────────────────────
+# ── Event / Trial Metadata Keys ──
 
 DETAILS_KEYS: tuple[str, ...] = (
-    "type",
-    "target_ttc_ms",
-    "wind_dir",
-    "screen_side",
-    "lv_ratio_ms",
-    "init_half_angle_deg",
-    "direction",
-    "side",
+    "type", "target_ttc_ms", "wind_dir", "screen_side",
+    "lv_ratio_ms", "init_half_angle_deg", "direction", "side",
 )
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Geometry & Timing Constants
-# ──────────────────────────────────────────────────────────────────────
-
-SPEED_WINDOW_MS: float = 100.0
-LEGACY_TRIAL_DURATION_MS: float = 5829.6
-RADIUS_MM: float = 30.0
+# ── Helpers ──
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Physical-Threshold Constants
-# ──────────────────────────────────────────────────────────────────────
-
-ESCAPE_VMAX_THRESHOLD: float = float(_escape_cfg.get("vmax_threshold", 50.0))    # mm/s — burst floor for valid escape
-ESCAPE_START_THRESHOLD: float = float(_escape_cfg.get("start_threshold", 10.0))  # mm/s — latency onset anchor
-PREWALK_THRESHOLD: float = 10.0           # mm/s — pre-stimulus spontaneous activity
-PREWALK_WINDOW_MS: float = 1000.0         # ms — pre-stimulus validation window
-POST_STIM_BUFFER_MS: float = 50.0         # ms — post-stimulus tail buffer
-ESCAPE_WINDOW_MS: float = 250.0           # ms — post-stimulus burst detection window
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Trajectory Plot Constants
-# ──────────────────────────────────────────────────────────────────────
-
-TRAJECTORY_MAX_RADIUS_MM: float = 120.0
-TRAJECTORY_STEP_MM: float = 10.0
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────
-
-
-def _get_unified_side(data: pd.Series | pd.DataFrame) -> str:
-    """Extract and normalize direction identifier to ``'left'`` or ``'right'``."""
-    row = data.iloc[0] if isinstance(data, pd.DataFrame) else data
+def _get_unified_side(data) -> str:
+    """Extract and normalize direction identifier to 'left' or 'right'."""
+    if isinstance(data, pd.DataFrame):
+        row = data.iloc[0]
+    elif isinstance(data, pd.Series):
+        row = data
+    else:
+        return ""
     for col in ["screen_side", "wind_dir", "direction", "side"]:
         if col in row and pd.notna(row[col]):
             val = str(row[col]).strip().lower()

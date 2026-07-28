@@ -2,6 +2,97 @@
 
 Cricket escape-response behavioral analysis pipeline. Processes raw kinematics data, classifies trials into Escape / PreWalk / NoResponse, generates publication-grade figures (Nature/Science style), and performs Bayesian population-level inference via MCMC.
 
+## Project Structure (Refactored)
+
+```
+Cercus-cli/
+├── cercus/                          # NEW: Refactored package
+│   ├── visualization/               # Publication-grade plotting
+│   │   ├── __init__.py              # Re-exports all plot_* functions
+│   │   ├── _core.py                 # Drawing helpers (grid, arrows, thresholds, oscilloscope)
+│   │   ├── _circstats.py            # Circular statistics (Rayleigh, Watson-Williams)
+│   │   ├── trajectories.py          # Trajectory overlay plots
+│   │   ├── kinetics.py              # Speed & angular velocity kinetics plots
+│   │   ├── heatmaps.py              # Density & trial-stacked heatmaps
+│   │   ├── vmax.py                  # V_max distribution & GMM threshold plots
+│   │   ├── behavior.py              # Behavior probability & habituation plots
+│   │   └── polar.py                 # Polar direction histogram & angle distribution
+│   ├── core/
+│   │   ├── domain.py                # Typed data models (Trial, EscapeInterval, ResponseType)
+│   │   └── kinematics/
+│   │       ├── smoothing.py         # Savitzky-Golay smoothing utilities
+│   │       ├── velocity.py          # Velocity & angular velocity computation
+│   │       ├── latency.py           # Escape latency backward-search & interval detection
+│   │       └── trajectory_integration.py  # Dual-stage trajectory integration (Stage 1+2)
+│   ├── config/
+│   │   └── settings.py              # Pydantic TrajectoryConfig with cross-field validation
+│   ├── constants/
+│   │   ├── colors.py                # Color palette (Lancet / NPG style)
+│   │   ├── thresholds.py            # Physical thresholds
+│   │   └── geometry.py              # Geometry & timing constants
+│   ├── classification/              # (Future) Strategy-based classifier
+│   └── cli/
+│       └── app.py                   # Unified Typer CLI with commands: single, population, mcmc, ...
+├── pipeline/                        # Legacy backward-compat wrappers
+│   ├── io.py                        # CSV loading, session pairing, summary export
+│   ├── kinematics.py                # Kinematics integration (ORIGINAL, stable)
+│   ├── classifier.py                # Ternary classification
+│   ├── visualization.py             # ***DEPRECATED*** — re-exports from cercus.visualization
+│   ├── constants.py                 # ***DEPRECATED*** — re-exports from cercus.constants + loader
+│   └── mcmc.py                      # Bayesian hierachical models (PyMC / NumPyro)
+├── main.py                          # Full single-subject pipeline
+├── plot_trial_panels.py             # Per-trial composite panels
+├── plot_all_trajectories_fixed.py   # Unified trajectory overlay
+├── mcmc_analysis.py                 # MCMC psychophysics analysis
+├── population_analysis.py           # Cross-subject batch: adaptive threshold + population viz
+├── config.yaml                      # Trajectory drawing configuration
+├── tests/
+│   ├── test_visualization_regression.py  # Hash-based plot regression tests
+│   └── test_classifier_golden.py         # 10 synthetic golden trials for classifier
+└── requirements.txt
+```
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# NEW unified CLI (Typer-based)
+python -m cercus.cli.app single --input path/to/data/ --output figures/
+python -m cercus.cli.app population --input path/to/data/ --output results/
+python -m cercus.cli.app mcmc --input path/to/data/ --output results/
+
+# Equivalent old-style entry points
+python main.py --input-dir path/to/data/ --output figures/
+python plot_trial_panels.py --input-dir path/to/data/ --output figures/
+python plot_all_trajectories_fixed.py --input-dir path/to/data/ --output trajectories.svg
+python population_analysis.py --input-dir path/to/data/ --output results/
+python mcmc_analysis.py --input-dir path/to/data/ --output results/
+```
+
+### CLI Commands
+
+| Command | Description | Equivalent Legacy Script |
+|---|---|---|
+| `python -m cercus.cli.app single --input <dir> --output <dir>` | Single-subject analysis | `main.py` |
+| `python -m cercus.cli.app population --input <dir> --output <dir>` | Population-level batch | `population_analysis.py` |
+| `python -m cercus.cli.app mcmc --input <dir> --output <dir>` | Bayesian MCMC analysis | `mcmc_analysis.py` |
+| `python -m cercus.cli.app trial-panels --input <dir> --output <dir>` | Per-trial composite panels | `plot_trial_panels.py` |
+| `python -m cercus.cli.app trajectories --input <dir> --output <dir>` | Unified trajectory overlay | `plot_all_trajectories_fixed.py` |
+
+### Import Paths
+
+| New Import (preferred) | Old Import (deprecated) |
+|---|---|
+| `from cercus.visualization import plot_trajectory_overlay` | `from pipeline.visualization import plot_trajectory_overlay` |
+| `from cercus.visualization import plot_speed_kinetics` | `from pipeline.visualization import plot_speed_kinetics` |
+| `from cercus.core.domain import Trial, ResponseType` | — |
+| `from cercus.config.settings import TrajectoryConfig` | — |
+| `from cercus.core.kinematics.trajectory_integration import integrate_body_trajectory` | `from pipeline.visualization import _integrate_body_trajectory` |
+
+The old `pipeline.visualization` import paths still work but emit a `DeprecationWarning`.
+
 ## Standardized Classification Criteria
 
 | Type | Criteria |
@@ -24,58 +115,6 @@ For `baseline_visual` (visual-only looming) trials the stimulus onset precedes T
 | PreWalk check anchor | Stimulus onset (`t_rel = 0` or wind onset) | `latency_ms` (escape onset) |
 | Escape baseline check | Speed at stimulus onset | Speed at the frame immediately before `latency_ms` |
 
-## Project Structure
-
-```
-Cercus-cli/
-├── main.py                      # Full pipeline: preprocess → classify → visualize
-├── plot_trial_panels.py         # Per-trial composite panels (speed, angvel, stimulus, trajectory)
-├── plot_all_trajectories_fixed.py  # Unified trajectory overlay across all subjects
-├── mcmc_analysis.py             # Bayesian MCMC psychophysics analysis
-├── population_analysis.py       # Cross-subject batch: adaptive threshold + population visualization
-├── config.yaml                  # Trajectory drawing configuration
-├── requirements.txt
-├── pipeline/
-│   ├── io.py                    # CSV loading, session pairing, summary export
-│   ├── kinematics.py            # Speed, angular velocity, escape latency & interval computation
-│   ├── classifier.py            # Ternary classification: Escape / PreWalk / NoResponse
-│   ├── visualization.py         # Publication-grade plotting functions
-│   ├── constants.py             # Thresholds, colors, geometry, YAML config loader
-│   └── mcmc.py                  # Bayesian hierarchical models (PyMC / NumPyro)
-└── test/
-```
-
-## Quick Start
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Full pipeline: classify + visualize all trials
-python main.py --input-dir path/to/data/ --save figures/
-
-# Per-trial composite panels
-python plot_trial_panels.py --input-dir path/to/data/ --save figures/
-
-# Unified trajectory overlay
-python plot_all_trajectories_fixed.py --input-dir path/to/data/ --save trajectories.svg
-
-# Population batch: adaptive threshold + summary CSV + population figures
-python population_analysis.py --input-dir path/to/data/ --output-dir results/
-
-# Bayesian MCMC analysis
-python mcmc_analysis.py --input-dir path/to/data/ --output-dir results/
-```
-
-## Input Data Format
-
-The input directory must contain paired CSV files following the naming convention:
-
-- `{subject_name}_session_{N}_events.csv` — columns: `event_name`, `timestamp`, `global_trial_id`, `details` (JSON)
-- `{subject_name}_session_{N}_kinematics.csv` — columns: `sys_time`, `dx`, `dy`, `dz`, `stim_state`, `global_trial_id`
-
-Sessions are auto-discovered and paired by subject name and session ID. Legacy merged CSV data can be converted via `test/converterOld.py`.
-
 ## Trajectory Configuration (`config.yaml`)
 
 All trajectory drawing parameters are centralised in `config.yaml` under the `trajectory` key:
@@ -88,6 +127,12 @@ All trajectory drawing parameters are centralised in `config.yaml` under the `tr
 | `dz_integration_range` | str | `"escape_interval"` | Range of dz used for Stage 2 rigid rotation angle. `"full_trial"`, `"escape_interval"`, `"trial_to_onset"`, `"escape_angular_peak"`, or `"escape_onset_heading"`. Stage 1 curvature always uses the full escape interval dz. |
 | `use_rigid_rotation` | bool | `false` | Rigid-body rotation mode: accumulate dx/dy linearly, then apply total yaw as a single rotation. Takes precedence over per-frame heading when `true`. |
 | `use_angular_velocity_offset` | bool | `false` | Refine escape interval offset to the first angular-velocity zero-crossing after its peak. |
+
+### Validation (Pydantic TrajectoryConfig)
+
+When using `TrajectoryConfig` from `cercus.config.settings`:
+- If `use_rigid_rotation=False`, `dz_integration_range` is ignored with a warning
+- If `use_escape_onset_heading=True` and `use_z_degree_to_draw=False`, raises `ValueError`
 
 ### Two Rotation Modes
 
@@ -103,20 +148,33 @@ Two-stage decoupled design:
   - `"escape_angular_peak"` — `sum(dz)` from onset to the first angular-velocity zero-crossing after the peak (filters out air-ball rebound)
   - `"escape_onset_heading"` — cumulative heading at escape onset (`cumsum(dz)[onset] / RADIUS`)
 
-The two stages are independent: changing `dz_integration_range` only affects the rotation angle, not the trajectory curvature.
-
 ## Key Modules
 
-### `pipeline/kinematics.py`
-Pure physics layer. Integrates body-frame dx/dy/dz into trajectories with Savitzky-Golay smoothing, computes speed (mm/s) and angular velocity (rad/s), extracts escape latency and interval via backward-search threshold crossing.
+### `cercus.core.kinematics.latency.py`
+Pure physics functions for escape latency detection via backward-search threshold crossing and escape interval computation. No matplotlib dependency.
+
+### `cercus.core.kinematics.trajectory_integration.py`
+Dual-stage trajectory integration algorithm:
+- **Stage 1**: per-frame heading integration preserving local curvature and S-turns
+- **Stage 2**: curvature-thresholded rigid macro rotation for correct left/right fan dispersion
 
 ### `pipeline/classifier.py`
 Ternary state classifier. Priority order: (1) NoResponse if no valid burst, (2) PreWalk if pre-stimulus activity exceeds threshold, (3) Escape if baseline is quiescent. Adds `response_type`, `v_max`, `latency_ms`, `interval_onset_ms`, `interval_offset_ms` columns.
 
-### `pipeline/visualization.py`
-Publication-grade plotting (Nature/Science/Cell style). Includes trajectory overlay, speed kinetics, spaghetti plots (line and heatmap variants), behavior probability, habituation curves, V_max distribution, escape angle distribution, polar direction histogram (with Rayleigh test p-value), and the two-stage trajectory integration algorithm (local heading + curvature-thresholded rigid rotation).
+### `cercus/visualization/`
+Publication-grade plotting (Nature/Science/Cell style), split into focused modules:
 
-Key functions:
+| Module | Contents |
+|---|---|
+| `trajectories.py` | Trajectory overlay and unified global overlay |
+| `kinetics.py` | Speed kinetics, population spaghetti, single-trial kinetics |
+| `heatmaps.py` | Onset-aligned density heatmap, trial-stacked waterfall heatmap |
+| `vmax.py` | V_max histogram + KDE, GMM threshold distribution plots |
+| `behavior.py` | Behavior probability bars, habituation curves, PreWalk stillness |
+| `polar.py` | Escape angle distribution, polar direction rose with Rayleigh test |
+
+### Key Figure Highlights
+
 - `plot_population_speed_kinetics()` — Mean ± SEM speed curves by response type (Escape/PreWalk/NoResponse), aligned to TTC
 - `plot_population_spaghetti_kinetics()` — Individual trial spaghetti + mean overlay by response type
 - `plot_spaghetti_kinetics_heatmap()` — **Onset-aligned heatmap** (re-aligns time to `interval_onset_ms=0`, uses trial density instead of alpha lines to avoid overplotting)
@@ -128,87 +186,95 @@ Cross-subject batch processor. Scans an input directory, runs the full preproces
 
 #### Adaptive V_max Threshold
 
-Computes three candidate thresholds independently on **all trials** (not filtered by classification), then selects one for tagging via a priority cascade. Using all trials decouples the adaptive threshold from the fixed `ESCAPE_VMAX_THRESHOLD`, avoiding circular dependency.
+Computes three candidate thresholds independently on **all trials** (not filtered by classification), then selects one for tagging via a priority cascade.
 
 | Priority | Method | Domain | Key Idea |
 |---|---|---|---|
-| 1 | **KDE Valley** | Physical | Fits a KDE curve (`bw_method=0.3`), detects peaks via `argrelmax`, locates the deepest trough between the first two peaks via `argrelmin`. Returns `None` if fewer than 2 peaks are found. |
-| 2 | **Log-GMM (3-component)** | Log-space | Applies `np.log()` to compress the right tail, fits a **3-component** `GaussianMixture` on **all trials** (no classification dependency), producing two intersection points: `start_threshold` (no-response vs movement) and `escape_threshold` (movement vs burst). Back-transforms with `np.exp()`. |
-| 3 | **IQR-GMM** | Physical (adaptive truncation) | Computes `upper_bound = Q3 + 1.5 * IQR` as a data-driven ceiling, truncates outliers above it, then fits a 2-component GMM in the original physical domain. Disabled by default (`_ENABLE_IQR_GMM = False`). |
+| 1 | **KDE Valley** | Physical | Fits a KDE curve (`bw_method=0.3`), detects peaks via `argrelmax`, locates the deepest trough between the first two peaks via `argrelmin`. |
+| 2 | **Log-GMM (3-component)** | Log-space | Applies `np.log()` to compress the right tail, fits a **3-component** `GaussianMixture` on **all trials**, produces `start_threshold` and `escape_threshold`. |
+| 3 | **IQR-GMM** | Physical (adaptive truncation) | Computes `upper_bound = Q3 + 1.5 * IQR` as a data-driven ceiling, truncates outliers, fits 2-component GMM. |
 | 4 | Hardcoded fallback | — | Falls back to 120 mm/s if all methods fail. |
-
-The Log-GMM produces **two** thresholds from a single fit:
-
-| Threshold | Meaning | Typical range |
-|---|---|---|
-| `start_threshold` | No-response vs any movement | ~20 mm/s |
-| `escape_threshold` | Weak movement vs escape burst | ~160 mm/s |
-
-`escape_threshold` is used for `is_valid_escape` tagging and per-subject escape rates. The V_max distribution plot displays both thresholds (orange = start, red = escape) plus the IQR-GMM threshold (blue) if enabled.
 
 #### Population Visualizations
 
-Multiple SVG figures are generated (headless rendering via `matplotlib.use("Agg")`):
-
-| Figure | Purpose | Content |
-|---|---|---|
-| `habituation.svg` | Fatigue inspection | Per-subject V_max traces + mean ± SEM ribbon across trial sequence |
-| `vmax_gmm.svg` | **Threshold determination** | All trials (Escape + PreWalk + NoResponse) histogram + KDE, with GMM start (orange `#E69F00`), GMM escape (red `#DC0000`), optional IQR-GMM (blue `#3C5488`), and fixed reference lines (50 / 10 mm/s) |
-| `vmax_response.svg` | **Effective response inspection** | Escape + PreWalk only histogram + KDE, with the active tagging threshold (red) — excludes NoResponse noise |
-| `behavior_prob.svg` | Response proportions | Escape / PreWalk / NoResponse bar chart across all subjects |
-| `prewalk_stillness.svg` | PreWalk stillness analysis | Proportion of PreWalk trials with stillness before escape onset |
-| `speed_kinetics.svg` | Population speed kinetics | Mean ± SEM speed curves by response type (Escape/PreWalk/NoResponse), aligned to TTC |
-| `spaghetti_kinetics.svg` | Population spaghetti plots | Individual trials + mean overlay by response type, aligned to TTC |
-| `spaghetti_kinetics_heatmap.svg` | **Onset-aligned heatmap** | Trial density heatmap aligned to escape onset (`interval_onset_ms = 0`), with overlaid mean ± SEM. Avoids overplotting for large trial counts (e.g. 4464 trials). Three panels: Escape / PreWalk / NoResponse. |
-| `escape_angle_distribution.svg` | Escape direction | Histogram + KDE of final escape angles (degrees) for Escape vs PreWalk |
-| `polar_direction_histogram.svg` | **Polar direction** | 360° rose plot of escape endpoint bearings (Ipsi-mirrored). Shows circular mean μ, resultant length R, and **Rayleigh test p-value** for non-uniformity. Escape and PreWalk overlaid with proportional rose histograms. |
+| Figure | Purpose |
+|---|---|
+| `habituation.svg` | Fatigue inspection: per-subject V_max traces + mean ± SEM |
+| `vmax_gmm.svg` | Threshold determination: all trials + GMM markers |
+| `vmax_response.svg` | Effective response inspection: Escape+PreWalk only |
+| `behavior_prob.svg` | Response proportions bar chart |
+| `prewalk_stillness.svg` | PreWalk stillness analysis |
+| `speed_kinetics.svg` | Population speed kinetics by response type |
+| `spaghetti_kinetics.svg` | Population spaghetti plots |
+| `spaghetti_kinetics_heatmap.svg` | Onset-aligned density heatmap |
+| `escape_angle_distribution.svg` | Escape direction histogram + KDE |
+| `polar_direction_histogram.svg` | Polar rose with Rayleigh p-value |
 
 ### `pipeline/mcmc.py`
 Bayesian psychophysics via PyMC/NumPyro. Fits psychometric sigmoid functions to escape probability vs. TTC, tests multisensory integration hypotheses (ROPE-based posterior probability), computes Bayesian optimal integration (variance reduction), and performs survival analysis (Kaplan-Meier, Race Model Inequality).
 
 #### `--binary-mode`
 
-Controls how the ternary classification is collapsed into a binary escape/non-escape response for the Bernoulli likelihood:
-
 | Mode | Escape (= 1) | Non-escape (= 0) |
 |---|---|---|
 | `escape_only` (default) | Escape | PreWalk, NoResponse |
 | `escape_prewalk` | Escape, PreWalk | NoResponse |
 
-Example:
+## Input Data Format
 
-```bash
-python mcmc_analysis.py --input-dir data/ --output-dir results/ --binary-mode escape_prewalk
-```
+The input directory must contain paired CSV files following the naming convention:
+
+- `{subject_name}_session_{N}_events.csv` — columns: `event_name`, `timestamp`, `global_trial_id`, `details` (JSON)
+- `{subject_name}_session_{N}_kinematics.csv` — columns: `sys_time`, `dx`, `dy`, `dz`, `stim_state`, `global_trial_id`
+
+Sessions are auto-discovered and paired by subject name and session ID. Legacy merged CSV data can be converted via `test/converterOld.py`.
 
 ## Output Structure
 
-### Single-subject pipeline (`main.py`)
+### Single-subject pipeline (`main.py` or `python -m cercus.cli.app single`)
 
 ```
 figures/
 └── <subject>/
-    ├── response/       trial_<N>_escape.svg
-    ├── prewalk/        trial_<N>_prewalk.svg
-    └── no_response/    trial_<N>_noresponse.svg
+    ├── response/              trajectory_overlay.svg, speed_kinetics.svg, spaghetti_kinetics.svg
+    ├── prewalk/               trial_<N>_prewalk.svg
+    ├── no_response/           trial_<N>_noresponse.svg
+    ├── behavior_probability_distribution.svg
+    ├── habituation_curve.svg
+    ├── vmax_distribution_diagnostic.svg
+    ├── escape_angle_distribution.svg
+    └── individual_escapes/    trial_<N>_escape.svg
 ```
 
 ### Population batch (`population_analysis.py`)
 
 ```
 <output-dir>/
-├── population_summary.csv          # Per-trial metrics with is_valid_escape tagging
-├── subject_escape_rates.csv        # Per-subject escape rate summary
-├── habituation.svg                 # Fatigue curve: per-subject lines + mean±SEM ribbon
-├── vmax_gmm.svg                    # All trials V_max + GMM threshold lines
-├── vmax_response.svg               # Escape+PreWalk V_max only
-├── behavior_prob.svg               # Escape / PreWalk / NoResponse proportion bar chart
-├── prewalk_stillness.svg           # PreWalk stillness proportion analysis
-├── speed_kinetics.svg              # Population speed kinetics by response type
-├── spaghetti_kinetics.svg          # Population spaghetti plots by response type
-├── spaghetti_kinetics_heatmap.svg  # **Onset-aligned heatmap** (density visualization)
-├── escape_angle_distribution.svg   # Histogram of escape angles
-└── polar_direction_histogram.svg   # **Polar rose with Rayleigh p-value**
+├── population_summary.csv             # Per-trial metrics with is_valid_escape tagging
+├── subject_escape_rates.csv           # Per-subject escape rate summary
+├── habituation.svg                    # Fatigue curve
+├── vmax_gmm.svg                       # All trials V_max + GMM thresholds
+├── vmax_response.svg                  # Escape+PreWalk V_max only
+├── behavior_prob.svg                  # Response proportion bar chart
+├── prewalk_stillness.svg              # PreWalk stillness analysis
+├── speed_kinetics.svg                 # Population speed kinetics
+├── spaghetti_kinetics.svg             # Population spaghetti plots
+├── spaghetti_kinetics_heatmap.svg     # Onset-aligned density heatmap
+├── escape_angle_distribution.svg      # Histogram of escape angles
+└── polar_direction_histogram.svg      # Polar rose with Rayleigh p-value
+```
+
+## Regression Testing
+
+```bash
+# Run classifier golden tests (10 synthetic trials, bitwise comparison)
+pytest tests/test_classifier_golden.py -v
+
+# Run visualization regression tests (hash-based pixel comparison)
+pytest tests/test_visualization_regression.py -v
+
+# Update visualization baselines
+rm tests/baselines/*.sha256 && pytest tests/test_visualization_regression.py -v
 ```
 
 ## Dependencies
@@ -222,6 +288,8 @@ figures/
 | `pymc`, `arviz` | Bayesian MCMC model specification and diagnostics |
 | `numpyro`, `jax`, `jaxlib` | JAX-based NUTS sampler (10–100× faster, optional) |
 | `lifelines` | Kaplan-Meier survival analysis |
+| `pydantic` | Configuration model validation (TrajectoryConfig) |
+| `typer` | Unified CLI application |
 
 ## License
 

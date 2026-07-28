@@ -333,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--input-dir", required=True,
                    help="Directory containing session CSV files.")
-    p.add_argument("--save", required=True,
+    p.add_argument("--output", required=True,
                    help="Directory to save output figures.")
     return p
 
@@ -375,7 +375,7 @@ def _export_trials(
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     input_dir = Path(args.input_dir)
-    save_dir = Path(args.save)
+    save_dir = Path(args.output)
 
     if not input_dir.is_dir():
         raise FileNotFoundError(f"--input-dir does not exist: {input_dir}")

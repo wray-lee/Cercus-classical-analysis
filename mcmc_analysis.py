@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing *_session_*_events.csv and *_session_*_kinematics.csv files.",
     )
     p.add_argument(
-        "--output-dir", default="results",
+        "--output", default="results",
         help="Directory for output files (default: results/).",
     )
     p.add_argument(
@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         summary = run_mcmc_analysis(
             input_dir=args.input_dir,
-            output_dir=args.output_dir,
+            output_dir=args.output,
             binary_mode=args.binary_mode,
             seed=args.seed,
             n_chains=args.n_chains,
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> None:
         )
 
         conv = summary["convergence"]
-        print(f"\nAnalysis complete. Results saved to: {args.output_dir}")
+        print(f"\nAnalysis complete. Results saved to: {args.output}")
         print(
             f"Convergence: R-hat max = {conv['rhat_max']:.4f} "
             f"({'OK' if conv['rhat_ok'] else 'FAIL'}), "
