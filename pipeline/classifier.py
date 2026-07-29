@@ -88,14 +88,20 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     if not has_burst:
         return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
 
-    # ── 3. Unified PreWalk detection anchored to escape onset ──
-    # Anchor is the escape-onset time (interval_onset_ms), not stimulus onset.
-    # This checks walking in [escape_onset - 1000, escape_onset - 50ms) — the
-    # 50ms gap avoids edge contamination from the escape burst itself.
-    _is_baseline_visual = (_trial_type is not None and "baseline_visual" in str(_trial_type))
-    anchor = interval_onset_ms if pd.notna(interval_onset_ms) else latency_ms
+    # ── 3. PreWalk detection — paradigm-aware anchor ──
+    # Wind trials: anchor at wind onset (onset = target_ttc_ms).  The 1-s
+    # window before wind captures prewalk during sham-looming waiting.
+    # Pure looming/visual: anchor at escape onset (interval_onset_ms or
+    # latency_ms).  The 1-s window before escape captures true pre-escape
+    # walking without wind-onset contamination.
+    is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
+    if is_wind:
+        anchor = onset
+    else:
+        anchor = interval_onset_ms if pd.notna(interval_onset_ms) else latency_ms
+
     if pd.isna(anchor):
-        log.warning("classify_trial: no valid anchor (interval_onset_ms and latency_ms both NaN)")
+        log.warning("classify_trial: no valid PreWalk anchor")
     else:
         pre_mask = (t_vals >= anchor - PREWALK_WINDOW_MS) & (t_vals < anchor - 50.0)
         if np.any(pre_mask):
@@ -108,7 +114,6 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
                     return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
 
     # ── 4. Escape — burst detected, no pre-walk activity ──
-    # A valid burst with no walking in the pre-window is always Escape.
     return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
 
 
