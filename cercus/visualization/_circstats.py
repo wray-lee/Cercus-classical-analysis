@@ -10,6 +10,7 @@ import logging
 
 import numpy as np
 from scipy.stats import f as f_dist
+from scipy.stats import mannwhitneyu
 
 log = logging.getLogger(__name__)
 
@@ -70,3 +71,78 @@ def watson_williams_test(
 
     p_ww = float(f_dist.sf(F, 1, N - 2))
     return F, p_ww
+
+
+def circ_mean(angles_rad: np.ndarray) -> float:
+    """Circular mean of angles in radians, returns in [-pi, pi]."""
+    return float(np.angle(np.sum(np.exp(1j * angles_rad))))
+
+
+def circ_dist(a: np.ndarray, mu: float) -> np.ndarray:
+    """Unsigned angular distance from each angle to mean, in [0, pi]."""
+    return np.abs(np.angle(np.exp(1j * (a - mu))))
+
+
+def wallraff_test(
+    a1: np.ndarray, a2: np.ndarray
+) -> dict[str, float]:
+    """Wallraff test (1979) for difference in concentration between two groups.
+
+    Non-parametric: computes angular distance of each observation to its own
+    group circular mean, then compares the two distance distributions with
+    Mann-Whitney U.
+
+    Parameters
+    ----------
+    a1, a2 : array-like
+        Angles in radians.
+
+    Returns
+    -------
+    dict with keys: U, p, median_disp1, median_disp2, mean_disp1, mean_disp2,
+    Rbar1, Rbar2, dR
+    """
+    a1 = np.asarray(a1)
+    a2 = np.asarray(a2)
+    mu1 = circ_mean(a1)
+    mu2 = circ_mean(a2)
+    d1 = circ_dist(a1, mu1)
+    d2 = circ_dist(a2, mu2)
+    U, p = mannwhitneyu(d1, d2, alternative="two-sided")
+    Rbar1 = float(np.abs(np.mean(np.exp(1j * a1))))
+    Rbar2 = float(np.abs(np.mean(np.exp(1j * a2))))
+    return {
+        "U": float(U),
+        "p": float(p),
+        "median_disp1": float(np.median(d1)),
+        "median_disp2": float(np.median(d2)),
+        "mean_disp1": float(np.mean(d1)),
+        "mean_disp2": float(np.mean(d2)),
+        "Rbar1": Rbar1,
+        "Rbar2": Rbar2,
+        "dR": Rbar1 - Rbar2,
+    }
+
+
+def bootstrap_dR_ci(
+    a1: np.ndarray, a2: np.ndarray, n_boot: int = 10000, seed: int = 0, alpha: float = 0.05,
+) -> tuple[float, float, float]:
+    """Bootstrap 95% CI for ΔR = R1 - R2.
+
+    Returns (dR_obs, ci_low, ci_high).
+    """
+    rng = np.random.default_rng(seed)
+    R1 = float(np.abs(np.exp(1j * a1).mean()))
+    R2 = float(np.abs(np.exp(1j * a2).mean()))
+    obs = R1 - R2
+    pooled = np.concatenate([a1, a2])
+    n1 = len(a1)
+    diffs = np.empty(n_boot)
+    for i in range(n_boot):
+        rng.shuffle(pooled)
+        b1 = pooled[:n1]
+        b2 = pooled[n1:]
+        diffs[i] = np.abs(np.exp(1j * b1).mean()) - np.abs(np.exp(1j * b2).mean())
+    lo = float(np.percentile(diffs, 100 * alpha / 2))
+    hi = float(np.percentile(diffs, 100 * (1 - alpha / 2)))
+    return obs, lo, hi

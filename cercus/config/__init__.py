@@ -555,10 +555,10 @@ def get_colors() -> DynamicConfigProxy:
 # Legacy Exports (for backward compatibility)
 # ═══════════════════════════════════════════════════════════════════════
 
-from cercus.config.settings import BarLabelStyle, TrajectoryConfig  # noqa: E402, F401
+from cercus.config.settings import BarLabelStyle, TrajectoryConfig, ComparisonConfig, UnifiedPreset  # noqa: E402, F401
 
 __all__ = [
     "config", "get_config", "reload_config",
     "get_thresholds", "get_geometry", "get_colors",
-    "BarLabelStyle", "TrajectoryConfig",
+    "BarLabelStyle", "TrajectoryConfig", "ComparisonConfig", "UnifiedPreset",
 ]

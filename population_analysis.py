@@ -473,7 +473,7 @@ def main(argv: list[str] | None = None) -> None:
     plt.close(fig_trial_ttc)
 
     # ── Trial-stacked heatmap (onset-aligned) ──
-    fig_trial_onset = plot_trial_stacked_heatmap(all_data, align="onset", t_window=(-0.5, 1.51))
+    fig_trial_onset = plot_trial_stacked_heatmap(all_data, align="onset", t_window=(-1.01, 1.51))
     _safe_savefig(fig_trial_onset, heatmap_dir / "trial_stacked_heatmap_onset.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_trial_onset)
 

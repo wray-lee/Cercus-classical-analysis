@@ -312,14 +312,31 @@ def plot_trial_stacked_heatmap(
     figsize: tuple[float, float] = (12, 4.5),
     conditions: list[str] | None = None,
     max_trials_per_panel: int = 200,
+    comparison_mode: bool = False,
 ) -> plt.Figure:
-    """Trial-stacked heatmap: each row is one trial, sorted by onset latency."""
+    """Trial-stacked heatmap: each row is one trial, sorted by onset latency.
+
+    Parameters
+    ----------
+    comparison_mode : bool
+        If True, facets by modality (columns) and response_type (rows),
+        aligns to TTC=0, uses PowerNorm(gamma=0.4), shows stillness% per panel.
+    """
+    if comparison_mode:
+        return _plot_comparison_heatmap(df, align, t_window, t_bin_s, vmax, figsize, max_trials_per_panel)
+
+    # ── Original: single-condition panels ──
     df = df.copy()
-    df["_align_t_s"] = np.where(
-        df["interval_onset_ms"].notna(),
-        (df["t_rel"] - df["interval_onset_ms"]) / 1000.0,
-        df["t_rel"] / 1000.0,
-    )
+    # Align time axis: 'ttc' uses t_rel directly (t_rel=0 is TTC),
+    # 'onset' subtracts escape onset so t=0 is the first >10 mm/s frame.
+    if align == "onset":
+        df["_align_t_s"] = np.where(
+            df["interval_onset_ms"].notna(),
+            (df["t_rel"] - df["interval_onset_ms"]) / 1000.0,
+            df["t_rel"] / 1000.0,
+        )
+    else:
+        df["_align_t_s"] = df["t_rel"] / 1000.0
 
     n_types = df["type"].nunique() if "type" in df.columns else 0
     if conditions is None:
@@ -429,6 +446,127 @@ def plot_trial_stacked_heatmap(
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     cbar = fig.colorbar(sm, cax=cbar_ax)
     cbar.set_label("Translational velocity (mm/s)", fontsize=8)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+def _plot_comparison_heatmap(
+    df: pd.DataFrame,
+    align: str = "ttc",
+    t_window: tuple[float, float] = (-1.0, 2.0),
+    t_bin_s: float = 0.01,
+    vmax: float = HEATMAP_VMAX,
+    figsize: tuple[float, float] = (12, 4.5),
+    max_trials_per_panel: int = 200,
+) -> plt.Figure:
+    """Cross-modal comparison heatmap faceted by modality and response_type."""
+    df = df.copy()
+    has_response = "response_type" in df.columns
+    mod_col = "modality" if "modality" in df.columns else (
+        "type" if "type" in df.columns else "response_type"
+    )
+
+    # Determine rows and columns
+    modalities = sorted(df[mod_col].dropna().unique())
+    if has_response:
+        response_types = sorted(df["response_type"].dropna().unique())
+    else:
+        response_types = ["Escape"]
+
+    n_rows = len(response_types)
+    n_cols = len(modalities)
+    fig = plt.figure(figsize=(figsize[0] * 0.8, figsize[1] * 0.8))
+    gs = gridspec.GridSpec(n_rows, n_cols, hspace=0.25, wspace=0.15, figure=fig)
+
+    t_common = np.arange(t_window[0], t_window[1], t_bin_s)
+    norm = mcolors.PowerNorm(gamma=0.4, vmin=0, vmax=vmax)
+    ims = []
+
+    for ri, rt in enumerate(response_types):
+        for ci, mod in enumerate(modalities):
+            ax = fig.add_subplot(gs[ri, ci])
+
+            # Filter
+            subset = df[df[mod_col] == mod].copy()
+            if has_response:
+                subset = subset[subset["response_type"] == rt]
+
+            if subset.empty:
+                ax.set_title(f"{mod} {rt}" if has_response else mod, fontweight="bold")
+                continue
+
+            # Align: 'ttc' uses t_rel directly, 'onset' subtracts escape onset
+            if align == "onset":
+                subset["_align_t_s"] = np.where(
+                    subset["interval_onset_ms"].notna(),
+                    (subset["t_rel"] - subset["interval_onset_ms"]) / 1000.0,
+                    subset["t_rel"] / 1000.0,
+                )
+            else:
+                subset["_align_t_s"] = subset["t_rel"] / 1000.0
+
+            trial_rows: list[tuple[float, np.ndarray]] = []
+            for (_subj, _tid), grp in subset.groupby(
+                ["subject_id", "global_trial_id"]
+            ):
+                grp_sorted = grp.sort_values("_align_t_s")
+                t_trial = grp_sorted["_align_t_s"].values
+                s_trial = grp_sorted["speed"].values
+                if len(t_trial) < 2 or t_trial.min() > t_window[1] or t_trial.max() < t_window[0]:
+                    continue
+                s_interp = np.interp(t_common, t_trial, s_trial, left=0, right=0)
+                above = s_interp > ESCAPE_START_THRESHOLD
+                latency = float(t_common[above].min()) if above.any() else float("inf")
+                trial_rows.append((latency, s_interp))
+
+            if not trial_rows:
+                ax.set_title(f"{mod} {rt}" if has_response else mod, fontweight="bold")
+                continue
+
+            trial_rows.sort(key=lambda x: x[0] if np.isfinite(x[0]) else 1e9)
+            if len(trial_rows) > max_trials_per_panel:
+                step = len(trial_rows) / max_trials_per_panel
+                indices = np.arange(0, len(trial_rows), step).astype(int)
+                trial_rows = [trial_rows[i] for i in indices]
+
+            M = np.vstack([row[1] for row in trial_rows])
+
+            im = ax.imshow(M, aspect="auto", origin="lower",
+                           extent=[t_common[0], t_common[-1], 0, len(M)],
+                           cmap="inferno", norm=norm, interpolation="nearest")
+            ims.append(im)
+
+            ax.axvline(0, color="white", ls="--", lw=1.2, alpha=0.7)
+
+            # Stillness%
+            pre_mask = (t_common >= -1.0) & (t_common <= 0)
+            pre_speeds = M[:, pre_mask].ravel()
+            stillness = (pre_speeds < ESCAPE_START_THRESHOLD).mean() if len(pre_speeds) > 0 else 0.0
+
+            ax.set_title(f"{mod} {rt}", fontweight="bold", fontsize=8)
+
+            if ri == n_rows - 1:
+                ax.set_xlabel("TTC (s)")
+            if ci == 0:
+                ax.set_ylabel(f"Trial ({rt})" if has_response else "Trial")
+                ax.set_yticks([])
+            else:
+                plt.setp(ax.get_yticklabels(), visible=False)
+
+            ax.text(0.02, 0.98, f"n={len(M)}", transform=ax.transAxes,
+                    ha="left", va="top", fontsize=6.5, color="white", fontweight="bold",
+                    path_effects=[path_effects.withStroke(linewidth=2.0, foreground="black")])
+            ax.text(0.98, 0.98, f"{stillness:.0%} stillness", transform=ax.transAxes,
+                    ha="right", va="top", fontsize=6, color="white",
+                    path_effects=[path_effects.withStroke(linewidth=2.0, foreground="black")])
+
+    if ims:
+        fig.subplots_adjust(right=0.92)
+        cbar_ax = fig.add_axes([0.93, 0.15, 0.02, 0.7])
+        sm = plt.cm.ScalarMappable(cmap=plt.get_cmap("inferno"), norm=norm)
+        cbar = fig.colorbar(sm, cax=cbar_ax)
+        cbar.set_label("Translational velocity (mm/s)", fontsize=8)
 
     fig.tight_layout(pad=1.0)
     return fig

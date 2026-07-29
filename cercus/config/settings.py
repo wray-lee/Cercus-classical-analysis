@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from typing import Literal
+from typing import Literal, Optional
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +19,22 @@ class BarLabelStyle(str, Enum):
     """Bar chart percentage label placement style."""
     INLINE = "inline"       # label inside bar (intuitive)
     AXIS = "axis"           # label via dashed line to y-axis (publication style)
+
+
+class UnifiedPreset(BaseModel):
+    """Preset values forced in comparison mode — unified across modalities."""
+    use_z_degree_to_draw: bool = True
+    use_escape_onset_only_xy: bool = True
+    use_rigid_rotation: bool = True
+    dz_integration_range: str = "escape_angular_peak"
+    use_escape_onset_heading: bool = False
+    use_angular_velocity_offset: bool = False
+
+
+class ComparisonConfig(BaseModel):
+    """Cross-modal comparison mode configuration."""
+    enabled: bool = False
+    unified_preset: UnifiedPreset = UnifiedPreset()
 
 
 class TrajectoryConfig(BaseModel, frozen=True):
@@ -43,6 +59,8 @@ class TrajectoryConfig(BaseModel, frozen=True):
     ] = "escape_interval"
 
     bar_label_style: BarLabelStyle = BarLabelStyle.INLINE
+
+    comparison: ComparisonConfig = ComparisonConfig()
 
     @field_validator("dz_integration_range")
     @classmethod
@@ -79,6 +97,22 @@ class TrajectoryConfig(BaseModel, frozen=True):
         traj = cfg.get("trajectory", {})
         viz = cfg.get("visualization", {})
 
+        # Build comparison if present
+        comp = cfg.get("comparison", {})
+        comp_enabled = bool(comp.get("enabled", False)) if isinstance(comp, dict) else False
+        up = comp.get("unified_preset", {}) if isinstance(comp, dict) else {}
+        comp_cfg = ComparisonConfig(
+            enabled=comp_enabled,
+            unified_preset=UnifiedPreset(
+                use_z_degree_to_draw=bool(up.get("use_z_degree_to_draw", True)),
+                use_escape_onset_only_xy=bool(up.get("use_escape_onset_only_xy", True)),
+                use_rigid_rotation=bool(up.get("use_rigid_rotation", True)),
+                dz_integration_range=up.get("dz_integration_range", "escape_angular_peak"),
+                use_escape_onset_heading=bool(up.get("use_escape_onset_heading", False)),
+                use_angular_velocity_offset=bool(up.get("use_angular_velocity_offset", False)),
+            ),
+        )
+
         return cls(
             use_z_degree_to_draw=bool(traj.get("use_z_degree_to_draw", True)),
             use_rigid_rotation=bool(traj.get("use_rigid_rotation", False)),
@@ -87,4 +121,5 @@ class TrajectoryConfig(BaseModel, frozen=True):
             use_angular_velocity_offset=bool(traj.get("use_angular_velocity_offset", False)),
             dz_integration_range=traj.get("dz_integration_range", "escape_interval"),
             bar_label_style=BarLabelStyle(viz.get("bar_label_style", "inline")),
+            comparison=comp_cfg,
         )

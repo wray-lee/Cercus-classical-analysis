@@ -68,8 +68,8 @@ def _trial_clean_escape() -> pd.DataFrame:
     speed = np.zeros_like(t)
     # Quiescent baseline
     speed[:100] = np.random.default_rng(1).normal(2, 0.5, 100)
-    # Escape burst at t=50
-    burst = np.exp(-np.linspace(0, 3, 80)) * 80
+    # Escape burst at t=50 — peak must exceed ESCAPE_VMAX_THRESHOLD (98 mm/s)
+    burst = np.exp(-np.linspace(0, 3, 80)) * 120
     speed[100:180] = burst
     speed[100:] += np.random.default_rng(2).normal(0, 1, len(t) - 100)
     speed = np.maximum(0, speed)
@@ -83,8 +83,8 @@ def _trial_prewalk_before_stimulus() -> pd.DataFrame:
     # Walking activity in pre-stimulus
     speed[:250] = np.random.default_rng(3).normal(0, 5, 250) + 15
     speed[:250] = np.maximum(0, speed[:250])
-    # Escape burst
-    burst = np.exp(-np.linspace(0, 2, 80)) * 75
+    # Escape burst — peak must exceed ESCAPE_VMAX_THRESHOLD (98 mm/s)
+    burst = np.exp(-np.linspace(0, 2, 80)) * 130
     speed[250:330] = burst
     speed[250:] += np.random.default_rng(4).normal(0, 1, len(t) - 250)
     speed = np.maximum(0, speed)
@@ -96,7 +96,8 @@ def _trial_baseline_visual_escape() -> pd.DataFrame:
     t = np.linspace(-1000, 200, 240)
     speed = np.zeros_like(t)
     speed[:80] = np.random.default_rng(5).normal(2, 0.5, 80)
-    burst = np.exp(-np.linspace(0, 2.5, 100)) * 90
+    # Peak must exceed ESCAPE_VMAX_THRESHOLD (98 mm/s)
+    burst = np.exp(-np.linspace(0, 2.5, 100)) * 140
     speed[80:180] = burst
     speed[80:] += np.random.default_rng(6).normal(0, 1, len(t) - 80)
     speed = np.maximum(0, speed)
@@ -110,7 +111,8 @@ def _trial_baseline_visual_prewalk() -> pd.DataFrame:
     # Walking throughout the pre-escape period
     speed[:120] = np.random.default_rng(7).normal(0, 5, 120) + 12
     speed[:120] = np.maximum(0, speed[:120])
-    burst = np.exp(-np.linspace(0, 2, 70)) * 70
+    # Peak must exceed ESCAPE_VMAX_THRESHOLD (98 mm/s)
+    burst = np.exp(-np.linspace(0, 2, 70)) * 130
     speed[120:190] = burst
     speed[120:] += np.random.default_rng(8).normal(0, 1, len(t) - 120)
     speed = np.maximum(0, speed)
@@ -122,7 +124,8 @@ def _trial_escape_very_late() -> pd.DataFrame:
     t = np.linspace(-500, 1000, 300)
     speed = np.zeros_like(t)
     speed[:200] = np.random.default_rng(9).normal(2, 1, 200)
-    burst = np.exp(-np.linspace(0, 2, 60)) * 65
+    # Peak must exceed ESCAPE_VMAX_THRESHOLD (98 mm/s)
+    burst = np.exp(-np.linspace(0, 2, 60)) * 120
     speed[200:260] = burst
     speed[200:] += np.random.default_rng(10).normal(0, 1, len(t) - 200)
     speed = np.maximum(0, speed)
@@ -145,7 +148,8 @@ def _trial_multimodal_wind_early() -> pd.DataFrame:
     t = np.linspace(-1000, 500, 300)
     speed = np.zeros_like(t)
     speed[:180] = np.random.default_rng(12).normal(2, 0.5, 180)
-    burst = np.exp(-np.linspace(0, 2, 60)) * 85
+    # Peak must exceed ESCAPE_VMAX_THRESHOLD (98 mm/s)
+    burst = np.exp(-np.linspace(0, 2, 60)) * 130
     speed[180:240] = burst
     speed[180:] += np.random.default_rng(13).normal(0, 1, len(t) - 180)
     speed = np.maximum(0, speed)
@@ -167,7 +171,8 @@ def _trial_prewalk_low_walking() -> pd.DataFrame:
     # Subtle walking
     speed[:300] = np.random.default_rng(15).normal(0, 3, 300) + 8
     speed[:300] = np.maximum(0, speed[:300])
-    burst = np.exp(-np.linspace(0, 2, 60)) * 72
+    # Peak must exceed ESCAPE_VMAX_THRESHOLD (98 mm/s)
+    burst = np.exp(-np.linspace(0, 2, 60)) * 120
     speed[300:360] = burst
     speed[300:] += np.random.default_rng(16).normal(0, 1, len(t) - 300)
     speed = np.maximum(0, speed)
@@ -180,15 +185,15 @@ def _trial_prewalk_low_walking() -> pd.DataFrame:
 
 _GOLDEN_EXPECTED = {
     "no_burst": "NoResponse",
-    "clean_escape": "Escape",
-    "prewalk_before_stimulus": "NoResponse",  # burst peak at t≈-247ms (before onset), tail in window
-    "baseline_visual_escape": "Escape",
-    "baseline_visual_prewalk": "PreWalk",
-    "escape_very_late": "NoResponse",  # burst at t≈333ms, outside 250ms window
-    "just_below_threshold": "NoResponse",
-    "multimodal_wind_early": "NoResponse",  # burst at t≈-200ms outside shifted window [-373,-123]
+    "clean_escape": "Escape",  # burst peak 120 > 98 mm/s, quiescent baseline → Escape
+    "prewalk_before_stimulus": "NoResponse",  # burst peak at t≈-247ms (before TTC), tail in [0,250] < 98
+    "baseline_visual_escape": "Escape",  # burst peak 140 > 98, quiescent baseline → Escape
+    "baseline_visual_prewalk": "PreWalk",  # burst peak 130 > 98, walking at ~12 mm/s → PreWalk
+    "escape_very_late": "NoResponse",  # burst at t≈503ms, outside [0,250] window
+    "just_below_threshold": "NoResponse",  # v_max ≈ 48 < 98
+    "multimodal_wind_early": "NoResponse",  # burst at t≈-97ms outside shifted window [-373,-123]
     "no_response_with_wind": "NoResponse",
-    "prewalk_low_walking": "PreWalk",
+    "prewalk_low_walking": "PreWalk",  # burst peak 120 > 98, walking max > 10 in [latency-1000, latency)
 }
 
 

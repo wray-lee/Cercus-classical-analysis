@@ -32,6 +32,17 @@ trajectory:
 #   dz_integration_range: "escape_interval"
 #   use_rigid_rotation: false
 
+# ── Cross-modal comparison preset ──
+# comparison:
+#   enabled: false
+#   unified_preset:
+#     use_z_degree_to_draw: true
+#     use_escape_onset_only_xy: true
+#     use_rigid_rotation: true
+#     dz_integration_range: "escape_angular_peak"
+#     use_escape_onset_heading: false
+#     use_angular_velocity_offset: false
+
 #=======================================
 # traditional logic
 #=======================================
@@ -124,3 +135,14 @@ trajectory:
 # use_angular_velocity_offset: true
 # dz_integration_range: "escape_interval"
 # use_rigid_rotation: true
+
+# ── Cross-modal comparison preset ──
+# comparison:
+#   enabled: false
+#   unified_preset:
+#     use_z_degree_to_draw: true
+#     use_escape_onset_only_xy: true
+#     use_rigid_rotation: true
+#     dz_integration_range: "escape_angular_peak"
+#     use_escape_onset_heading: false
+#     use_angular_velocity_offset: false
