@@ -53,6 +53,17 @@ _HEATMAP_SPEED_MAX = get_geometry().HEATMAP_SPEED_MAX
 HEATMAP_SPEED_MAX: float = float(_HEATMAP_SPEED_MAX)
 
 # ═══════════════════════════════════════════════════════════════════════
+# Heatmap Window Config
+# ═══════════════════════════════════════════════════════════════════════
+
+_heatmap_cfg = get_geometry().heatmap
+
+HEATMAP_T_WINDOW_TTC: tuple[float, float] = tuple(_heatmap_cfg.t_window_ttc)
+HEATMAP_T_WINDOW_ONSET: tuple[float, float] = tuple(_heatmap_cfg.t_window_onset)
+HEATMAP_T_BIN_S: float = float(_heatmap_cfg.t_bin_s)
+HEATMAP_GAMMA: float = float(_heatmap_cfg.gamma)
+
+# ═══════════════════════════════════════════════════════════════════════
 # Backward Compatibility Aliases
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -64,4 +75,8 @@ __all__ = [
     "LEGACY_TRIAL_DURATION_MS",
     "HEATMAP_VMAX",
     "HEATMAP_SPEED_MAX",
+    "HEATMAP_T_WINDOW_TTC",
+    "HEATMAP_T_WINDOW_ONSET",
+    "HEATMAP_T_BIN_S",
+    "HEATMAP_GAMMA",
 ]

@@ -20,3 +20,11 @@ LEGACY_TRIAL_DURATION_MS: 5829.6    # ms — legacy trial duration
 # ── Visualization Defaults ──
 HEATMAP_VMAX: 50.0                  # Default vmax for trial stacked heatmap color scale
 HEATMAP_SPEED_MAX: 600.0            # Maximum speed for y-axis in kinetics plots
+
+# ── Heatmap Windows ──
+heatmap:
+  t_window_ttc: [-1.0, 2.0]        # seconds, TTC-aligned view
+  t_window_onset: [-1.0, 1.5]      # seconds, onset-aligned (matches prewalk.window_ms=1000)
+  t_bin_s: 0.01                    # seconds, time bin resolution
+  vmax: 50.0                       # mm/s, color scale maximum
+  gamma: 0.4                       # PowerNorm exponent (low speed 10-15 visible)

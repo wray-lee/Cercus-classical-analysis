@@ -23,6 +23,7 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
     HEATMAP_VMAX,
 )
+from cercus.config import get_geometry
 
 log = logging.getLogger(__name__)
 
@@ -306,20 +307,37 @@ def plot_spaghetti_kinetics_heatmap(
 def plot_trial_stacked_heatmap(
     df: pd.DataFrame,
     align: str = "ttc",
-    t_window: tuple[float, float] = (-1.0, 2.0),
-    t_bin_s: float = 0.01,
-    vmax: float = HEATMAP_VMAX,
+    t_window: tuple[float, float] | None = None,
+    t_bin_s: float | None = None,
+    vmax: float | None = None,
     figsize: tuple[float, float] = (12, 4.5),
     conditions: list[str] | None = None,
     max_trials_per_panel: int = 200,
 ) -> plt.Figure:
-    """Trial-stacked heatmap: each row is one trial, sorted by onset latency."""
+    """Trial-stacked heatmap using config-driven windows and color scaling."""
+    heatmap_cfg = get_geometry().heatmap
+    if t_window is None:
+        configured = (
+            heatmap_cfg.t_window_onset
+            if align == "onset"
+            else heatmap_cfg.t_window_ttc
+        )
+        t_window = (float(configured[0]), float(configured[1]))
+    if t_bin_s is None:
+        t_bin_s = float(heatmap_cfg.t_bin_s)
+    if vmax is None:
+        vmax = float(heatmap_cfg.vmax)
+    gamma = float(heatmap_cfg.gamma)
+
     df = df.copy()
-    df["_align_t_s"] = np.where(
-        df["interval_onset_ms"].notna(),
-        (df["t_rel"] - df["interval_onset_ms"]) / 1000.0,
-        df["t_rel"] / 1000.0,
-    )
+    if align == "onset":
+        df["_align_t_s"] = np.where(
+            df["interval_onset_ms"].notna(),
+            (df["t_rel"] - df["interval_onset_ms"]) / 1000.0,
+            df["t_rel"] / 1000.0,
+        )
+    else:
+        df["_align_t_s"] = df["t_rel"] / 1000.0
 
     n_types = df["type"].nunique() if "type" in df.columns else 0
     if conditions is None:
@@ -335,6 +353,7 @@ def plot_trial_stacked_heatmap(
     )
 
     t_common = np.arange(t_window[0], t_window[1], t_bin_s)
+    norm = mcolors.PowerNorm(gamma=gamma, vmin=0, vmax=vmax)
     ims: list = []
 
     for j, cond in enumerate(conditions):
@@ -356,6 +375,10 @@ def plot_trial_stacked_heatmap(
             grp_sorted = grp.sort_values("_align_t_s")
             t_trial = grp_sorted["_align_t_s"].values
             s_trial = grp_sorted["speed"].values
+            # Filter NaNs before interp to avoid propagation into latency/sorting
+            valid_mask = ~np.isnan(s_trial) & ~np.isnan(t_trial)
+            t_trial = t_trial[valid_mask]
+            s_trial = s_trial[valid_mask]
             if (
                 len(t_trial) < 2
                 or t_trial.min() > t_window[1]
@@ -375,7 +398,14 @@ def plot_trial_stacked_heatmap(
             ax.set_title(cond, fontweight="bold")
             continue
 
-        trial_rows.sort(key=lambda x: x[0] if np.isfinite(x[0]) else 1e9)
+        if align == "onset" and cond == "PreWalk":
+            pre_mask = (t_common >= -1.0) & (t_common < 0)
+            trial_rows.sort(
+                key=lambda x: float(np.nanmean(x[1][pre_mask])) if np.any(pre_mask) else 0.0,
+                reverse=True,
+            )
+        else:
+            trial_rows.sort(key=lambda x: x[0] if np.isfinite(x[0]) else 1e9)
         if len(trial_rows) > max_trials_per_panel:
             step = len(trial_rows) / max_trials_per_panel
             indices = np.arange(0, len(trial_rows), step).astype(int)
@@ -389,12 +419,15 @@ def plot_trial_stacked_heatmap(
             origin="lower",
             extent=[t_common[0], t_common[-1], 0, len(M)],
             cmap="inferno",
-            vmin=0,
-            vmax=vmax,
+            norm=norm,
             interpolation="nearest",
         )
 
         ax.axvline(0, color="white", ls="--", lw=1.2, alpha=0.7)
+        # Mark prewalk classification window
+        if align == "onset":
+            ax.axvspan(-1.0, 0, color="white", alpha=0.06, zorder=0)
+            ax.axvline(-1.0, color="white", ls=":", lw=0.8, alpha=0.5, zorder=7)
 
         ax.set_title(cond, fontweight="bold", fontsize=9)
         if align == "ttc":
@@ -425,7 +458,6 @@ def plot_trial_stacked_heatmap(
     fig.subplots_adjust(right=0.92)
     cbar_ax = fig.add_axes([0.93, 0.15, 0.02, 0.7])
     cmap = plt.get_cmap("inferno")
-    norm = mcolors.Normalize(vmin=0, vmax=vmax)
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     cbar = fig.colorbar(sm, cax=cbar_ax)
     cbar.set_label("Translational velocity (mm/s)", fontsize=8)

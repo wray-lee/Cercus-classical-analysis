@@ -88,88 +88,28 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     if not has_burst:
         return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
 
-    # ── 3. Priority 2 — PreWalk intercept: pre-stimulus spontaneous activity ──
+    # ── 3. Unified PreWalk detection anchored to escape onset ──
+    # Anchor is the escape-onset time (interval_onset_ms), not stimulus onset.
+    # This checks walking in [escape_onset - 1000, escape_onset - 50ms) — the
+    # 50ms gap avoids edge contamination from the escape burst itself.
     _is_baseline_visual = (_trial_type is not None and "baseline_visual" in str(_trial_type))
-    _BASELINE_QUIET_MM_S = 3.0  # threshold for true quiescent baseline (below escape ramp-up)
-    if _is_baseline_visual and has_burst:
-        # Baseline_visual: no fixed stimulus onset, so anchor to escape onset.
-        # 1. Search backward from latency for the last frame < 3 mm/s (true quiescent
-        #    baseline, below the escape ramp-up noise).  This is the "baseline point".
-        # 2. If baseline point is > 1 s before latency → PreWalk (animal was walking
-        #    within the 1 s window preceding escape).
-        # 3. Otherwise → check the 1 s window before the baseline point for any
-        #    speed > 10 mm/s (walking activity before the quiet period).
-        lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-        pre_latency = speed_vals[:lat_idx]
-        below_quiet = np.where(pre_latency < _BASELINE_QUIET_MM_S)[0]
-        if len(below_quiet) > 0:
-            baseline_idx = int(below_quiet[-1])
-            baseline_t = float(t_vals[baseline_idx])
-            gap = latency_ms - baseline_t
-            if gap > PREWALK_WINDOW_MS:
-                # Animal was still quiescent > 1 s ago → walking in the 1 s window
-                return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
-            # Check the 1 s window BEFORE the baseline point for walking activity
-            pre_mask = (t_vals >= baseline_t - PREWALK_WINDOW_MS) & (t_vals < baseline_t)
-            if np.any(pre_mask):
-                pre_slice = speed_vals[pre_mask]
-                if not np.all(np.isnan(pre_slice)):
-                    if float(np.nanmax(pre_slice)) > PREWALK_THRESHOLD:
-                        return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
-        else:
-            # No frame < 3 mm/s before latency → sustained walking throughout
-            return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
+    anchor = interval_onset_ms if pd.notna(interval_onset_ms) else latency_ms
+    if pd.isna(anchor):
+        log.warning("classify_trial: no valid anchor (interval_onset_ms and latency_ms both NaN)")
     else:
-        # Non-baseline_visual: check 1 s before stimulus onset
-        prewalk_anchor = onset
-        pre_mask = (t_vals >= prewalk_anchor - PREWALK_WINDOW_MS) & (t_vals < prewalk_anchor)
+        pre_mask = (t_vals >= anchor - PREWALK_WINDOW_MS) & (t_vals < anchor - 50.0)
         if np.any(pre_mask):
             pre_slice = speed_vals[pre_mask]
-            if not np.all(np.isnan(pre_slice)):
-                pre_v_max = float(np.nanmax(pre_slice))
-                if pre_v_max > PREWALK_THRESHOLD:
+            pre_slice = pre_slice[~np.isnan(pre_slice)]
+            if len(pre_slice) > 0:
+                pre_max = float(np.nanmax(pre_slice))
+                frac_above = float(np.mean(pre_slice > PREWALK_THRESHOLD))
+                if pre_max > PREWALK_THRESHOLD and frac_above > 0.15:
                     return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
 
-    # ── 4. Priority 3 — Escape: baseline quiescent before burst onset ──
-    # For baseline_visual: check speed at the frame just before latency_ms
-    #   (the last frame < 10 mm/s before escape onset).
-    # For others: check speed at stimulus onset (t=0 / wind onset).
-    if _is_baseline_visual and has_burst:
-        # latency_ms is the first frame ≥ 10 mm/s; the frame before it is < 10 mm/s
-        lat_idx = int(np.argmin(np.abs(t_vals - latency_ms)))
-        if lat_idx > 0:
-            baseline_speed = speed_vals[lat_idx - 1]
-        else:
-            # Burst starts at the very first frame — no pre-burst data
-            baseline_speed = 0.0
-    else:
-        zero_idx = int(np.argmin(np.abs(t_vals - onset)))
-        baseline_speed = speed_vals[zero_idx]
-
-        # When the exact-onset speed is NaN (common in pure-wind trials where the
-        # kinematics stream has gaps around t_rel=0), fall back to the nearest
-        # non-NaN PRE-STIMULUS value within 2 s before onset.
-        # (Pure-wind paradigm guarantees the animal is stationary for ≥2 s before wind.)
-        if np.isnan(baseline_speed):
-            pre_onset_mask = (t_vals >= onset - 2000.0) & (t_vals < onset)
-            if np.any(pre_onset_mask):
-                pre_speeds = speed_vals[pre_onset_mask]
-                valid = pre_speeds[~np.isnan(pre_speeds)]
-                if len(valid) > 0:
-                    # Take the value closest to onset (last in the pre-stimulus window)
-                    baseline_speed = valid[-1]
-
-        # If baseline is still NaN (no valid pre-stimulus data), assume quiescent —
-        # the animal was stationary before the stimulus.  This is the common case
-        # for pure-wind paradigms where kinematics data only starts after wind onset.
-        if np.isnan(baseline_speed):
-            baseline_speed = 0.0
-
-    if baseline_speed < ESCAPE_START_THRESHOLD:
-        return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
-
-    # ── 5. Fallback ──
-    return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
+    # ── 4. Escape — burst detected, no pre-walk activity ──
+    # A valid burst with no walking in the pre-window is always Escape.
+    return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
 
 
 def label_trials(df: pd.DataFrame) -> pd.DataFrame:

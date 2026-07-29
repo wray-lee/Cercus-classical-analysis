@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +55,31 @@ class ThresholdsConfig(BaseModel):
     ESCAPE_WINDOW_MS: float = Field(default=250.0, gt=0, description="Post-stimulus burst detection window (ms)")
 
 
+class HeatmapConfig(BaseModel):
+    """Heatmap rendering configuration."""
+    t_window_ttc: tuple[float, float] = (-1.0, 2.0)
+    t_window_onset: tuple[float, float] = (-1.0, 1.5)
+    t_bin_s: float = 0.01
+    vmax: float = 50.0
+    gamma: float = 0.4
+
+    @field_validator("t_window_onset")
+    @classmethod
+    def _validate_onset_window(cls, v: tuple[float, float]) -> tuple[float, float]:
+        if v[0] > -1.0:
+            log.warning(
+                "t_window_onset[0]=%.2f > -1.0; pre-window not covered. Clamping to -1.0.",
+                v[0],
+            )
+            return (-1.0, v[1])
+        if v[0] < -1.0:
+            log.warning(
+                "t_window_onset[0]=%.2f < -1.0; shows data outside classification window, "
+                "will look like contamination.", v[0]
+            )
+        return v
+
+
 class GeometryConfig(BaseModel):
     """Geometry and timing configuration."""
     RADIUS_MM: float = Field(default=30.0, gt=0, description="Arena radius in mm")
@@ -62,6 +87,9 @@ class GeometryConfig(BaseModel):
     TRAJECTORY_STEP_MM: float = Field(default=10.0, gt=0, description="Trajectory ring step size (mm)")
     SPEED_WINDOW_MS: float = Field(default=100.0, gt=0, description="Speed calculation window (ms)")
     LEGACY_TRIAL_DURATION_MS: float = Field(default=5829.6, gt=0, description="Legacy trial duration (ms)")
+    HEATMAP_VMAX: float = Field(default=50.0, gt=0, description="Default vmax for trial stacked heatmap")
+    HEATMAP_SPEED_MAX: float = Field(default=600.0, gt=0, description="Max speed for kinetics y-axis")
+    heatmap: "HeatmapConfig" = Field(default_factory=lambda: HeatmapConfig())
 
 
 class ColorsConfig(BaseModel):

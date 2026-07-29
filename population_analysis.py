@@ -468,12 +468,12 @@ def main(argv: list[str] | None = None) -> None:
     plt.close(fig_heatmap)
 
     # ── Trial-stacked heatmap (TTC-aligned) ──
-    fig_trial_ttc = plot_trial_stacked_heatmap(all_data, align="ttc", t_window=(-1.0, 2.01))
+    fig_trial_ttc = plot_trial_stacked_heatmap(all_data, align="ttc")
     _safe_savefig(fig_trial_ttc, heatmap_dir / "trial_stacked_heatmap_ttc.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_trial_ttc)
 
     # ── Trial-stacked heatmap (onset-aligned) ──
-    fig_trial_onset = plot_trial_stacked_heatmap(all_data, align="onset", t_window=(-0.5, 1.51))
+    fig_trial_onset = plot_trial_stacked_heatmap(all_data, align="onset")
     _safe_savefig(fig_trial_onset, heatmap_dir / "trial_stacked_heatmap_onset.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_trial_onset)
 
