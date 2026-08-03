@@ -21,7 +21,12 @@ from pipeline.constants import (
     COLOR_PREWALK,
     _get_unified_side,
 )
-from cercus.visualization._circstats import rayleigh_p, watson_williams_test
+from cercus.visualization._circstats import (
+    rayleigh_p,
+    watson_williams_test,
+    wallraff_test,
+    wallraff_test_with_ref,
+)
 from cercus.visualization._core import compute_trajectory_masks
 
 log = logging.getLogger(__name__)
@@ -209,6 +214,15 @@ def plot_population_polar_histogram(
     if esc.size >= 2 and pw.size >= 2:
         F_ww, p_ww = watson_williams_test(esc, pw)
 
+    # Wallraff test of angular dispersion (non-parametric, each group
+    # referenced to its own mean — the analogue of the concentration test).
+    wallraff_result = (
+        wallraff_test(esc, pw)
+        if esc.size >= 2 and pw.size >= 2
+        else {"H": np.nan, "p": np.nan, "dof": np.nan, "distances": [], "warnings": []}
+    )
+    H_wall, p_wall = wallraff_result["H"], wallraff_result["p"]
+
     def concentration_bootstrap(a1, a2, n_boot=5000, seed=0):
         rng = np.random.default_rng(seed)
         R1 = np.abs(np.exp(1j * a1).mean())
@@ -355,9 +369,12 @@ def plot_population_polar_histogram(
         delta_mu = min(delta_mu, 360 - delta_mu)
         ns_ww = " (ns)" if p_ww > 0.05 else ""
         conc_sig = " (ns)" if p_conc > 0.05 else " **" if p_conc < 0.01 else " *"
+        wallraff_sig = " (ns)" if p_wall > 0.05 else " **" if p_wall < 0.01 else " *"
+        p_wall_str = f"{p_wall:.2g}" if not np.isnan(p_wall) else "nan"
         ww_text = (
             f"Watson-Williams: Δμ={delta_mu:.0f}°, F={F_ww:.2f}, p={p_ww:.2g}{ns_ww} | "
-            f"Concentration: ΔR={delta_R:.2f}, p={p_conc:.3g}{conc_sig}"
+            f"Concentration: ΔR={delta_R:.2f}, p={p_conc:.3g}{conc_sig} | "
+            f"Wallraff: H={H_wall:.2f}, p={p_wall_str}{wallraff_sig}"
         )
         ax.text(
             0.5, -0.18, ww_text, transform=ax.transAxes,

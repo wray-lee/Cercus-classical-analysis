@@ -1,0 +1,20 @@
+# ══════════════════════════════════════════════════════════════════════
+# Cercus Framework — Individual-Level Robustness Analysis Configuration
+# ══════════════════════════════════════════════════════════════════════
+# Thresholds for the per-animal robustness checks (see
+# cercus/analysis/individual.py). These values can be overridden by user
+# config.yaml in project root.
+
+individual:
+  # Minimum escape trials an animal must have to enter the second-order
+  # (per-animal mean direction) Rayleigh test. With <3 trials the per-animal
+  # circular mean is not a stable estimate of that animal's preference.
+  min_trials_second_order: 3
+
+  # Minimum escape trials an animal must have to enter the k-sample Wallraff
+  # dispersion test. With <5 trials the within-animal resultant length R_k is
+  # badly biased (a single trial has R_k ≡ 1), so low-n animals are excluded.
+  min_trials_wallraff: 5
+
+  # Number of bootstrap iterations for the animal-level resampling CI.
+  bootstrap_iterations: 1000

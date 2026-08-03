@@ -37,3 +37,10 @@ trajectory:
 # ── Visualization Style ──────────────────────────────────────────────
 visualization:
   bar_label_style: "inline"
+
+# ── Individual-Level Robustness Analysis ─────────────────────────────
+analysis:
+  individual:
+    min_trials_second_order: 3   # min escape trials to enter per-animal second-order Rayleigh
+    min_trials_wallraff: 5       # min escape trials to enter k-sample Wallraff dispersion test
+    bootstrap_iterations: 1000   # animal-level bootstrap resamples for the pooled-mu CI

@@ -393,7 +393,7 @@ class ConfigManager:
 
     def _setup_proxies(self) -> None:
         """Set up proxy objects for attribute access."""
-        for name in ("thresholds", "geometry", "colors", "escape", "trajectory", "visualization"):
+        for name in ("thresholds", "geometry", "colors", "escape", "trajectory", "visualization", "analysis"):
             self._proxies[name] = DynamicConfigProxy(self, name)
 
     def __getattr__(self, name: str) -> Any:
@@ -578,6 +578,9 @@ def get_geometry() -> DynamicConfigProxy:
 def get_colors() -> DynamicConfigProxy:
     return config.colors
 
+def get_analysis() -> DynamicConfigProxy:
+    return config.analysis
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Legacy Exports (for backward compatibility)
@@ -587,6 +590,6 @@ from cercus.config.settings import BarLabelStyle, TrajectoryConfig  # noqa: E402
 
 __all__ = [
     "config", "get_config", "reload_config",
-    "get_thresholds", "get_geometry", "get_colors",
+    "get_thresholds", "get_geometry", "get_colors", "get_analysis",
     "BarLabelStyle", "TrajectoryConfig",
 ]

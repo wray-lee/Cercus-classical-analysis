@@ -48,10 +48,18 @@ def single(
 def population(
     input: Path = typer.Option(..., "--input", "-i", help="Directory containing session CSV files"),
     output: Path = typer.Option(..., "--output", "-o", help="Directory to save results"),
+    individual_checks: bool = typer.Option(
+        False, "--individual-checks",
+        help="Also run per-animal robustness checks (second-order Rayleigh, "
+             "leave-one-out, bootstrap) and save suppl figures + individual_summary.csv",
+    ),
 ) -> None:
     """Population-level analysis (equivalent to population_analysis.py)."""
     from population_analysis import main as run_population
-    run_population([f"--input-dir={input}", f"--output={output}"])
+    argv = [f"--input-dir={input}", f"--output={output}"]
+    if individual_checks:
+        argv.append("--individual-checks")
+    run_population(argv)
 
 
 @app.command()

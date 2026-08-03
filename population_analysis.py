@@ -77,6 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", required=True,
         help="Directory for all output files (CSV + figures). Created if it doesn't exist.",
     )
+    p.add_argument(
+        "--individual-checks", action="store_true",
+        help="Also run per-animal robustness checks (second-order Rayleigh, "
+             "leave-one-animal-out, animal-level bootstrap) and save supplementary "
+             "figures (figures/suppl_*.png) plus individual_summary.csv.",
+    )
     return p
 
 
@@ -484,6 +490,13 @@ def main(argv: list[str] | None = None) -> None:
     fig6 = plot_population_polar_histogram(all_data)
     _safe_savefig(fig6, pop_dir / "polar_direction_histogram.svg", dpi=300, bbox_inches="tight")
     plt.close(fig6)
+
+    # ── Individual-level robustness checks (pseudo-replication guard) ──
+    if args.individual_checks:
+        from cercus.analysis.individual import run_individual_checks
+
+        log.info("Running per-animal robustness checks (--individual-checks)...")
+        run_individual_checks(all_data, output_dir)
 
     log.info("Figures saved to %s/: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg", pop_dir.name)
     log.info("Heatmaps saved to %s/heatmap/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name)

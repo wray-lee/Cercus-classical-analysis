@@ -36,6 +36,19 @@ from cercus.visualization.polar import (
     plot_escape_angle_distribution,
     plot_population_polar_histogram,
 )
+from cercus.visualization.individual import (
+    plot_loo,
+    plot_second_order,
+    plot_trial_counts,
+)
+from cercus.visualization._circstats import (
+    circ_dist_rad,
+    circ_mean_rad,
+    rayleigh_p,
+    wallraff_test,
+    wallraff_test_with_ref,
+    watson_williams_test,
+)
 
 __all__ = [
     "plot_trajectory_overlay",
@@ -57,4 +70,13 @@ __all__ = [
     "plot_prewalk_stillness",
     "plot_escape_angle_distribution",
     "plot_population_polar_histogram",
+    "plot_trial_counts",
+    "plot_second_order",
+    "plot_loo",
+    "circ_mean_rad",
+    "circ_dist_rad",
+    "rayleigh_p",
+    "watson_williams_test",
+    "wallraff_test",
+    "wallraff_test_with_ref",
 ]
