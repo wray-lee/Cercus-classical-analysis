@@ -524,8 +524,39 @@ def run_individual_checks(
     second_min = MIN_TRIALS_SECOND_ORDER if filter_low_n else 1
     second = second_order_analysis(angles, min_trials=second_min)
 
+    # Pad `second["animals"]` with zero-count animals so the polar plot
+    # shows the full N_total even for animals with 0 response trials.
+    # ponytail: one reindex fills the gap — no second analysis pass needed.
+    animals_in_second = set(second["animals"]["animal_id"])
+    zero_animals = all_animals.difference(animals_in_second)
+    if len(zero_animals) > 0:
+        zero_rows = pd.DataFrame({
+            "animal_id": list(zero_animals),
+            "n_trials": 0, "mu_deg": np.nan, "R": np.nan,
+        })
+        second["animals"] = pd.concat(
+            [second["animals"], zero_rows], ignore_index=True
+        ).sort_values("animal_id").reset_index(drop=True)
+        # Keep second["N"] as the valid-animal count for Rayleigh stats
+        # (the padded zero-count rows have NaN mu_deg and are skipped by
+        # plot_second_order's validity mask).
+
     # 3) Leave-one-animal-out sensitivity — always all animals with response trials
     loo = loo_robustness(angles)
+
+    # Pad LOO with zero-count animals (removing them doesn't change the pooled mean).
+    animals_in_loo = set(loo["loo"]["animal_id"])
+    zero_loo = all_animals.difference(animals_in_loo)
+    if len(zero_loo) > 0:
+        zero_rows = pd.DataFrame({
+            "animal_id": list(zero_loo),
+            "n_trials": 0,
+            "mu_deg": loo["full_mu_deg"],
+            "delta_deg": 0.0,
+        })
+        loo["loo"] = pd.concat(
+            [loo["loo"], zero_rows], ignore_index=True
+        ).sort_values("animal_id").reset_index(drop=True)
 
     # 4) Animal-level bootstrap CI (logged)
     boot = bootstrap_by_animal(angles)
@@ -546,6 +577,17 @@ def run_individual_checks(
     # ── Per-animal summary CSV ──
     summary = _per_animal_summary(angles)
     summary["n3_eligible"] = summary["n_trials"] >= MIN_TRIALS_SECOND_ORDER
+    # Pad summary with zero-count animals too.
+    animals_in_summary = set(summary["animal_id"])
+    zero_summary = all_animals.difference(animals_in_summary)
+    if len(zero_summary) > 0:
+        zero_rows = pd.DataFrame({
+            "animal_id": list(zero_summary),
+            "n_trials": 0, "mu_deg": np.nan, "R": np.nan, "n3_eligible": False,
+        })
+        summary = pd.concat(
+            [summary, zero_rows], ignore_index=True
+        ).sort_values("animal_id").reset_index(drop=True)
     summary_csv = output_dir / "individual_summary.csv"
     summary.to_csv(summary_csv, index=False, float_format="%.3f")
 

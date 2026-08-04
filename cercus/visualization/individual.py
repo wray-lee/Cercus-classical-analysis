@@ -157,6 +157,9 @@ def plot_second_order(
     """
     mu_deg = np.asarray(animal_df["mu_deg"].values, dtype=float)
     R_k = np.asarray(animal_df["R"].values, dtype=float)
+    valid = ~np.isnan(mu_deg) & ~np.isnan(R_k)
+    mu_valid = mu_deg[valid]
+    R_valid = R_k[valid]
 
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(111, projection="polar")
@@ -171,10 +174,10 @@ def plot_second_order(
     ax.grid(True, color="0.88", linewidth=0.7, linestyle="-")
     ax.set_axisbelow(True)
 
-    if len(mu_deg) > 0:
+    if len(mu_valid) > 0:
         ax.scatter(
-            np.radians(mu_deg),
-            R_k,
+            np.radians(mu_valid),
+            R_valid,
             s=48,
             color=mcolors.to_rgba(COLOR_ESCAPE, 0.75),
             edgecolor="white",
@@ -182,15 +185,15 @@ def plot_second_order(
             zorder=3,
         )
         # thin spokes from origin to each animal (visual anchor for direction)
-        for m, r in zip(np.radians(mu_deg), R_k):
+        for m, r in zip(np.radians(mu_valid), R_valid):
             ax.plot([m, m], [0, r], color=mcolors.to_rgba(COLOR_ESCAPE, 0.25),
                     lw=0.7, zorder=2)
 
     # Second-order mean + Rayleigh test (n = number of animals)
-    if len(mu_deg) >= 2:
-        mu2 = circ_mean_rad(np.radians(mu_deg))
-        R2 = float(np.abs(np.mean(np.exp(1j * np.radians(mu_deg)))))
-        p2 = rayleigh_p(R2, len(mu_deg))
+    if len(mu_valid) >= 2:
+        mu2 = circ_mean_rad(np.radians(mu_valid))
+        R2 = float(np.abs(np.mean(np.exp(1j * np.radians(mu_valid)))))
+        p2 = rayleigh_p(R2, len(mu_valid))
         arrow = ax.annotate(
             "",
             xy=(mu2, R2),
@@ -217,14 +220,15 @@ def plot_second_order(
         )
 
     n_plotted = len(animal_df)
+    n_valid = int(valid.sum())
     ax.set_title(
-        f"Per-animal mean response directions (N_total={n_total}, N_plotted={n_plotted})",
+        f"Per-animal mean response directions (N_total={n_total}, N_plotted={n_valid})",
         fontweight="bold", pad=22,
     )
 
     p_str = f"p = {p2:.2e}" if not np.isnan(p2) else "p = n/a"
     sig = "" if np.isnan(p2) else (" (sig.)" if p2 < 0.05 else " (n.s.)")
-    n_str = f"N = {n_plotted} animals (n≥3)" if filter_low_n else f"N = {n_plotted} animals (n≥1)"
+    n_str = f"n = {n_valid} animals (n≥3)" if filter_low_n else f"n = {n_valid} animals (n≥1)"
     caption = (
         f"Second-order mean μ = {np.degrees(mu2):.0f}° (R = {R2:.2f}), "
         f"{n_str}, Rayleigh {p_str}{sig}"
