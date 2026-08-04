@@ -86,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
              "leave-one-animal-out, animal-level bootstrap) and save supplementary "
              "figures (figures/suppl_*.png) plus individual_summary.csv.",
     )
+    p.add_argument(
+        "--individual-checks-filter-low-n", action="store_true",
+        help="When --individual-checks is set, exclude animals with <3 (second-order) "
+             "or <5 (Wallraff) response trials (default: include all with ≥1).",
+    )
     return p
 
 
@@ -499,7 +504,8 @@ def main(argv: list[str] | None = None) -> None:
         from cercus.analysis.individual import run_individual_checks
 
         log.info("Running per-animal robustness checks (--individual-checks)...")
-        run_individual_checks(all_data, output_dir)
+        filter_low_n = getattr(args, "individual_checks_filter_low_n", False)
+        run_individual_checks(all_data, output_dir, filter_low_n=filter_low_n)
 
     log.info("Figures saved to %s/: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg", pop_dir.name)
     log.info("Heatmaps saved to %s/heatmap/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name)

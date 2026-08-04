@@ -233,6 +233,19 @@ def plot_trial_panel(
         elif dz_integration_range == "escape_onset_heading" and _is_escape:
             z_start, z_end = escape_start, escape_end
             _macro_yaw_override = np.cumsum(dz_body)[escape_start] / RADIUS_MM
+        elif dz_integration_range == "peak_bracket" and _is_escape:
+            av = trial["angular_velocity"].values if "angular_velocity" in trial.columns else None
+            if av is not None:
+                from cercus.core.kinematics.trajectory_integration import find_peak_bracket_interval
+                l, r = find_peak_bracket_interval(
+                    dz_body, av, escape_start, escape_end, eps=2.0,
+                )
+                _macro_yaw_override = np.sum(dz_body[l : r + 1]) / RADIUS_MM
+                z_start, z_end = 0, 0  # Stage 2 yaw is overridden; dz not needed
+                log.debug("peak_bracket: [dz %d..%d] yaw=%.3f", l, r, _macro_yaw_override)
+            else:
+                z_start, z_end = escape_start, escape_end
+                _macro_yaw_override = None
         else:
             z_start, z_end = 0, len(dz_body)
 

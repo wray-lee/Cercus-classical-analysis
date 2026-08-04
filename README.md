@@ -169,7 +169,7 @@ All trajectory drawing parameters are centralised in `config.yaml` under the `tr
 | `use_z_degree_to_draw` | bool | `true` | Enable per-frame heading integration from dz. When `false`, dx/dy are used raw. |
 | `use_escape_onset_heading` | bool | `true` | Heading initialisation for non-rigid mode. `true` = rotate by cumulative dz from trial start to escape onset; `false` = reset angle to zero at onset. Only effective when `use_z_degree_to_draw=true`. |
 | `use_escape_onset_only_xy` | bool | `true` | Slice dx/dy to the escape interval only. Applies to both Escape and PreWalk trials. |
-| `dz_integration_range` | str | `"escape_interval"` | Range of dz used for Stage 2 rigid rotation angle. `"full_trial"`, `"escape_interval"`, `"trial_to_onset"`, `"escape_angular_peak"`, or `"escape_onset_heading"`. Stage 1 curvature always uses the full escape interval dz. |
+| `dz_integration_range` | str | `"escape_interval"` | Range of dz used for Stage 2 rigid rotation angle. `"full_trial"`, `"escape_interval"`, `"trial_to_onset"`, `"escape_angular_peak"`, `"escape_onset_heading"`, or `"peak_bracket"`. Stage 1 curvature always uses the full escape interval dz. |
 | `use_rigid_rotation` | bool | `false` | Rigid-body rotation mode: accumulate dx/dy linearly, then apply total yaw as a single rotation. Takes precedence over per-frame heading when `true`. |
 | `use_angular_velocity_offset` | bool | `false` | Refine escape interval offset to the first angular-velocity zero-crossing after its peak. |
 
@@ -192,6 +192,7 @@ Two-stage decoupled design:
   - `"trial_to_onset"` — `sum(dz)` from trial start to escape onset
   - `"escape_angular_peak"` — `sum(dz)` from onset to the first angular-velocity zero-crossing after the peak (filters out air-ball rebound)
   - `"escape_onset_heading"` — cumulative heading at escape onset (`cumsum(dz)[onset] / RADIUS`)
+  - `"peak_bracket"` — integrate dz from the pre-peak sign change to the post-peak zero-crossing, isolating the dominant rotational impulse. Recommended for cross-paradigm comparison (visual vs wind vs bimodal). See `config/comparison.yaml`.
 
 ## Key Modules
 

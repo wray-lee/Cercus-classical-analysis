@@ -39,7 +39,7 @@ class TrajectoryConfig(BaseModel, frozen=True):
 
     dz_integration_range: Literal[
         "full_trial", "escape_interval", "trial_to_onset",
-        "escape_angular_peak", "escape_onset_heading",
+        "escape_angular_peak", "escape_onset_heading", "peak_bracket",
     ] = "escape_interval"
 
     bar_label_style: BarLabelStyle = BarLabelStyle.INLINE
@@ -49,7 +49,7 @@ class TrajectoryConfig(BaseModel, frozen=True):
     def _validate_dz_range(cls, v: str) -> str:
         valid = {
             "full_trial", "escape_interval", "trial_to_onset",
-            "escape_angular_peak", "escape_onset_heading",
+            "escape_angular_peak", "escape_onset_heading", "peak_bracket",
         }
         if v not in valid:
             log.warning(

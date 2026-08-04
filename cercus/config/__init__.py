@@ -205,6 +205,10 @@ def get_analysis() -> ConfigProxy:
     return config.analysis
 
 
+def get_visualization() -> ConfigProxy:
+    return config.visualization
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Legacy Exports (for backward compatibility)
 # ═══════════════════════════════════════════════════════════════════════
@@ -213,6 +217,6 @@ from cercus.config.settings import BarLabelStyle, TrajectoryConfig  # noqa: E402
 
 __all__ = [
     "config", "get_config", "reload_config",
-    "get_thresholds", "get_geometry", "get_colors", "get_analysis",
+    "get_thresholds", "get_geometry", "get_colors", "get_analysis", "get_visualization",
     "BarLabelStyle", "TrajectoryConfig",
 ]

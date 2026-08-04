@@ -93,7 +93,7 @@ TRAJ_USE_ESCAPE_ONSET_HEADING: bool = bool(_traj_cfg.get("use_escape_onset_headi
 TRAJ_USE_ESCAPE_ONSET_ONLY_XY: bool = bool(_traj_cfg.get("use_escape_onset_only_xy", True))
 TRAJ_USE_ANGULAR_VELOCITY_OFFSET: bool = bool(_traj_cfg.get("use_angular_velocity_offset", False))
 
-_DZ_RANGE_VALID = {"full_trial", "escape_interval", "trial_to_onset", "escape_angular_peak", "escape_onset_heading"}
+_DZ_RANGE_VALID = {"full_trial", "escape_interval", "trial_to_onset", "escape_angular_peak", "escape_onset_heading", "peak_bracket"}
 DZ_INTEGRATION_RANGE: str = _traj_cfg.get("dz_integration_range", "escape_interval")
 if DZ_INTEGRATION_RANGE not in _DZ_RANGE_VALID:
     _log.warning("Invalid dz_integration_range=%r, falling back to 'escape_interval'", DZ_INTEGRATION_RANGE)

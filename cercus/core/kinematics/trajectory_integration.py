@@ -14,11 +14,105 @@ Stage 2 — Apply curvature-thresholded rigid macro rotation to the curved
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from pipeline.constants import RADIUS_MM
 from pipeline.kinematics import _refine_offset_by_angular_velocity
+
+log = logging.getLogger(__name__)
+
+_DEG2RAD: float = np.pi / 180.0
+
+
+def find_peak_bracket_interval(
+    dz: np.ndarray,
+    angular_velocity: np.ndarray,
+    onset_idx: int,
+    offset_idx: int,
+    eps: float = 2.0,
+) -> tuple[int, int]:
+    """Find the bracket around the peak angular velocity within [onset, offset).
+
+    The bracket spans from the first sign change (or below-epsilon) before the
+    peak to the first such change after the peak, isolating the dominant
+    rotational impulse while excluding the rebound phase. Falls back to the
+    ``escape_angular_peak`` behaviour when the bracket is too short (<5 frames)
+    or the peak prominence is below *eps*.
+    """
+    eps_rad = eps * _DEG2RAD
+    search = angular_velocity[onset_idx:offset_idx]
+    if len(search) == 0:
+        return onset_idx, offset_idx
+
+    # Locate the peak: frame with maximum |angular_velocity| in the window
+    peak_local = int(np.nanargmax(np.abs(search)))
+    peak_global = onset_idx + peak_local
+    peak_val = search[peak_local]
+
+    # Near-zero peak -> fallback to escape_angular_peak behaviour
+    if abs(peak_val) < eps_rad:
+        refined = _refine_offset_by_angular_velocity(
+            np.arange(len(dz), dtype=float), angular_velocity,
+            onset_idx, offset_idx,
+        )
+        end = refined if refined is not None else offset_idx
+        log.warning(
+            "peak_bracket peak too weak (|omega|max=%.3f rad/s < eps=%.3f), "
+            "falling back to escape_angular_peak (end=%d)",
+            abs(peak_val), eps_rad, end,
+        )
+        return onset_idx, end
+
+    # Left bracket: scan backwards from peak for sign change or |omega| < eps
+    left = peak_global
+    for i in range(peak_global, onset_idx - 1, -1):
+        if abs(angular_velocity[i]) < eps_rad or (
+            i > onset_idx and (
+                angular_velocity[i] * angular_velocity[i - 1] < 0
+            )
+        ):
+            left = i
+            break
+        left = i
+    # Clamp into the window [onset_idx, offset_idx)
+    left = max(left, onset_idx)
+
+    # Right bracket: scan forwards from peak for sign change or |omega| < eps
+    right = peak_global
+    for i in range(peak_global, min(offset_idx, len(angular_velocity))):
+        if abs(angular_velocity[i]) < eps_rad or (
+            i + 1 < len(angular_velocity)
+            and angular_velocity[i] * angular_velocity[i + 1] < 0
+        ):
+            right = i
+            break
+        right = i
+    # Clamp to the half-open window [onset_idx, offset_idx)
+    right = min(right, offset_idx - 1)
+
+    # Validate bracket size: < 5 frames -> fallback to escape_angular_peak
+    bracket_len = right - left + 1
+    if bracket_len < 5:
+        refined = _refine_offset_by_angular_velocity(
+            np.arange(len(dz), dtype=float), angular_velocity,
+            onset_idx, offset_idx,
+        )
+        end = refined if refined is not None else offset_idx
+        log.warning(
+            "peak_bracket interval too short (%d frames at %d..%d), "
+            "falling back to escape_angular_peak (end=%d)",
+            bracket_len, left, right, end,
+        )
+        return onset_idx, end
+
+    log.debug(
+        "peak_bracket: peak=%d (|omega|max=%.3f rad/s), bracket=%d..%d, len=%d",
+        peak_global, abs(peak_val), left, right, bracket_len,
+    )
+    return left, right
 
 
 def integrate_body_trajectory(

@@ -29,17 +29,32 @@ _WALLRAFF_MIN_TRIALS = 5       # mirrors cercus/config/defaults/analysis.yaml
 def plot_trial_counts(
     counts: pd.Series,
     wallraff: dict | None = None,
+    n_total: int | None = None,
+    filter_low_n: bool = False,
     figsize: tuple[float, float] = (6.0, 4.2),
 ) -> plt.Figure:
-    """Histogram of escape trials per animal.
+    """Histogram of response trials (Escape + PreWalk) per animal.
 
-    x = trials per animal, y = number of animals with that many escape trials.
-    Reference lines mark the inclusion thresholds used downstream: n≥3 for the
-    second-order Rayleigh test, n≥5 for the k-sample Wallraff dispersion test.
+    x = trials per animal, y = number of animals with that many response trials.
+    Reference lines at n≥3 / n≥5 are drawn only when *filter_low_n* is True
+    (i.e. when the test actually excludes low-n animals).
+
+    Parameters
+    ----------
+    counts : pd.Series
+        Response-trial counts per animal (may include zero-count animals).
+    wallraff : dict | None
+        Wallraff test result dict.
+    n_total : int | None
+        Total number of animals (including zero-count). If None, uses
+        ``len(counts)``.
+    filter_low_n : bool
+        If True, draw reference lines at n≥3 / n≥5. If False (default),
+        omit the lines since no filtering is applied.
     """
     counts = counts.astype(int)
     max_c = int(counts.max())
-    n_animals = len(counts)
+    n_animals = n_total if n_total is not None else len(counts)
     median_trials = float(counts.median())
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -65,32 +80,33 @@ def plot_trial_counts(
                     fontsize=8, color="0.3",
                 )
 
-    ax.axvline(
-        _SECOND_ORDER_MIN_TRIALS, color=NPG_PALETTE[1], linestyle="--",
-        linewidth=1.0, zorder=1,
-    )
-    ax.text(
-        _SECOND_ORDER_MIN_TRIALS + 0.1, ax.get_ylim()[1] * 0.92,
-        f"n≥{_SECOND_ORDER_MIN_TRIALS} (second-order Rayleigh)",
-        fontsize=7.5, color=NPG_PALETTE[1], ha="left", va="top",
-    )
-    ax.axvline(
-        _WALLRAFF_MIN_TRIALS, color=NPG_PALETTE[3], linestyle="--",
-        linewidth=1.0, zorder=1,
-    )
-    ax.text(
-        _WALLRAFF_MIN_TRIALS + 0.1, ax.get_ylim()[1] * 0.72,
-        f"n≥{_WALLRAFF_MIN_TRIALS} (k-sample Wallraff)",
-        fontsize=7.5, color=NPG_PALETTE[3], ha="left", va="top",
-    )
+    if filter_low_n:
+        ax.axvline(
+            _SECOND_ORDER_MIN_TRIALS, color=NPG_PALETTE[1], linestyle="--",
+            linewidth=1.0, zorder=1,
+        )
+        ax.text(
+            _SECOND_ORDER_MIN_TRIALS + 0.1, ax.get_ylim()[1] * 0.92,
+            f"n≥{_SECOND_ORDER_MIN_TRIALS} (second-order Rayleigh)",
+            fontsize=7.5, color=NPG_PALETTE[1], ha="left", va="top",
+        )
+        ax.axvline(
+            _WALLRAFF_MIN_TRIALS, color=NPG_PALETTE[3], linestyle="--",
+            linewidth=1.0, zorder=1,
+        )
+        ax.text(
+            _WALLRAFF_MIN_TRIALS + 0.1, ax.get_ylim()[1] * 0.72,
+            f"n≥{_WALLRAFF_MIN_TRIALS} (k-sample Wallraff)",
+            fontsize=7.5, color=NPG_PALETTE[3], ha="left", va="top",
+        )
 
-    ax.set_xlabel("Escape trials per animal")
+    ax.set_xlabel("Response trials per animal")
     ax.set_ylabel("Number of animals")
-    ax.set_title("Escape-trial distribution across animals", fontweight="bold")
+    ax.set_title("Response-trial distribution (Escape+PreWalk) across animals", fontweight="bold")
     ax.set_xticks(np.arange(0, max_c + 2, max(1, (max_c + 2) // 6)))
 
     caption = (
-        f"N animals = {n_animals}, total escape trials = {int(counts.sum())}, "
+        f"N animals = {n_animals}, total response trials = {int(counts.sum())}, "
         f"median = {median_trials:.0f} trials/animal"
     )
     ax.text(
@@ -103,11 +119,17 @@ def plot_trial_counts(
         sig = "ns" if wallraff["p"] >= 0.05 else "sig."
         n_groups = int(wallraff.get("n_groups", len(counts)))
         min_trials = int(wallraff.get("min_trials", 5))
-        excluded = wallraff.get("excluded", 0)
-        w_text = (
-            f"k-sample Wallraff (n≥{min_trials}, k={n_groups}): H={wallraff['H']:.2f}, "
-            f"p={wallraff['p']:.3g} ({sig}) | Animals with <{min_trials} trials excluded"
-        )
+        # ponytail: filter state inferred from min_trials — no extra key needed
+        if min_trials >= 5:
+            w_text = (
+                f"k-sample Wallraff (n≥{min_trials}, k={n_groups}, filter=True): "
+                f"H={wallraff['H']:.2f}, p={wallraff['p']:.3g} ({sig})"
+            )
+        else:
+            w_text = (
+                f"k-sample Wallraff (all samples, k={n_groups}, filter=False): "
+                f"H={wallraff['H']:.2f}, p={wallraff['p']:.3g} ({sig})"
+            )
         ax.text(
             0.0, -0.32, w_text, transform=ax.transAxes, ha="left",
             fontsize=7.0, color="0.45",
@@ -121,9 +143,11 @@ def plot_trial_counts(
 
 def plot_second_order(
     animal_df: pd.DataFrame,
+    n_total: int = 0,
+    filter_low_n: bool = False,
     figsize: tuple[float, float] = (4.8, 4.8),
 ) -> plt.Figure:
-    """Polar scatter of per-animal mean escape directions + second-order mean.
+    """Polar scatter of per-animal mean response directions + second-order mean.
 
     Each marker is one animal placed at (mu_k, R_k): its own circular mean
     direction and within-animal resultant length. The arrow marks the
@@ -192,16 +216,18 @@ def plot_second_order(
             [path_effects.withStroke(linewidth=2.0, foreground="white")]
         )
 
+    n_plotted = len(animal_df)
     ax.set_title(
-        "Per-animal mean escape directions\n(one dot = one animal)",
+        f"Per-animal mean response directions (N_total={n_total}, N_plotted={n_plotted})",
         fontweight="bold", pad=22,
     )
 
     p_str = f"p = {p2:.2e}" if not np.isnan(p2) else "p = n/a"
     sig = "" if np.isnan(p2) else (" (sig.)" if p2 < 0.05 else " (n.s.)")
+    n_str = f"N = {n_plotted} animals (n≥3)" if filter_low_n else f"N = {n_plotted} animals (n≥1)"
     caption = (
         f"Second-order mean μ = {np.degrees(mu2):.0f}° (R = {R2:.2f}), "
-        f"N = {len(mu_deg)} animals, Rayleigh {p_str}{sig}"
+        f"{n_str}, Rayleigh {p_str}{sig}"
     )
     ax.text(
         0.5, -0.18, caption, transform=ax.transAxes,
@@ -213,14 +239,25 @@ def plot_second_order(
 def plot_loo(
     loo_df: pd.DataFrame,
     pooled_mu_deg: float,
+    n_total: int | None = None,
     figsize: tuple[float, float] = (7.0, 3.8),
 ) -> plt.Figure:
-    """Leave-one-animal-out sensitivity of the pooled escape direction.
+    """Leave-one-animal-out sensitivity of the pooled response direction.
 
     x = animal removed, y = pooled circular mean over the remaining trials.
     The solid line is the full pooled mean; the dashed band marks ±5°. If every
-    point stays inside the band, the pooled −74° preference is not carried by
+    point stays inside the band, the pooled preference is not carried by
     any single animal.
+
+    Parameters
+    ----------
+    loo_df : pd.DataFrame
+        LOO results with ``animal_id``, ``mu_deg``, ``delta_deg`` columns.
+    pooled_mu_deg : float
+        Full pooled mean direction (all trials).
+    n_total : int | None
+        Total number of animals in the experiment. If None, uses
+        ``len(loo_df)``.
     """
     animal_ids = loo_df["animal_id"].astype(str).values
     mu_deg = np.asarray(loo_df["mu_deg"].values, dtype=float)
@@ -256,11 +293,12 @@ def plot_loo(
     ax.set_xticklabels(animal_ids, rotation=55, ha="right", fontsize=8)
     ax.set_xlim(-0.6, n_animals - 0.4)
     ax.set_xlabel("Animal removed")
-    ax.set_ylabel("Pooled escape direction after removal (°)")
+    ax.set_ylabel("Pooled response direction after removal (°)")
     ax.set_title("Leave-one-animal-out sensitivity", fontweight="bold")
     ax.legend(frameon=False, fontsize=8, loc="best")
 
     n_inside = int((np.abs(delta) <= 5.0).sum())
+    n_animals = n_total if n_total is not None else len(loo_df)
     caption = (
         f"max |Δμ| = {np.abs(delta).max():.1f}°; "
         f"{n_inside}/{n_animals} removals stay within ±5° of the full pooled mean"

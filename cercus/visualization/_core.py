@@ -18,6 +18,7 @@ import pandas as pd
 from cercus.core.kinematics.trajectory_integration import (  # noqa: F401
     body_to_traj,
     build_angular_peak_dz_mask,
+    find_peak_bracket_interval,
 )
 from pipeline.constants import (
     COLOR_LEFT,
@@ -288,6 +289,29 @@ def compute_trajectory_masks(
         _macro_yaw_override = (
             np.cumsum(grp["dz"].fillna(0).values)[onset_idx] / radius_mm
         )
+    elif _is_valid and dz_integration_range == "peak_bracket":
+        av = (
+            grp["angular_velocity"].values
+            if "angular_velocity" in grp.columns
+            else None
+        )
+        if av is not None:
+            l, r = find_peak_bracket_interval(
+                grp["dz"].fillna(0).values,
+                av,
+                onset_idx,
+                offset_idx,
+                eps=2.0,
+            )
+            _macro_yaw_override = np.sum(grp["dz"].fillna(0).values[l : r + 1]) / radius_mm
+            mask_z = escape_mask  # Stage 1 curvature always uses full escape interval dz
+            log.debug(
+                "peak_bracket: [dz %d..%d, omega %d..%d] yaw=%.3f",
+                l, r, onset_idx, offset_idx,
+                _macro_yaw_override,
+            )
+        else:
+            mask_z = escape_mask
     else:
         mask_z = full_mask
 

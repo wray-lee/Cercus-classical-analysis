@@ -71,13 +71,15 @@ trajectory:
 
 # dz integration range for Stage 2 rigid rotation angle only.
 # Stage 1 curvature always uses the full escape interval dz.
-#   "full_trial"            — all dz frames
-#   "escape_interval"       — only escape-onset interval
-#   "trial_to_onset"        — trial start to escape onset
-#   "escape_angular_peak"   — onset → angular-velocity peak → zero-crossing
-#                             (filters out air-ball rebound)
-#   "escape_onset_heading"  — rotate by cumsum(dz) at escape onset
-#                             (same as use_escape_onset_heading in non-rigid)
+#   "full_trial"                 — all dz frames
+#   "escape_interval"            — only escape-onset interval
+#   "trial_to_onset"             — trial start to escape onset
+#   "escape_angular_peak"        — onset → angular-velocity peak → zero-crossing
+#                                 (filters out air-ball rebound)
+#   "escape_onset_heading"       — rotate by cumsum(dz) at escape onset
+#                                 (same as use_escape_onset_heading in non-rigid)
+#   "peak_bracket" (turn_bout)   — from pre-peak sign change to post-peak zero-crossing
+#                                 (for fair paradigm comparison, see comparison.yaml)
 #dz_integration_range: "escape_angular_peak"
 
 # Rigid global rotation: two-stage decoupled design.

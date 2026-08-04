@@ -52,12 +52,19 @@ def population(
         help="Also run per-animal robustness checks (second-order Rayleigh, "
              "leave-one-out, bootstrap) and save suppl figures + individual_summary.csv",
     ),
+    individual_checks_filter_low_n: bool = typer.Option(
+        False, "--individual-checks-filter-low-n",
+        help="When --individual-checks is set, exclude animals with <3 (second-order) "
+             "or <5 (Wallraff) response trials (default: include all animals with ≥1).",
+    ),
 ) -> None:
     """Population-level analysis (equivalent to population_analysis.py)."""
     from population_analysis import main as run_population
     argv = [f"--input-dir={input}", f"--output={output}"]
     if individual_checks:
         argv.append("--individual-checks")
+    if individual_checks_filter_low_n:
+        argv.append("--individual-checks-filter-low-n")
     run_population(argv)
 
 

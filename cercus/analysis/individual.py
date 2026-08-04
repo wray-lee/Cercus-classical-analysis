@@ -45,7 +45,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from cercus.config import get_analysis
+from cercus.config import get_analysis, get_visualization
 from cercus.visualization._circstats import circ_mean_rad, rayleigh_p, wallraff_test
 from cercus.visualization._core import compute_trajectory_masks
 from pipeline.constants import _get_unified_side
@@ -57,6 +57,18 @@ _ANALYSIS = get_analysis()
 MIN_TRIALS_SECOND_ORDER: int = int(_ANALYSIS.individual.min_trials_second_order)
 MIN_TRIALS_WALLRAFF: int = int(_ANALYSIS.individual.min_trials_wallraff)
 BOOTSTRAP_ITERATIONS: int = int(_ANALYSIS.individual.bootstrap_iterations)
+
+# ── Response classes pooled behind `population --individual-checks` ──
+# Defaults to ("Escape", "PreWalk") when the visualization toggle
+# ``individual_checks_include_prewalk`` is true (so most animals reach the
+# n>=3 second-order threshold); collapses to Escape-only when false. The
+# column values are capitalized ("Escape"/"PreWalk") — kept as exact matches.
+_INCLUDE_PREWALK: bool = bool(
+    get_visualization().get("individual_checks_include_prewalk", True)
+)
+INDIVIDUAL_CHECK_RESPONSE_TYPES: tuple[str, ...] = (
+    ("Escape", "PreWalk") if _INCLUDE_PREWALK else ("Escape",)
+)
 
 
 def _animal_col(df: pd.DataFrame) -> str:
@@ -70,26 +82,27 @@ def _animal_col(df: pd.DataFrame) -> str:
 
 
 def _as_angle_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a per-trial table with ``angle_deg`` (escape trials only).
+    """Return a per-trial table with ``angle_deg`` (response trials only).
 
-    Accepts either the raw frame-level DataFrame (recomputes per-trial escape
-    angles from trajectories) or an already-aggregated per-trial table that
-    carries an ``angle_deg`` column and no ``t_rel`` column. If a
-    ``response_type`` column is present it is filtered to Escape trials so both
-    paths feed identical input to the downstream tests.
+    Accepts either the raw frame-level DataFrame (recomputes per-trial angles
+    from trajectories) or an already-aggregated per-trial table that carries an
+    ``angle_deg`` column and no ``t_rel`` column. If a ``response_type`` column
+    is present it is filtered to the individual-check response classes (by
+    default Escape + PreWalk, see :data:`INDIVIDUAL_CHECK_RESPONSE_TYPES`) so
+    both paths feed identical input to the downstream tests.
     """
     if "angle_deg" in df.columns and "t_rel" not in df.columns:
         if "response_type" in df.columns:
-            df = df[df["response_type"] == "Escape"]
+            df = df[df["response_type"].isin(INDIVIDUAL_CHECK_RESPONSE_TYPES)]
         return df
     return trial_escape_angles(df)
 
 
 def trial_escape_angles(
     df: pd.DataFrame,
-    response_type: str = "Escape",
+    response_type: str | None = None,
 ) -> pd.DataFrame:
-    """One row per trial with its animal id and escape direction.
+    """One row per trial with its animal id and escape/response direction.
 
     The angle convention mirrors :func:`cercus.visualization.polar.plot_population_polar_histogram`
     (``atan2(traj_x[-1], traj_y[-1])`` after unifying the stimulus side), so the
@@ -101,8 +114,9 @@ def trial_escape_angles(
     df : pd.DataFrame
         Either frame-level data (rows = time samples) or a trial-level table
         that already contains an ``angle_deg`` column.
-    response_type : str
-        Which response class to keep (default ``"Escape"``).
+    response_type : str | None
+        A single response class to keep. Defaults to *all* individual-check
+        response classes (:data:`INDIVIDUAL_CHECK_RESPONSE_TYPES`).
 
     Returns
     -------
@@ -110,7 +124,10 @@ def trial_escape_angles(
         Columns: ``<animal>``, ``trial_id``, ``angle_deg``.
     """
     animal = _animal_col(df)
-    df = df[df["response_type"] == response_type].copy()
+    keep_types = (
+        (response_type,) if response_type is not None else INDIVIDUAL_CHECK_RESPONSE_TYPES
+    )
+    df = df[df["response_type"].isin(keep_types)].copy()
     if df.empty:
         return pd.DataFrame(columns=[animal, "trial_id", "angle_deg"])
 
@@ -232,7 +249,7 @@ def second_order_analysis(
     eligible = counts[counts >= min_trials]
     n_excluded = int((counts < min_trials).sum())
     log.info(
-        "Second-order: %d/%d animals have >=%d escape trials "
+        "Second-order: %d/%d animals have >=%d response trials "
         "(%d excluded: n<%d)",
         len(eligible), len(counts), min_trials, n_excluded, min_trials,
     )
@@ -290,7 +307,7 @@ def loo_robustness(df: pd.DataFrame) -> dict:
     all_rad = np.radians(all_deg)
     full_mu = circ_mean_rad(all_rad)
     full_mu_deg = float(np.degrees(full_mu))
-    log.info("Pooled escape direction over all trials: μ=%.1f° (n=%d trials)", full_mu_deg, all_rad.size)
+    log.info("Pooled response direction over all trials: μ=%.1f° (n=%d trials)", full_mu_deg, all_rad.size)
 
     counts = angles.groupby(animal)["angle_deg"].size()
     rows: list[dict] = []
@@ -319,9 +336,9 @@ def bootstrap_by_animal(
     n_iter: int | None = None,
     seed: int = 0,
 ) -> dict:
-    """Bootstrap the pooled escape direction by resampling ANIMALS.
+    """Bootstrap the pooled response direction by resampling ANIMALS.
 
-    Each iteration draws N animals with replacement, pools ALL escape trials of
+    Each iteration draws N animals with replacement, pools ALL response trials of
     the drawn animals, and recomputes the trial-level circular mean. This
     propagates between-animal variability into the CI of the pooled direction
     — something a trial-level bootstrap (which would resample individual
@@ -440,12 +457,27 @@ def _safe_savefig(fig, path: Path, **kwargs) -> None:
     fig.savefig(path, **kwargs)
 
 
-def run_individual_checks(df: pd.DataFrame, output_dir: str | Path) -> dict:
+def run_individual_checks(
+    df: pd.DataFrame,
+    output_dir: str | Path,
+    filter_low_n: bool = False,
+) -> dict:
     """Run the individual-robustness battery and save figures + summary CSV.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Frame-level DataFrame with all animals and trials.
+    output_dir : str | Path
+        Directory for output CSV and figures/ subdirectory.
+    filter_low_n : bool
+        If True, exclude animals with <3 (second-order Rayleigh) or <5 (Wallraff)
+        response trials, reproducing the old behaviour. If False (default),
+        include all animals with ≥1 response trial.
 
     Generates under ``output_dir``:
 
-    * ``figures/suppl_trial_counts.png`` — distribution of escape trials/animal
+    * ``figures/suppl_trial_counts.png`` — distribution of response trials/animal
     * ``figures/suppl_second_order.png`` — per-animal mean directions + 2nd-order mean
     * ``figures/suppl_loo.png`` — leave-one-animal-out pooled direction
     * ``individual_summary.csv`` — per-animal columns (animal_id, n_trials, mu_deg, R)
@@ -466,38 +498,48 @@ def run_individual_checks(df: pd.DataFrame, output_dir: str | Path) -> dict:
     fig_dir = output_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── All animal IDs from the full input df (before filtering) ──
+    all_animals = pd.Index(df[_animal_col(df)].unique())
+    n_total = len(all_animals)
+
     angles = trial_escape_angles(df)
     animal = _animal_col(angles)
     if angles.empty:
-        log.warning("No escape trials for individual robustness checks — skipping.")
+        log.warning("No response trials for individual robustness checks — skipping.")
         return {}
 
-    # 1) Trial-count distribution
+    # 1) Trial-count distribution — include zero-count animals so N = n_total
     counts = trial_counts_per_animal(angles)
+    counts = counts.reindex(all_animals, fill_value=0).astype(int)
 
-    # k-sample Wallraff across animals (n>=5 only) — reported, not primary.
-    # Computed here because the trial-count figure annotates its result.
-    wallraff_res = wallraff_by_animal(angles)
+    # k-sample Wallraff — filter by filter_low_n
+    wallraff_min = MIN_TRIALS_WALLRAFF if filter_low_n else 1
+    wallraff_res = wallraff_by_animal(angles, min_trials=wallraff_min)
 
-    fig = plot_trial_counts(counts, wallraff=wallraff_res)
+    fig = plot_trial_counts(counts, wallraff=wallraff_res, n_total=n_total, filter_low_n=filter_low_n)
     _safe_savefig(fig, fig_dir / "suppl_trial_counts.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    # 2) Second-order (per-animal) analysis
-    second = second_order_analysis(angles)
+    # 2) Second-order (per-animal) analysis — filter by filter_low_n
+    second_min = MIN_TRIALS_SECOND_ORDER if filter_low_n else 1
+    second = second_order_analysis(angles, min_trials=second_min)
 
-    # 3) Leave-one-animal-out sensitivity
+    # 3) Leave-one-animal-out sensitivity — always all animals with response trials
     loo = loo_robustness(angles)
 
     # 4) Animal-level bootstrap CI (logged)
     boot = bootstrap_by_animal(angles)
 
     # ── Supplementary figures ──
-    fig = plot_second_order(second["animals"])
+    n_plotted = second["N"]
+    fig = plot_second_order(
+        second["animals"],
+        n_total=n_total, filter_low_n=filter_low_n,
+    )
     _safe_savefig(fig, fig_dir / "suppl_second_order.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    fig = plot_loo(loo["loo"], pooled_mu_deg=loo["full_mu_deg"])
+    fig = plot_loo(loo["loo"], pooled_mu_deg=loo["full_mu_deg"], n_total=n_total)
     _safe_savefig(fig, fig_dir / "suppl_loo.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -507,19 +549,21 @@ def run_individual_checks(df: pd.DataFrame, output_dir: str | Path) -> dict:
     summary_csv = output_dir / "individual_summary.csv"
     summary.to_csv(summary_csv, index=False, float_format="%.3f")
 
+    n_response_animals = angles[animal].nunique()
     log.info(
-        "Individual robustness checks complete: %d animals, %d escape trials, "
-        "pooled μ=%.1f°, second-order μ=%.1f° (N=%d, p=%.3g), max LOO |Δμ|=%.2f°, "
-        "bootstrap CI [%.1f°, %.1f°]",
-        angles[animal].nunique(), len(angles),
-        loo["full_mu_deg"], second["mu_deg"], second["N"], second["p"],
-        loo["max_delta_deg"], boot["ci_low"], boot["ci_high"],
+        "Individual robustness checks complete: %d total animals, %d with ≥1 response trials, "
+        "pooled μ=%.1f°, second-order μ=%.1f° (N=%d / %d plotted, p=%.3g), "
+        "max LOO |Δμ|=%.2f°, bootstrap CI [%.1f°, %.1f°]",
+        n_total, n_response_animals,
+        loo["full_mu_deg"], second["mu_deg"], n_plotted, n_total,
+        second["p"], loo["max_delta_deg"], boot["ci_low"], boot["ci_high"],
     )
     if wallraff_res and not np.isnan(wallraff_res.get("p", np.nan)):
+        n_eligible = wallraff_res.get("n_groups", 0)
         log.info(
-            "Wallraff-by-animal: H=%.3f, p=%.3g, k=%d animals (n>=%d), %d excluded",
-            wallraff_res["H"], wallraff_res["p"], wallraff_res["n_groups"],
-            wallraff_res["min_trials"], wallraff_res.get("excluded", 0),
+            "Wallraff-by-animal: H=%.3f, p=%.3g, k=%d/%d animals (filter_low_n=%s)",
+            wallraff_res["H"], wallraff_res["p"], n_eligible, n_total,
+            filter_low_n,
         )
     log.info("Supplementary figures: %s/suppl_trial_counts.png, %s/suppl_second_order.png, %s/suppl_loo.png", fig_dir, fig_dir, fig_dir)
     log.info("Individual summary CSV: %s", summary_csv)

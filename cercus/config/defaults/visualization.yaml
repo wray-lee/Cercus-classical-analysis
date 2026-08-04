@@ -13,3 +13,11 @@ bar_label_style: "inline"
 # ── Vmax Threshold Plot ──
 # show the fixed start/vmax reference lines on the population vmax plots
 draw_fixed_thresholds: true
+
+# ── Individual-Checks Response Inclusion ──
+# When true (default), the per-animal robustness figures behind the
+# `population --individual-checks` flag pool BOTH Escape and PreWalk trials,
+# so most animals reach the n>=3 second-order threshold. When false, only
+# Escape trials are used (the previous behaviour). Only touches the code path
+# behind --individual-checks; main population figures stay escape-only.
+individual_checks_include_prewalk: true
