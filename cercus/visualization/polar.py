@@ -25,7 +25,6 @@ from cercus.visualization._circstats import (
     rayleigh_p,
     watson_williams_test,
     wallraff_test,
-    wallraff_test_with_ref,
 )
 from cercus.visualization._core import compute_trajectory_masks
 

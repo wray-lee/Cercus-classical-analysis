@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 
 from .constants import (
-    ESCAPE_START_THRESHOLD,
     PREWALK_THRESHOLD,
     PREWALK_WINDOW_MS,
 )

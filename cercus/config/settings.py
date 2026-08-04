@@ -15,31 +15,6 @@ from pydantic import BaseModel, field_validator, model_validator
 log = logging.getLogger(__name__)
 
 
-class HeatmapConfig(BaseModel):
-    """Heatmap rendering configuration."""
-    t_window_ttc: tuple[float, float] = (-1.0, 2.0)
-    t_window_onset: tuple[float, float] = (-1.0, 1.5)
-    t_bin_s: float = 0.01
-    vmax: float = 50.0
-    gamma: float = 0.4
-
-    @field_validator("t_window_onset")
-    @classmethod
-    def _validate_onset_window(cls, v: tuple[float, float]) -> tuple[float, float]:
-        if v[0] > -1.0:
-            log.warning(
-                "t_window_onset[0]=%.2f > -1.0; pre-window [-1.0, 0] not fully covered. "
-                "Clamping to -1.0.", v[0]
-            )
-            return (-1.0, v[1])
-        if v[0] < -1.0:
-            log.warning(
-                "t_window_onset[0]=%.2f < -1.0; shows data outside classification window, "
-                "will look like contamination.", v[0]
-            )
-        return v
-
-
 class BarLabelStyle(str, Enum):
     """Bar chart percentage label placement style."""
     INLINE = "inline"       # label inside bar (intuitive)

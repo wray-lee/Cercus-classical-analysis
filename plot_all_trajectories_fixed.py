@@ -111,14 +111,6 @@ def main(argv: list[str] | None = None) -> None:
 
     n_subjects = all_data["subject_id"].nunique()
     n_trials = all_data.groupby(["subject_id", "global_trial_index"]).ngroups
-    log.info("Population assembled: %d subjects, %d valid trials", n_subjects, n_trials)
-
-    # ── Generate fixed unified trajectory overlay ──
-    log.info("Generating fixed unified trajectory overlay...")
-    fig = plot_global_trajectory_overlay_fixed(all_data)
-
-    n_subjects = all_data["subject_id"].nunique()
-    n_trials = all_data.groupby(["subject_id", "global_trial_index"]).ngroups
     log.info("Population assembled: %d subjects, %d trials", n_subjects, n_trials)
 
     # ── Generate fixed unified trajectory overlay ──

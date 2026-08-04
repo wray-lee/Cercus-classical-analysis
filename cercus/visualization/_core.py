@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 
-import matplotlib.colors as mcolors
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +18,6 @@ import pandas as pd
 from cercus.core.kinematics.trajectory_integration import (  # noqa: F401
     body_to_traj,
     build_angular_peak_dz_mask,
-    integrate_body_trajectory,
 )
 from pipeline.constants import (
     COLOR_LEFT,

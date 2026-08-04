@@ -1,4 +1,0 @@
-"""
-Cercus Framework — Classification Package
-==========================================
-"""

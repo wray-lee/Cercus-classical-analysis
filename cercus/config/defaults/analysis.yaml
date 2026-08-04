@@ -18,3 +18,12 @@ individual:
 
   # Number of bootstrap iterations for the animal-level resampling CI.
   bootstrap_iterations: 1000
+
+# Adaptive V_max thresholding in population_analysis.py
+vmax_thresholding:
+  # mm/s — used when all auto-threshold methods fail
+  fallback_threshold: 120.0
+  # mm/s — upper bound of the KDE valley search range
+  kde_search_upper: 400.0
+  # set true to also compute the IQR-adaptive GMM as a candidate threshold
+  enable_iqr_gmm: false

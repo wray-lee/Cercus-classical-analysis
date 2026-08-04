@@ -18,10 +18,7 @@ Cercus-cli/
 │   │   ├── behavior.py              # Behavior probability & habituation plots
 │   │   └── polar.py                 # Polar direction histogram & angle distribution
 │   ├── core/
-│   │   ├── domain.py                # Typed data models (Trial, EscapeInterval, ResponseType)
 │   │   └── kinematics/
-│   │       ├── smoothing.py         # Savitzky-Golay smoothing utilities
-│   │       ├── velocity.py          # Velocity & angular velocity computation
 │   │       ├── latency.py           # Escape latency backward-search & interval detection
 │   │       └── trajectory_integration.py  # Dual-stage trajectory integration (Stage 1+2)
 │   ├── config/
@@ -37,7 +34,6 @@ Cercus-cli/
 │   │   ├── colors.py                # Color constants (loaded from YAML)
 │   │   ├── thresholds.py            # Physical thresholds (loaded from YAML)
 │   │   └── geometry.py              # Geometry & timing constants (loaded from YAML)
-│   ├── classification/              # (Future) Strategy-based classifier
 │   └── cli/
 │       └── app.py                   # Unified Typer CLI with commands: single, population, mcmc, ...
 ├── pipeline/                        # Legacy backward-compat wrappers
@@ -94,7 +90,6 @@ python mcmc_analysis.py --input-dir path/to/data/ --output results/
 |---|---|
 | `from cercus.visualization import plot_trajectory_overlay` | `from pipeline.visualization import plot_trajectory_overlay` |
 | `from cercus.visualization import plot_speed_kinetics` | `from pipeline.visualization import plot_speed_kinetics` |
-| `from cercus.core.domain import Trial, ResponseType` | — |
 | `from cercus.config.settings import TrajectoryConfig` | — |
 | `from cercus.config import get_config, reload_config` | — |
 | `from cercus.config import get_thresholds, get_geometry, get_colors` | — |
@@ -277,7 +272,7 @@ The input directory must contain paired CSV files following the naming conventio
 - `{subject_name}_session_{N}_events.csv` — columns: `event_name`, `timestamp`, `global_trial_id`, `details` (JSON)
 - `{subject_name}_session_{N}_kinematics.csv` — columns: `sys_time`, `dx`, `dy`, `dz`, `stim_state`, `global_trial_id`
 
-Sessions are auto-discovered and paired by subject name and session ID. Legacy merged CSV data can be converted via `test/converterOld.py`.
+Sessions are auto-discovered and paired by subject name and session ID.
 
 ## Output Structure
 

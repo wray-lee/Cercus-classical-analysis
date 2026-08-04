@@ -42,13 +42,16 @@ from pipeline.visualization import (
     plot_trial_stacked_heatmap,
 )
 
+from cercus.config import get_config
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
-_FALLBACK_VMAX_THRESHOLD = 120.0  # mm/s, used when all auto methods fail
-_KDE_SEARCH_UPPER = 400.0         # mm/s, upper bound for KDE valley search
-_ENABLE_IQR_GMM = False           # set True to also compute IQR-GMM as a candidate
-_DRAW_FIXED_THRESHOLDS = True     # set False to hide start/vmax reference lines on vmax plots
+_cfg = get_config()
+_FALLBACK_VMAX_THRESHOLD = float(_cfg.analysis.vmax_thresholding.fallback_threshold)  # mm/s, used when all auto methods fail
+_KDE_SEARCH_UPPER = float(_cfg.analysis.vmax_thresholding.kde_search_upper)           # mm/s, upper bound for KDE valley search
+_ENABLE_IQR_GMM = bool(_cfg.analysis.vmax_thresholding.enable_iqr_gmm)               # set True to also compute IQR-GMM as a candidate
+_DRAW_FIXED_THRESHOLDS = bool(_cfg.visualization.draw_fixed_thresholds)              # set False to hide start/vmax reference lines on vmax plots
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -2370,7 +2370,7 @@ def run_mcmc_analysis(
     n_tune: int = N_TUNE,
     plot: bool = True,
     plot_format: str = "svg",
-) -> Dict:
+) -> dict:
     """
     Complete MCMC analysis pipeline.
 

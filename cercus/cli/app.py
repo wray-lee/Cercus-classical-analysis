@@ -7,7 +7,6 @@ Unified CLI using Typer. Commands: single, population, mcmc, trial-panels, traje
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Optional
 

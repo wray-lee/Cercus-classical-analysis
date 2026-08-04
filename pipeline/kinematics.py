@@ -17,9 +17,6 @@ from scipy.signal import savgol_filter
 
 from .constants import (
     DETAILS_KEYS,
-    ESCAPE_START_THRESHOLD,
-    ESCAPE_VMAX_THRESHOLD,
-    ESCAPE_WINDOW_MS,
     RADIUS_MM,
     SPEED_WINDOW_MS,
     TRAJ_USE_ANGULAR_VELOCITY_OFFSET,

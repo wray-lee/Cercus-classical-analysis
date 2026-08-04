@@ -1,0 +1,93 @@
+{
+ "analysis": {
+  "individual": {
+   "min_trials_second_order": 3,
+   "min_trials_wallraff": 5,
+   "bootstrap_iterations": 1000
+  }
+ },
+ "colors": {
+  "escape": "#ED0000",
+  "prewalk": "#00468B",
+  "no_response": "#7C878E",
+  "left": "#00468B",
+  "right": "#ED0000",
+  "control": "#7C878E",
+  "osci_vis": "#ADB6B6",
+  "osci_hw": "#E69F00",
+  "with_stillness": "#00468B",
+  "no_stillness": "#5B6770",
+  "npg_palette": [
+   "#E69F00",
+   "#56B4E9",
+   "#009E73",
+   "#F0E442",
+   "#0072B2",
+   "#D55E00",
+   "#CC79A7",
+   "#999999"
+  ]
+ },
+ "geometry": {
+  "RADIUS_MM": 30.0,
+  "TRAJECTORY_MAX_RADIUS_MM": 120.0,
+  "TRAJECTORY_STEP_MM": 10.0,
+  "SPEED_WINDOW_MS": 100.0,
+  "LEGACY_TRIAL_DURATION_MS": 5829.6,
+  "HEATMAP_VMAX": 50.0,
+  "HEATMAP_SPEED_MAX": 600.0,
+  "heatmap": {
+   "t_window_ttc": [
+    -1.0,
+    2.0
+   ],
+   "t_window_onset": [
+    -1.0,
+    1.5
+   ],
+   "t_bin_s": 0.01,
+   "vmax": 50.0,
+   "gamma": 0.4
+  }
+ },
+ "thresholds": {
+  "escape": {
+   "start_threshold": 10.0,
+   "vmax_threshold": 98.0,
+   "window_ms": 250.0
+  },
+  "prewalk": {
+   "threshold": 10.0,
+   "window_ms": 1000.0
+  },
+  "baseline": {
+   "quiet_mm_s": 3.0
+  },
+  "post_stim": {
+   "buffer_ms": 50.0
+  }
+ },
+ "trajectory": {
+  "trajectory": {
+   "use_z_degree_to_draw": true,
+   "use_escape_onset_heading": false,
+   "use_escape_onset_only_xy": true,
+   "use_angular_velocity_offset": false,
+   "dz_integration_range": "escape_angular_peak",
+   "use_rigid_rotation": true
+  },
+  "use_z_degree_to_draw": true,
+  "use_escape_onset_heading": "fales",
+  "use_escape_onset_only_xy": true,
+  "use_angular_velocity_offset": false,
+  "dz_integration_range": "escape_onset_heading",
+  "use_rigid_rotation": true
+ },
+ "visualization": {
+  "bar_label_style": "inline"
+ },
+ "escape": {
+  "start_threshold": 10.0,
+  "vmax_threshold": 98.0
+ }
+}

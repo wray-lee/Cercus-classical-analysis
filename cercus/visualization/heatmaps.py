@@ -21,7 +21,6 @@ from pipeline.constants import (
     COLOR_PREWALK,
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
-    HEATMAP_VMAX,
 )
 from cercus.config import get_geometry
 

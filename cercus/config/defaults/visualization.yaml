@@ -9,3 +9,7 @@
 #   "inline"  — label inside bar (default, intuitive)
 #   "axis"    — label via horizontal dashed line to y-axis (publication style)
 bar_label_style: "inline"
+
+# ── Vmax Threshold Plot ──
+# show the fixed start/vmax reference lines on the population vmax plots
+draw_fixed_thresholds: true
