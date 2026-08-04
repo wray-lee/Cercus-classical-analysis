@@ -192,7 +192,7 @@ Two-stage decoupled design:
   - `"trial_to_onset"` — `sum(dz)` from trial start to escape onset
   - `"escape_angular_peak"` — `sum(dz)` from onset to the first angular-velocity zero-crossing after the peak (filters out air-ball rebound)
   - `"escape_onset_heading"` — cumulative heading at escape onset (`cumsum(dz)[onset] / RADIUS`)
-  - `"peak_bracket"` — integrate dz from the pre-peak sign change to the post-peak zero-crossing, isolating the dominant rotational impulse. Recommended for cross-paradigm comparison (visual vs wind vs bimodal). See `config/comparison.yaml`.
+  - `"peak_bracket"` — integrate dz from the pre-peak sign change to the post-peak zero-crossing, isolating the dominant rotational impulse. Recommended for cross-paradigm comparison (visual vs wind vs bimodal). See [`cercus/config/defaults/comparison.yaml`](cercus/config/defaults/comparison.yaml).
 
 ## Key Modules
 

@@ -79,7 +79,8 @@ trajectory:
 #   "escape_onset_heading"       — rotate by cumsum(dz) at escape onset
 #                                 (same as use_escape_onset_heading in non-rigid)
 #   "peak_bracket" (turn_bout)   — from pre-peak sign change to post-peak zero-crossing
-#                                 (for fair paradigm comparison, see comparison.yaml)
+#                                 (for fair paradigm comparison, see comparison.yaml preset)
+#                                 (`comparison.yaml` is in `cercus/config/defaults/`)
 #dz_integration_range: "escape_angular_peak"
 
 # Rigid global rotation: two-stage decoupled design.
