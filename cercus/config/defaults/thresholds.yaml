@@ -9,6 +9,9 @@ escape:
   start_threshold: 10.0    # mm/s — latency onset anchor (speed exceeds this → escape start)
   vmax_threshold: 98.0     # mm/s — burst floor for valid escape (v_max must exceed this)
   window_ms: 250.0         # ms — post-stimulus burst detection window
+  use_angular_onset_refinement: false  # refine escape onset via angular-velocity zero before peak
+  angular_onset_window_ms: 100.0       # ms — search window around coarse 10 mm/s onset
+  angular_onset_eps_deg: 2.0           # deg/s — peak_bracket below-eps / sign-change threshold
 
 # ── PreWalk Detection Thresholds ──
 prewalk:

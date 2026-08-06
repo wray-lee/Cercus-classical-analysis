@@ -24,6 +24,15 @@ ESCAPE_VMAX_THRESHOLD: float = float(_ESCAPE_VMAX_THRESHOLD)
 _ESCAPE_WINDOW_MS = get_thresholds().escape.window_ms
 ESCAPE_WINDOW_MS: float = float(_ESCAPE_WINDOW_MS)
 
+_USE_ANGULAR_ONSET_REFINEMENT = get_thresholds().escape.use_angular_onset_refinement
+USE_ANGULAR_ONSET_REFINEMENT: bool = bool(_USE_ANGULAR_ONSET_REFINEMENT)
+
+_ANGULAR_ONSET_WINDOW_MS = get_thresholds().escape.angular_onset_window_ms
+ANGULAR_ONSET_WINDOW_MS: float = float(_ANGULAR_ONSET_WINDOW_MS)
+
+_ANGULAR_ONSET_EPS_DEG = get_thresholds().escape.angular_onset_eps_deg
+ANGULAR_ONSET_EPS_DEG: float = float(_ANGULAR_ONSET_EPS_DEG)
+
 # ═══════════════════════════════════════════════════════════════════════
 # PreWalk Detection Thresholds
 # ═══════════════════════════════════════════════════════════════════════
@@ -49,6 +58,9 @@ __all__ = [
     "ESCAPE_START_THRESHOLD",
     "ESCAPE_VMAX_THRESHOLD",
     "ESCAPE_WINDOW_MS",
+    "USE_ANGULAR_ONSET_REFINEMENT",
+    "ANGULAR_ONSET_WINDOW_MS",
+    "ANGULAR_ONSET_EPS_DEG",
     "PREWALK_THRESHOLD",
     "PREWALK_WINDOW_MS",
     "POST_STIM_BUFFER_MS",

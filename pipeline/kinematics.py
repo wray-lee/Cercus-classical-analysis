@@ -152,12 +152,18 @@ def compute_escape_latency(
     speed: np.ndarray,
     stim_onset_t_rel: float | None = None,
     trial_type: str | None = None,
+    angular_velocity: np.ndarray | None = None,
+    dz: np.ndarray | None = None,
+    use_angular_onset_refinement: bool | None = None,
 ) -> dict[str, float | bool]:
     """Pure geometric burst-feature extraction — no baseline veto.
 
     Delegates to ``cercus.core.kinematics.latency.compute_escape_latency``.
     """
-    return _core_compute_escape_latency(t_rel, speed, stim_onset_t_rel, trial_type)
+    return _core_compute_escape_latency(
+        t_rel, speed, stim_onset_t_rel, trial_type,
+        angular_velocity, dz, use_angular_onset_refinement,
+    )
 
 
 def compute_escape_interval(
@@ -167,6 +173,7 @@ def compute_escape_interval(
     trial_type: str | None = None,
     stim_onset_t_rel: float | None = None,
     angular_velocity: np.ndarray | None = None,
+    latency_coarse_ms: float | None = None,
 ) -> dict[str, float]:
     """Compute the escape interval (onset to offset in ms).
 
@@ -179,6 +186,7 @@ def compute_escape_interval(
         stim_onset_t_rel=stim_onset_t_rel,
         angular_velocity=angular_velocity,
         use_angular_velocity_offset=TRAJ_USE_ANGULAR_VELOCITY_OFFSET,
+        latency_coarse_ms=latency_coarse_ms,
     )
 
 

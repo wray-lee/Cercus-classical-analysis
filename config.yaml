@@ -40,7 +40,7 @@ trajectory:
 #   use_escape_onset_heading: false
 #   use_escape_onset_only_xy: true
 #   use_angular_velocity_offset: false
-#   dz_integration_range: "escape_onset_heading"
+#   dz_integration_range: "escape_interval"
 #   use_rigid_rotation: true
 
 

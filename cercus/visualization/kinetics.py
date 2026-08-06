@@ -461,24 +461,65 @@ def plot_single_trial_kinetics(
 
     onset_ms = latency_ms if np.isnan(interval_onset_ms) else interval_onset_ms
     if not np.isnan(onset_ms):
-        ax.axvline(
-            x=onset_ms,
-            color="#3C5488",
-            ls="--",
-            lw=0.9,
-            alpha=0.9,
-            label=f"Escape onset = {onset_ms:.1f} ms",
-        )
-        onset_idx = np.argmin(np.abs(t - onset_ms))
-        ax.scatter(
-            [onset_ms],
-            [y_vals[onset_idx]],
-            c="#3C5488",
-            s=30,
-            zorder=5,
-            edgecolors="white",
-            linewidths=0.5,
-        )
+        # Angular-refined onset: latency_ms pulled earlier than the coarse
+        # 10 mm/s interval onset → plot both (light blue = coarse, dark = final).
+        refined = not np.isnan(latency_ms) and latency_ms < onset_ms
+        if refined:
+            coarse_idx = int(np.argmin(np.abs(t - onset_ms)))
+            ax.axvline(
+                x=onset_ms,
+                color="#8FB8DE",
+                ls="--",
+                lw=0.9,
+                alpha=0.9,
+                label=f"10 mm/s onset = {onset_ms:.1f} ms",
+            )
+            ax.scatter(
+                [onset_ms],
+                [y_vals[coarse_idx]],
+                c="#8FB8DE",
+                s=30,
+                zorder=5,
+                edgecolors="white",
+                linewidths=0.5,
+            )
+            ax.axvline(
+                x=latency_ms,
+                color="#3C5488",
+                ls="--",
+                lw=0.9,
+                alpha=0.9,
+                label=f"Escape onset (angular-refined) = {latency_ms:.1f} ms",
+            )
+            final_idx = int(np.argmin(np.abs(t - latency_ms)))
+            ax.scatter(
+                [latency_ms],
+                [y_vals[final_idx]],
+                c="#3C5488",
+                s=30,
+                zorder=5,
+                edgecolors="white",
+                linewidths=0.5,
+            )
+        else:
+            ax.axvline(
+                x=onset_ms,
+                color="#3C5488",
+                ls="--",
+                lw=0.9,
+                alpha=0.9,
+                label=f"Escape onset = {onset_ms:.1f} ms",
+            )
+            onset_idx = np.argmin(np.abs(t - onset_ms))
+            ax.scatter(
+                [onset_ms],
+                [y_vals[onset_idx]],
+                c="#3C5488",
+                s=30,
+                zorder=5,
+                edgecolors="white",
+                linewidths=0.5,
+            )
 
     if y_col == "speed" and not np.isnan(interval_onset_ms) and not np.isnan(interval_offset_ms):
         ax.axvspan(

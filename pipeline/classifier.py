@@ -25,7 +25,10 @@ from .kinematics import compute_escape_interval, compute_escape_latency
 log = logging.getLogger(__name__)
 
 
-def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
+def classify_trial(
+    trial: pd.DataFrame,
+    use_angular_onset_refinement: bool | None = None,
+) -> dict[str, str | float]:
     """
     Ternary classification with **orthogonal** physical measurement.
 
@@ -58,6 +61,7 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     speed_vals = trial["speed"].values
     t_vals = trial["t_rel"].values
     ang_vel_vals = trial["angular_velocity"].values if "angular_velocity" in trial.columns else None
+    dz_vals = trial["dz"].values if "dz" in trial.columns else None
 
     # ── Determine stimulus onset in t_rel coordinates ──
     # For multimodal trials t_rel=0 is TTC; wind onset = target_ttc_ms on the
@@ -71,14 +75,25 @@ def classify_trial(trial: pd.DataFrame) -> dict[str, str | float]:
     _trial_type = trial["type"].iloc[0] if "type" in trial.columns else None
 
     # ── 1. Physical measurement (always runs, never vetoed) ──
-    result = compute_escape_latency(t_vals, speed_vals, stim_onset_t_rel=stim_onset, trial_type=_trial_type)
+    result = compute_escape_latency(
+        t_vals, speed_vals, stim_onset_t_rel=stim_onset, trial_type=_trial_type,
+        angular_velocity=ang_vel_vals, dz=dz_vals,
+        use_angular_onset_refinement=use_angular_onset_refinement,
+    )
     v_max: float = result["v_max"]  # type: ignore[assignment]
     latency_ms: float = result["latency_ms"]  # type: ignore[assignment]
+    # Coarse 10 mm/s onset — interval / PreWalk anchors must not shift when
+    # latency_ms is refined earlier by the angular-velocity onset.
+    latency_coarse_ms: float = result.get("latency_coarse_ms", latency_ms)  # type: ignore[assignment]
 
     has_burst: bool = not np.isnan(latency_ms)
 
     # ── Escape interval: 10 mm/s onset → 10 mm/s offset ──
-    interval_result = compute_escape_interval(t_vals, speed_vals, latency_ms, trial_type=_trial_type, stim_onset_t_rel=stim_onset, angular_velocity=ang_vel_vals) if has_burst else {"interval_ms": np.nan, "onset_ms": np.nan, "offset_ms": np.nan}
+    interval_result = compute_escape_interval(
+        t_vals, speed_vals, latency_ms, trial_type=_trial_type,
+        stim_onset_t_rel=stim_onset, angular_velocity=ang_vel_vals,
+        latency_coarse_ms=latency_coarse_ms,
+    ) if has_burst else {"interval_ms": np.nan, "onset_ms": np.nan, "offset_ms": np.nan}
     interval_ms = interval_result["interval_ms"]
     interval_onset_ms = interval_result["onset_ms"]
     interval_offset_ms = interval_result["offset_ms"]

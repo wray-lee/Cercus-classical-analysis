@@ -37,6 +37,12 @@ class TrajectoryConfig(BaseModel, frozen=True):
     use_escape_onset_only_xy: bool = True
     use_angular_velocity_offset: bool = False
 
+    # Escape-onset angular refinement (from the ``escape`` config section).
+    # False keeps the 10 mm/s backward-search onset bit-identical to legacy.
+    use_angular_onset_refinement: bool = False
+    angular_onset_window_ms: float = 100.0
+    angular_onset_eps_deg: float = 2.0
+
     dz_integration_range: Literal[
         "full_trial", "escape_interval", "trial_to_onset",
         "escape_angular_peak", "escape_onset_heading", "peak_bracket",
@@ -78,6 +84,7 @@ class TrajectoryConfig(BaseModel, frozen=True):
         """Build from a raw config dict (e.g. from YAML)."""
         traj = cfg.get("trajectory", {})
         viz = cfg.get("visualization", {})
+        escape = cfg.get("escape", {})
 
         return cls(
             use_z_degree_to_draw=bool(traj.get("use_z_degree_to_draw", True)),
@@ -85,6 +92,9 @@ class TrajectoryConfig(BaseModel, frozen=True):
             use_escape_onset_heading=bool(traj.get("use_escape_onset_heading", True)),
             use_escape_onset_only_xy=bool(traj.get("use_escape_onset_only_xy", True)),
             use_angular_velocity_offset=bool(traj.get("use_angular_velocity_offset", False)),
+            use_angular_onset_refinement=bool(escape.get("use_angular_onset_refinement", False)),
+            angular_onset_window_ms=float(escape.get("angular_onset_window_ms", 100.0)),
+            angular_onset_eps_deg=float(escape.get("angular_onset_eps_deg", 2.0)),
             dz_integration_range=traj.get("dz_integration_range", "escape_interval"),
             bar_label_style=BarLabelStyle(viz.get("bar_label_style", "inline")),
         )
