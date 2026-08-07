@@ -14,6 +14,12 @@ corrected copies of every events/kinematics pair under --output, mirroring the
 input folder structure, plus calibration_report.json/.png. Original files are
 never modified.
 
+The correction keeps the file format identical to the originals: events are
+copied byte-for-byte, and the correction is baked into the kinematics by
+rotating every body-frame (dx, dy) by -delta, which rotates the arena
+trajectory (escape direction) by -delta — equivalent to correcting the
+stimulus angle. delta is also recorded in calibration_report.json.
+
 Escape-direction frame is atan2(x, y) (0 = +y forward, +90 = +x right), so the
 nominal defaults are left = 270 (left arena edge) / right = 90 (right edge),
 matching draw_side_arrows in the trajectory plots. The two nozzles are 180 deg
@@ -79,13 +85,6 @@ def global_delta(group_trials, expected_error):
         return next(iter(means.values())) + expected_error
     return (means["left"] + means["right"]) / 2.0 + expected_error
 
-
-def _gid(v):
-    """global_trial_id key: collapse integral floats (1.0 -> '1') but never
-    rewrite literal strings, so a string id '1.0' stays distinct from '1'."""
-    if isinstance(v, float) and not math.isnan(v) and v.is_integer():
-        return str(int(v))
-    return str(v)
 
 # ══════════════════════════════════════════════════════════════════════════
 # scanning & nominal-angle resolution
@@ -300,32 +299,27 @@ def loo_delta_std(group_trials, expected_error):
 
 def write_corrected(input_dir, output_dir, folder_sessions, delta,
                     left_angle, right_angle):
+    import shutil
     for folder, sess in folder_sessions.items():
         for ev_path, kin_path in sess:
-            ev = pd.read_csv(ev_path, encoding="utf-8-sig")
-            kin = pd.read_csv(kin_path, encoding="utf-8-sig")
-            corr_by_gid = {}
-            for idx, row in ev.iterrows():
-                if row["event_name"] != "trial_start":
-                    continue
-                try:
-                    det = json.loads(row["details"])
-                except Exception:
-                    continue
-                nominal, _ = nominal_angle(det, left_angle, right_angle)
-                corr = (nominal + delta
-                        if not (math.isnan(nominal) or math.isnan(delta)) else float("nan"))
-                corr_by_gid[_gid(row["global_trial_id"])] = corr
-                det = dict(det)
-                det["stim_angle"] = None if math.isnan(nominal) else nominal
-                det["stim_angle_corrected"] = None if math.isnan(corr) else corr
-                ev.at[idx, "details"] = json.dumps(det)
             out_dir = os.path.join(output_dir, folder)
             os.makedirs(out_dir, exist_ok=True)
-            ev.to_csv(os.path.join(out_dir, os.path.basename(ev_path)),
-                      index=False, encoding="utf-8-sig")
-            kin["stim_angle_corrected"] = (kin["global_trial_id"].map(_gid)
-                                           .map(corr_by_gid))
+            # events stay byte-identical to the original (same format, no added fields).
+            shutil.copy(ev_path, os.path.join(out_dir, os.path.basename(ev_path)))
+            # Bake delta into the kinematics: rotate every body-frame (dx, dy) by -delta
+            # so the arena trajectory (and escape direction) rotates by -delta. This makes
+            # escape-relative-to-stimulus errors land at the target while keeping the file
+            # format identical to the original (same columns, changed values).
+            kin = pd.read_csv(kin_path, encoding="utf-8-sig")
+            if not math.isnan(delta):
+                # In the atan2(x, y) escape frame a CCW body rotation of +delta
+                # decreases the escape angle by delta, i.e. escape' = escape - delta.
+                rot = math.radians(delta)
+                c, s = math.cos(rot), math.sin(rot)
+                dx = kin["dx"].to_numpy(dtype=float)
+                dy = kin["dy"].to_numpy(dtype=float)
+                kin["dx"] = dx * c - dy * s
+                kin["dy"] = dx * s + dy * c
             kin.to_csv(os.path.join(out_dir, os.path.basename(kin_path)),
                        index=False, encoding="utf-8-sig")
 
@@ -485,21 +479,36 @@ def selftest():
                     for f in fs if f.endswith("_events.csv")]
         ok_mirror = (len(kin_files) == len(ev_files) == 6 and
                      {os.path.basename(os.path.dirname(p)) for p in kin_files} == set(groups))
-        ok_ev_angle = any(
-            "stim_angle" in det and "stim_angle_corrected" in det
-            for evp in ev_files
-            for det in (json.loads(d) for d in
-                        pd.read_csv(evp, encoding="utf-8-sig")["details"]
-                        if isinstance(d, str))
-            if isinstance(det, dict))
-        ok_corr = any("stim_angle_corrected" in
-                      pd.read_csv(f, encoding="utf-8-sig").columns for f in kin_files)
+        ok_events_same = all(   # events stay byte-identical (same format, no added fields)
+            hashlib.sha256(open(p, "rb").read()).hexdigest()
+            == input_hashes[os.path.relpath(p, out_dir)]
+            for p in ev_files
+        )
+        # kinematics (dx, dy) must be the original rotated by -delta
+        ok_rot = True
+        for kf in kin_files:
+            rel = os.path.relpath(kf, out_dir)
+            orig = pd.read_csv(os.path.join(in_dir, rel), encoding="utf-8-sig")
+            corr = pd.read_csv(kf, encoding="utf-8-sig")
+            r = math.radians(gdelta)
+            c, s = math.cos(r), math.sin(r)
+            for i in range(0, len(orig), max(1, len(orig) // 50)):
+                dx, dy = float(orig["dx"].iloc[i]), float(orig["dy"].iloc[i])
+                if math.isnan(dx) or math.isnan(dy):
+                    continue
+                ex, ey = dx * c - dy * s, dx * s + dy * c
+                if not (math.isclose(float(corr["dx"].iloc[i]), ex, abs_tol=1e-6) and
+                        math.isclose(float(corr["dy"].iloc[i]), ey, abs_tol=1e-6)):
+                    ok_rot = False
+                    break
+            if not ok_rot:
+                break
         print(f"  planted delta={planted}; recovered_global={round(gdelta, 2)}; "
               f"trials_used={n_used}/{n_expected}")
         print(f"  loo_delta_std={loo:.3f}; originals_unchanged={ok_unchanged}; "
-              f"mirror_ok={ok_mirror}; events_gained_angles={ok_ev_angle}; "
-              f"all_classified_escape={ok_n}")
-        ok = all([ok_delta, ok_loo, ok_corr, ok_unchanged, ok_mirror, ok_ev_angle, ok_n])
+              f"mirror_ok={ok_mirror}; events_same_format={ok_events_same}; "
+              f"kin_rotated_by_delta={ok_rot}; all_classified_escape={ok_n}")
+        ok = all([ok_delta, ok_loo, ok_unchanged, ok_mirror, ok_events_same, ok_rot, ok_n])
         print("PASS" if ok else "FAIL")
         return ok
 

@@ -23,8 +23,12 @@
 - **蟋蟀左右逃跑方向不需要相差 180°**（这是正常的）；偏移 δ 的目标是**让左右尽量对称**：
   使左右两侧平均误差尽量对称地落在目标 `−18°` 两侧，即
   `δ = (mean_error_left + mean_error_right)/2 + expected_error`（18）。
-- **δ 用 input 下全部组、全部 session 一起 pooled 估计**（单组不准），对**所有**组统一应用：
-  `stim_corrected = stim_nominal + δ`。
+- **δ 用 input 下全部组、全部 session 一起 pooled 估计**（单组不准），对**所有**组统一应用。
+- **校正方式（格式完全不变）**：events 与原始逐字节相同、不新增任何字段；校正烘进 kinematics ——
+  body-frame 的 `(dx, dy)` 每个分量按 `−δ` 旋转，使 arena 轨迹/逃跑方向整体旋转 `−δ`。
+  这样 cercus 分析（`single`/`trial-panels`/`population`）在读取校正后 kinematics 时，
+  逃跑方向 = 原始方向 − δ，等价于刺激角已校正（格式不变、无新增列）。δ 也写入
+  `calibration_report.json` 供下游自行应用。
 
 ---
 
@@ -133,14 +137,16 @@ events_gained_angles / all_classified_escape` 均为 `True`，结尾 `PASS`。
 ```
 data_corrected/
 ├── {组文件夹}/
-│   ├── {subject}_session_{n}_events.csv        # details 增加 stim_angle(标称) 与 stim_angle_corrected(=标称+δ)
-│   ├── {subject}_session_{n}_kinematics.csv     # 仅新增列 stim_angle_corrected
+│   ├── {subject}_session_{n}_events.csv        # 与原始逐字节相同（格式完全一致，不新增字段）
+│   ├── {subject}_session_{n}_kinematics.csv     # 同列；body-frame (dx,dy) 按 −δ 旋转（轨迹/逃跑方向旋转 −δ）
 ├── calibration_report.json                      # 全局 δ、不确定度、每组校正前后对称性指标
 └── calibration_report.png                       # 校正前后 error 的极坐标 rose + 直方图对比
 ```
 
-- events 只改动 `trial_start` 行的 `details`，其余行/列原样保留。
-- kinematics 只新增 `stim_angle_corrected` 列。
+- **events 原样复制**（byte-identical），格式与原始完全一致，不新增任何键/列。
+- **kinematics 格式不变**（同列 `sys_time,ard_time,dx,dy,dz,stim_state,global_trial_id`），
+  但 body-frame `(dx, dy)` 按 `−δ` 旋转，使 arena 轨迹/逃跑方向整体旋转 `−δ`。
+  校正后 cercus 分析算出的逃跑方向 = 原始方向 − δ，等价于刺激角已校正。
 
 ### calibration_report.json 关键字段
 
@@ -161,8 +167,8 @@ data_corrected/
 
 ## 7. 结果解读与注意事项
 
-1. **设备偏移是全局单一值**：所有组共用同一个 δ，`stim_angle_corrected = nominal + δ`。
-   判断 δ 可靠：`loo_delta_std_deg` 小（各组一致）、且校正后左右两侧 `within_5deg_after=True`。
+1. **设备偏移是全局单一值**：所有组共用同一个 δ。校正后 kinematics 的逃跑方向 = 原始方向 − δ
+   （等价于刺激角已校正，但格式完全不变）。判断 δ 可靠：`loo_delta_std_deg` 小（各组一致）。
 
 2. **对称性验收**：目标是校正后左、右两侧平均误差都回到 **−18±5°**。由于 δ 让两侧误差
    对称地落在 −18 两侧，当两侧误差本身相差不大时即可达标。
