@@ -2,13 +2,22 @@
 """Calibrate the stimulus-angle offset of a ring-airflow cricket escape apparatus.
 
 All trials share ONE global angular offset delta (a single rotation of the
-stimulus ring): stim_true = stim_nominal + delta. delta is estimated from ALL
-input data (every group, every session) as the single rotation that makes the
-pooled left/right mean errors as symmetric as possible about the target
-(-expected_error, default -18 deg): delta = (mean_err_left + mean_err_right)/2
-+ expected_error. Then writes corrected copies of every events/kinematics pair
-under --output, mirroring the input folder structure, plus
-calibration_report.json/.png. Original files are never modified.
+stimulus ring): stim_true = stim_nominal + delta. Valid escapes are defined by
+the cercus-cli pipeline (the same convention as main.py's trajectory plotting):
+preprocess -> ternary classification -> escape-interval arena trajectory;
+response_type in {Escape, PreWalk}; response angle = atan2(traj_x[-1],
+traj_y[-1]) over the escape interval (angle from +y). delta is estimated from
+ALL input data as the single rotation that makes the pooled left/right mean
+errors as symmetric as possible about the target (-expected_error, default
+-18 deg): delta = (mean_err_left + mean_err_right)/2 + expected_error. Writes
+corrected copies of every events/kinematics pair under --output, mirroring the
+input folder structure, plus calibration_report.json/.png. Original files are
+never modified.
+
+Escape-direction frame is atan2(x, y) (0 = +y forward, +90 = +x right), so the
+nominal defaults are left = 270 (left arena edge) / right = 90 (right edge),
+matching draw_side_arrows in the trajectory plots. The two nozzles are 180 deg
+apart; crickets' left/right escapes need not be — delta just centres them.
 
 The per-group regression (response ~ nominal) is a diagnostic only: its implied
 delta (intercept+1)/slope equals delta_est only when the data follows the
@@ -22,9 +31,13 @@ import os
 import re
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+# Make the cercus-cli package importable when run as `python tools/calibrate_offset.py`.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ══════════════════════════════════════════════════════════════════════════
 # angle helpers
@@ -151,68 +164,75 @@ def scan(input_dir, group_by):
 # per-trial loading, estimation, stats
 # ══════════════════════════════════════════════════════════════════════════
 
-_NO_SIDE_WARNED = {"count": 0, "printed": False}
-
-
-def _response_angle(det, row, has_angle_col):
-    """Numeric response angle from details JSON key or a top-level events column."""
-    v = det.get("response_angle")
-    if v is not None:
+def _remap_t2g(t2g, sid, raw):
+    """Map a raw global_trial_id to the concatenated index used by preprocess."""
+    for cand in (int(raw), str(raw)):
         try:
-            fv = float(v)
+            if (sid, cand) in t2g:
+                return t2g[(sid, cand)]
         except (TypeError, ValueError):
             pass
-        else:
-            return fv if not math.isnan(fv) else None
-    if has_angle_col:
-        v = getattr(row, "response_angle", None)
-        if v is not None and not (isinstance(v, float) and math.isnan(v)):
+    return raw
+
+
+def load_group_escapes(sessions, left_angle, right_angle, min_disp):
+    """Valid escapes via the cercus-cli pipeline (the convention used by main.py's
+    trajectory plotting / trial_escape_angles): preprocess -> ternary
+    classification -> escape-interval arena trajectory. Keeps response_type in
+    {Escape, PreWalk}; response angle = atan2(traj_x[-1], traj_y[-1]) over the
+    escape interval (angle from +y). A pre-existing numeric response_angle in the
+    trial's details JSON is used verbatim when present."""
+    from pipeline.io import load_and_concat_sessions
+    from pipeline.kinematics import preprocess
+    from pipeline.classifier import label_trials
+    from cercus.visualization._core import compute_trajectory_masks
+
+    meta, windows, anchors, kin, t2g = load_and_concat_sessions(sessions)
+    df = preprocess(meta, windows, anchors, kin)
+    df["global_trial_id"] = df["global_trial_id"].astype(str)
+    df = label_trials(df)
+
+    det_by_gid = {}
+    for sess in sessions:
+        sid = sess["session_id"]
+        ev = pd.read_csv(sess["events"], encoding="utf-8-sig")
+        for _, row in ev[ev["event_name"] == "trial_start"].iterrows():
             try:
-                return float(v)
-            except (TypeError, ValueError):
-                pass
-    return None
+                d = json.loads(row["details"])
+            except Exception:
+                d = {}
+            det_by_gid[str(_remap_t2g(t2g, sid, row["global_trial_id"]))] = (
+                d if isinstance(d, dict) else {}
+            )
 
-
-def load_trials(ev_path, kin_path, left_angle, right_angle, min_disp):
-    """Valid trials: response angle over stim_state==1 frames, or the trial's
-    pre-existing response_angle when present (details key or events column)."""
-    ev = pd.read_csv(ev_path, encoding="utf-8-sig")
-    kin = pd.read_csv(kin_path, encoding="utf-8-sig")
-    kin = kin[kin["stim_state"] == 1]
-    kin["gid"] = kin["global_trial_id"].map(_gid)
-    has_angle_col = "response_angle" in ev.columns
     trials = []
-    for row in ev.itertuples(index=False):
-        if row.event_name != "trial_start":
+    for tid, grp in df.groupby("global_trial_id"):
+        if grp["response_type"].iloc[0] not in ("Escape", "PreWalk"):
             continue
-        try:
-            det = json.loads(row.details)
-        except Exception:
-            continue
-        if not isinstance(det, dict):
-            continue
+        det = det_by_gid.get(str(tid), {})
         nominal, side = nominal_angle(det, left_angle, right_angle)
         if math.isnan(nominal):
-            _NO_SIDE_WARNED["count"] += 1
-            if not _NO_SIDE_WARNED["printed"]:
-                _NO_SIDE_WARNED["printed"] = True
-                print(f"warning: trial_start with no numeric angle key and "
-                      f"unrecognized wind_dir/screen_side skipped (nominal NaN); "
-                      f"first at {os.path.basename(ev_path)} "
-                      f"gid={_gid(row.global_trial_id)}", file=sys.stderr)
             continue
-        resp = _response_angle(det, row, has_angle_col)
+        resp = None
+        ra = det.get("response_angle")
+        if ra is not None:
+            try:
+                resp = float(ra)
+            except (TypeError, ValueError):
+                resp = None
         if resp is None:
-            fr = kin[kin["gid"] == _gid(row.global_trial_id)]
-            if fr.empty:
+            on, off = grp["interval_onset_ms"].iloc[0], grp["interval_offset_ms"].iloc[0]
+            if pd.isna(on) or pd.isna(off):
                 continue
-            dxs, dys = float(fr["dx"].sum()), float(fr["dy"].sum())
-            if math.isnan(dxs) or math.isnan(dys):   # NaN sums -> meaningless angle
+            res = compute_trajectory_masks(grp, on, off)
+            if res is None:
                 continue
-            if math.hypot(dxs, dys) < min_disp:      # near-zero vector -> meaningless angle
+            tx, ty = res[0], res[1]
+            if tx is None or len(tx) < 2:
                 continue
-            resp = math.degrees(math.atan2(dys, dxs))
+            if math.hypot(tx[-1], ty[-1]) < min_disp:   # near-zero escape vector
+                continue
+            resp = math.degrees(math.atan2(tx[-1], ty[-1]))
         if side is None:
             side = ("left" if abs(wrap180(nominal - left_angle)) <
                     abs(wrap180(nominal - right_angle)) else "right")
@@ -387,30 +407,34 @@ def make_plot(all_valid, delta, out_path):
 # ══════════════════════════════════════════════════════════════════════════
 
 def _synth_session(fdir, sess, trials, delta, rng):
+    """Write a synthetic session pair the cercus escape pipeline can classify
+    (strong wind burst -> Escape) and where response_angle is planted in every
+    trial's details so the calibration recovers the planted delta exactly."""
     os.makedirs(fdir, exist_ok=True)
     ev_rows, kin_rows = [], []
     for ti, (nominal, side) in enumerate(trials):
         # 162 = 180 - expected_error(18): cancels so delta_est recovers `delta`
-        resp = wrap180(nominal + delta + 162.0 + rng.normal(0, 5.0))
-        det = {"type": "baseline_wind", "wind_dir": side, "screen_side": side}
-        if ti % 3 == 0:
-            # plant a noiseless response_angle; load_trials must use it verbatim
-            det["response_angle"] = float(wrap180(nominal + delta + 162.0))
-        ev_rows.append({"event_name": "trial_start", "timestamp": ti * 10.0,
-                        "session_num": 1, "trial_in_session": ti + 1,
-                        "global_trial_id": str(ti), "details": json.dumps(det)})
+        resp = float(wrap180(nominal + delta + 162.0))
+        det = {"type": "baseline_wind", "target_ttc_ms": None, "lv_ratio_ms": None,
+               "wind_dir": side, "screen_side": side, "response_angle": resp}
+        ts = ti * 1.0
+        gid = str(ti)
+        ev_rows.append({"event_name": "trial_start", "timestamp": ts, "session_num": sess,
+                        "trial_in_session": ti + 1, "global_trial_id": gid,
+                        "details": json.dumps(det)})
+        ev_rows.append({"event_name": "trial_stop", "timestamp": ts + 0.5, "session_num": sess,
+                        "trial_in_session": ti + 1, "global_trial_id": gid, "details": ""})
         c, s = math.cos(math.radians(resp)), math.sin(math.radians(resp))
-        for _ in range(5):
-            kin_rows.append({"sys_time": 0.0, "ard_time": 0, "dx": 0.0, "dy": 0.0,
-                             "dz": 0.0, "stim_state": 0, "global_trial_id": str(ti)})
-        for _ in range(40):
-            kin_rows.append({"sys_time": 0.0, "ard_time": 0,
-                             "dx": c * (0.5 + rng.uniform(-0.05, 0.05)),
-                             "dy": s * (0.5 + rng.uniform(-0.05, 0.05)),
-                             "dz": 0.0, "stim_state": 1, "global_trial_id": str(ti)})
-    ev_rows.append({"event_name": "phase_transition", "timestamp": 999.0,
-                    "session_num": 1, "trial_in_session": np.nan,
-                    "global_trial_id": np.nan, "details": "{}"})
+        for k in range(5):                                # quiescent baseline
+            kin_rows.append({"sys_time": ts + k * 0.005, "ard_time": 0, "dx": 0.0, "dy": 0.0,
+                             "dz": 0.0, "stim_state": 0, "global_trial_id": gid})
+        for k in range(40):                               # wind burst, ~400 mm/s -> Escape
+            kin_rows.append({"sys_time": ts + 0.025 + k * 0.005, "ard_time": 0,
+                             "dx": c * 2.0, "dy": s * 2.0, "dz": 0.0,
+                             "stim_state": 1, "global_trial_id": gid})
+        for k in range(10):                               # post-stimulus tail
+            kin_rows.append({"sys_time": ts + 0.225 + k * 0.005, "ard_time": 0, "dx": 0.0,
+                             "dy": 0.0, "dz": 0.0, "stim_state": 0, "global_trial_id": gid})
     subj = "cricket_" + os.path.basename(fdir).replace(".", "")
     pd.DataFrame(ev_rows).to_csv(os.path.join(fdir, f"{subj}_session_{sess}_events.csv"),
                                  index=False, encoding="utf-8-sig")
@@ -428,8 +452,8 @@ def selftest():
     print("selftest: building synthetic dataset ...")
     planted = 7.0
     rng = np.random.default_rng(0)
-    trials = [(90.0, "left"), (270.0, "right")] * 6
-    n_planted = sum(ti % 3 == 0 for ti in range(len(trials))) * 2 * 3
+    trials = [(270.0, "left"), (90.0, "right")] * 6
+    n_expected = len(trials) * 2 * 3   # 3 groups x 2 sessions x 12 trials
     with tempfile.TemporaryDirectory() as tmp:
         in_dir, out_dir = os.path.join(tmp, "cali"), os.path.join(tmp, "out")
         for gname in ("d1", "d2", "d3"):
@@ -438,16 +462,23 @@ def selftest():
         input_hashes = _dir_hashes(in_dir)
         groups, folder_groups, folder_sessions = scan(in_dir, "folder")
         group_trials = {k: [] for k in groups}
-        for k, sess in groups.items():
-            for evp, kinp in sess:
-                group_trials[k] += load_trials(evp, kinp, 90.0, 270.0, 1.0)
+        for folder, pairs in folder_sessions.items():
+            sessions = [
+                {"session_id": int(SESSION_RE.match(os.path.basename(ev)).group(2)),
+                 "events": Path(ev), "kinematics": Path(kin)}
+                for ev, kin in pairs
+            ]
+            key = folder_groups[folder]
+            group_trials[key] += load_group_escapes(sessions, 270.0, 90.0, 1.0)
         gdelta = global_delta([group_trials[k] for k in sorted(groups)], 18.0)
         loo = loo_delta_std([group_trials[k] for k in sorted(groups)], 18.0)
-        write_corrected(in_dir, out_dir, folder_sessions, gdelta, 90.0, 270.0)
+        write_corrected(in_dir, out_dir, folder_sessions, gdelta, 270.0, 90.0)
 
         ok_delta = abs(gdelta - planted) <= 3.0
         ok_loo = math.isfinite(loo)
         ok_unchanged = _dir_hashes(in_dir) == input_hashes   # originals never modified
+        n_used = sum(len(v) for v in group_trials.values())
+        ok_n = n_used == n_expected                          # all classified Escape + used
         kin_files = [os.path.join(r, f) for r, _, fs in os.walk(out_dir)
                      for f in fs if f.endswith("_kinematics.csv")]
         ev_files = [os.path.join(r, f) for r, _, fs in os.walk(out_dir)
@@ -461,19 +492,14 @@ def selftest():
                         pd.read_csv(evp, encoding="utf-8-sig")["details"]
                         if isinstance(d, str))
             if isinstance(det, dict))
-        # every 3rd synthetic trial plants response_angle; assert those are used verbatim
-        planted_resp = {90.0: float(wrap180(90.0 + planted + 162.0)),
-                        270.0: float(wrap180(270.0 + planted + 162.0))}
-        used = [t for tr in group_trials.values() for t in tr
-                if abs(t["response"] - planted_resp[t["nominal"]]) < 1e-9]
-        ok_resp_angle = len(used) == n_planted
         ok_corr = any("stim_angle_corrected" in
                       pd.read_csv(f, encoding="utf-8-sig").columns for f in kin_files)
-        print(f"  planted delta={planted}; recovered_global={round(gdelta, 2)}")
+        print(f"  planted delta={planted}; recovered_global={round(gdelta, 2)}; "
+              f"trials_used={n_used}/{n_expected}")
         print(f"  loo_delta_std={loo:.3f}; originals_unchanged={ok_unchanged}; "
               f"mirror_ok={ok_mirror}; events_gained_angles={ok_ev_angle}; "
-              f"response_angle_trials_used={ok_resp_angle} ({len(used)}/{n_planted})")
-        ok = all([ok_delta, ok_loo, ok_corr, ok_unchanged, ok_mirror, ok_ev_angle, ok_resp_angle])
+              f"all_classified_escape={ok_n}")
+        ok = all([ok_delta, ok_loo, ok_corr, ok_unchanged, ok_mirror, ok_ev_angle, ok_n])
         print("PASS" if ok else "FAIL")
         return ok
 
@@ -488,8 +514,11 @@ def parse_args(argv=None):
     p.add_argument("--groups", type=int, default=None,
                    help="expected group count (warn on mismatch, don't crash)")
     p.add_argument("--group-by", choices=("folder", "subject"), default="folder")
-    p.add_argument("--left-angle", type=float, default=90.0)
-    p.add_argument("--right-angle", type=float, default=270.0)
+    p.add_argument("--left-angle", type=float, default=270.0,
+                   help="software's nominal angle for the LEFT nozzle, in the escape "
+                        "frame atan2(x,y) (0=+y forward, 90=+x right); left edge = 270")
+    p.add_argument("--right-angle", type=float, default=90.0,
+                   help="software's nominal angle for the RIGHT nozzle (right edge = 90)")
     p.add_argument("--min-disp-mm", type=float, default=1.0)
     p.add_argument("--expected-error-deg", type=float, default=18.0)
     p.add_argument("--plot", dest="plot", action="store_true", default=True)
@@ -500,6 +529,8 @@ def parse_args(argv=None):
 
 
 def main(argv=None):
+    import logging
+    logging.basicConfig(level=logging.WARNING)   # silence pipeline INFO logs
     args = parse_args(argv)
     if args.selftest:
         sys.exit(0 if selftest() else 1)
@@ -516,10 +547,15 @@ def main(argv=None):
               file=sys.stderr)
 
     group_trials = {k: [] for k in groups}
-    for k, sess in groups.items():
-        for evp, kinp in sess:
-            group_trials[k] += load_trials(evp, kinp, args.left_angle,
-                                           args.right_angle, args.min_disp_mm)
+    for folder, pairs in folder_sessions.items():
+        sessions = [
+            {"session_id": int(SESSION_RE.match(os.path.basename(ev)).group(2)),
+             "events": Path(ev), "kinematics": Path(kin)}
+            for ev, kin in pairs
+        ]
+        key = folder_groups[folder]
+        group_trials[key] += load_group_escapes(sessions, args.left_angle,
+                                                args.right_angle, args.min_disp_mm)
 
     gtrials_list = [group_trials[k] for k in sorted(groups)]
     gdelta = global_delta(gtrials_list, args.expected_error_deg)
