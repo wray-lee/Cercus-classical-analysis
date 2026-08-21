@@ -15,6 +15,7 @@ Stage 2 — Apply curvature-thresholded rigid macro rotation to the curved
 from __future__ import annotations
 
 import logging
+import math
 
 import numpy as np
 import pandas as pd
@@ -127,6 +128,7 @@ def integrate_body_trajectory(
     heading_offset: float = 0.0,
     src_idx: np.ndarray | None = None,
     dst_idx: np.ndarray | None = None,
+    wind_offset_deg: float | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Dual-stage trajectory integration core.
 
@@ -155,9 +157,41 @@ def integrate_body_trajectory(
         Initial heading offset in radians.
     src_idx, dst_idx : np.ndarray | None
         Frame indices for heading interpolation when arrays have different lengths.
+    wind_offset_deg : float | None
+        Global wind ring angle offset in degrees. ``None`` → read from
+        ``pipeline.constants.WIND_ANGLE_OFFSET_DEG`` (yaml ``trajectory.wind_angle_offset_deg``).
+        Positive rotates body (dx,dy) CCW so the arena trajectory rotates CW by delta,
+        fixing left/right wind imbalance without touching file format.
     """
     if len(burst_dx) == 0:
         return None, None
+
+    # ── Global wind ring offset (fixes wind-only left/right imbalance) ──
+    # ponytail: single scalar rotation at the shared core; 0 is legacy no-op,
+    # non-finite rejected (NaN would silently produce empty plots).
+    if wind_offset_deg is None:
+        try:
+            from pipeline.constants import WIND_ANGLE_OFFSET_DEG as _cfg_off
+        except Exception:
+            _cfg_off = 0.0  # type: ignore[assignment]
+        wind_offset_deg = float(_cfg_off)
+    if wind_offset_deg:
+        _w_deg = float(wind_offset_deg)
+        if not math.isfinite(_w_deg):
+            import warnings
+
+            warnings.warn(
+                f"ignoring non-finite wind_angle_offset_deg={wind_offset_deg!r}",
+                RuntimeWarning,
+            )
+            _w_deg = 0.0
+        if _w_deg:
+            c, s = math.cos(math.radians(_w_deg)), math.sin(math.radians(_w_deg))
+            # Same matrix as tools/calibrate_offset.py bake: (dx,dy) → (dx*c - dy*s, dx*s + dy*c)
+            # ponytail: explicit copy avoids alias clobber, cheapest correct rotation
+            _bx = burst_dx * c - burst_dy * s
+            _by = burst_dx * s + burst_dy * c
+            burst_dx, burst_dy = _bx, _by  # type: ignore[assignment]
 
     _heading_dz = heading_dz if heading_dz is not None else burst_dz
 
@@ -246,6 +280,26 @@ def build_angular_peak_dz_mask(
     return mask
 
 
+def _is_wind_trial(grp: pd.DataFrame) -> bool | None:
+    """True for wind trials, False for clearly visual/other, None if unknown.
+
+    Used to decide whether the global ``wind_angle_offset_deg`` ring rotation
+    should apply: the offset models a physical wind-nozzle misalignment and must
+    rotate only wind trials, never visual/looming ones.
+    """
+    if "type" not in grp.columns or grp["type"].empty:
+        return None
+    try:
+        ttype = str(grp["type"].iloc[0]).lower()
+    except Exception:
+        return None
+    if "wind" in ttype:
+        return True
+    if "looming" in ttype or "visual" in ttype:
+        return False
+    return None
+
+
 def body_to_traj(
     grp: pd.DataFrame,
     mask_xy: np.ndarray,
@@ -288,4 +342,8 @@ def body_to_traj(
         heading_dz=heading_dz,
         heading_offset=heading_offset,
         src_idx=src_idx, dst_idx=dst_idx,
+        # ponytail: wind ring offset applies ONLY to wind trials. Visual/looming
+        # trials (or unknown type) must stay at 0 — the offset models the physical
+        # wind-nozzle misalignment and would corrupt visual left/right symmetry.
+        wind_offset_deg=(None if _is_wind_trial(grp) is True else 0.0),
     )

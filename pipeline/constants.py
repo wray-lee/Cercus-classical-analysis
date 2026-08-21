@@ -92,6 +92,12 @@ TRAJ_USE_RIGID_ROTATION: bool = bool(_traj_cfg.get("use_rigid_rotation", False))
 TRAJ_USE_ESCAPE_ONSET_HEADING: bool = bool(_traj_cfg.get("use_escape_onset_heading", True))
 TRAJ_USE_ESCAPE_ONSET_ONLY_XY: bool = bool(_traj_cfg.get("use_escape_onset_only_xy", True))
 TRAJ_USE_ANGULAR_VELOCITY_OFFSET: bool = bool(_traj_cfg.get("use_angular_velocity_offset", False))
+# ponytail: global ring-angle delta fixing wind nozzle offset; 0 is legacy, non-zero rotates (dx,dy) CCW by delta (arena CW)
+try:
+    _wind_off = float(_traj_cfg.get("wind_angle_offset_deg", 0.0))
+except Exception:
+    _wind_off = 0.0
+WIND_ANGLE_OFFSET_DEG: float = _wind_off
 
 _DZ_RANGE_VALID = {"full_trial", "escape_interval", "trial_to_onset", "escape_angular_peak", "escape_onset_heading", "peak_bracket"}
 DZ_INTEGRATION_RANGE: str = _traj_cfg.get("dz_integration_range", "escape_interval")
@@ -164,7 +170,16 @@ def _get_unified_side(data) -> str:
         row = data
     else:
         return ""
-    for col in ["screen_side", "wind_dir", "direction", "side"]:
+    # ponytail: wind trials must use wind_dir first; visual screen_side can be stale/NaN for wind-only hardware offset calibration
+    _ttype = ""
+    if "type" in row:
+        try:
+            _ttype = str(row["type"]).lower()
+        except Exception:
+            _ttype = ""
+    _is_wind = "wind" in _ttype
+    _priority = ["wind_dir", "screen_side", "direction", "side"] if _is_wind else ["screen_side", "wind_dir", "direction", "side"]
+    for col in _priority:
         if col in row and pd.notna(row[col]):
             val = str(row[col]).strip().lower()
             if val in ("left", "l"):
