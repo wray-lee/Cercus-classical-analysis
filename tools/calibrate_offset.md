@@ -103,6 +103,7 @@ events_gained_angles / all_classified_escape` 均为 `True`，结尾 `PASS`。
 | `--right-angle` | `90.0` | 软件认定的右侧喷嘴标称角（右沿 = 90） |
 | `--min-disp-mm` | `1.0` | 逃逸轨迹净位移低于此值的 trial 丢弃 |
 | `--expected-error-deg` | `18.0` | 健康群体先验：`response−(stim+180)` 的圆平均期望值 |
+| `--estimate-only` | 关 | 仅计算偏移量 $\delta$ 与生成诊断报告（**不复制/不写出校正后的 CSV 数据文件**） |
 | `--plot` / `--no-plot` | 开 | 是否生成报告图 |
 | `--selftest` | 关 | 运行合成正确性自检后退出 |
 

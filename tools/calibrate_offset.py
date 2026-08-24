@@ -530,6 +530,8 @@ def parse_args(argv=None):
                    help="software's nominal angle for the RIGHT nozzle (right edge = 90)")
     p.add_argument("--min-disp-mm", type=float, default=1.0)
     p.add_argument("--expected-error-deg", type=float, default=18.0)
+    p.add_argument("--estimate-only", action="store_true", default=False,
+                   help="only estimate delta and write report (do NOT duplicate/write corrected CSV files)")
     p.add_argument("--plot", dest="plot", action="store_true", default=True)
     p.add_argument("--no-plot", dest="plot", action="store_false")
     p.add_argument("--selftest", action="store_true",
@@ -579,9 +581,10 @@ def main(argv=None):
         report_groups.append(st)
 
     loo_std = loo_delta_std(gtrials_list, args.expected_error_deg)
-    write_corrected(args.input, args.output, folder_sessions, gdelta,
-                    args.left_angle, args.right_angle)
     os.makedirs(args.output, exist_ok=True)
+    if not args.estimate_only:
+        write_corrected(args.input, args.output, folder_sessions, gdelta,
+                        args.left_angle, args.right_angle)
 
     pooled = [t for tr in gtrials_list for t in tr]
     report = {"n_groups": len(groups),
