@@ -239,6 +239,7 @@ def compute_trajectory_masks(
     use_rigid_rotation: bool = TRAJ_USE_RIGID_ROTATION,
     dz_integration_range: str = DZ_INTEGRATION_RANGE,
     radius_mm: float = RADIUS_MM,
+    context: str = "trajectory",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, float, np.ndarray | None] | None:
     """Compute trajectory masks and call body_to_traj for one trial group.
 
@@ -340,6 +341,7 @@ def compute_trajectory_masks(
         heading_dz_mask=_heading_dz_mask,
         macro_yaw_override=_macro_yaw_override,
         heading_offset=_heading_offset,
+        context=context,
     )
     return traj_x, traj_y, mask_xy, mask_z, _heading_offset, _macro_yaw_override
 

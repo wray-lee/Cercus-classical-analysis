@@ -310,6 +310,7 @@ def body_to_traj(
     heading_dz_mask: np.ndarray | None = None,
     macro_yaw_override: float | None = None,
     heading_offset: float = 0.0,
+    context: str = "trajectory",
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """DataFrame wrapper around integrate_body_trajectory.
 
@@ -334,6 +335,17 @@ def body_to_traj(
     src_idx = np.flatnonzero(_src) if _hd_len != len(burst_dx) else None
     dst_idx = np.flatnonzero(mask_xy) if _hd_len != len(burst_dx) else None
 
+    # ponytail: check if this context is in wind_angle_offset_targets (e.g. ["trajectory"])
+    try:
+        from pipeline.constants import WIND_ANGLE_OFFSET_TARGETS
+        _in_scope = bool(
+            context.lower() in WIND_ANGLE_OFFSET_TARGETS
+            or "all" in WIND_ANGLE_OFFSET_TARGETS
+            or "*" in WIND_ANGLE_OFFSET_TARGETS
+        )
+    except Exception:
+        _in_scope = True
+
     return integrate_body_trajectory(
         burst_dx, burst_dy, burst_dz,
         use_heading=use_z,
@@ -342,8 +354,6 @@ def body_to_traj(
         heading_dz=heading_dz,
         heading_offset=heading_offset,
         src_idx=src_idx, dst_idx=dst_idx,
-        # ponytail: wind ring offset applies ONLY to wind trials. Visual/looming
-        # trials (or unknown type) must stay at 0 — the offset models the physical
-        # wind-nozzle misalignment and would corrupt visual left/right symmetry.
-        wind_offset_deg=(None if _is_wind_trial(grp) is True else 0.0),
+        # ponytail: wind ring offset applies ONLY to wind trials when context is in targets
+        wind_offset_deg=(None if (_in_scope and _is_wind_trial(grp) is True) else 0.0),
     )

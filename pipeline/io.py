@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -116,11 +117,12 @@ def load_kinematics(path: str | Path) -> pd.DataFrame:
 
 _RE_EVENTS = re.compile(r"^(.+?)_session_(\d+)_events\.csv$", re.IGNORECASE)
 _RE_KINEMATICS = re.compile(r"^(.+?)_session_(\d+)_kinematics\.csv$", re.IGNORECASE)
+_EXCLUDED_DIR_NAMES = {"garbage", "pilot", "__pycache__", "trials", "figures", "results", "output"}
 
 
-def scan_and_pair_sessions(input_dir: Path) -> dict[str, list[dict]]:
+def scan_and_pair_sessions(input_dir: Path | str) -> dict[str, list[dict]]:
     """
-    Scan *input_dir* for CSV files matching the naming convention and pair
+    Scan *input_dir* (and its subdirectories) for CSV files matching the naming convention and pair
     events ↔ kinematics by ``(subject, session_id)``.
 
     Returns
@@ -129,19 +131,20 @@ def scan_and_pair_sessions(input_dir: Path) -> dict[str, list[dict]]:
         ``{subject_name: [{"session_id": int, "events": Path, "kinematics": Path}, …]}``
         Sessions sorted ascending by *session_id*.
     """
+    input_dir = Path(input_dir)
     event_files: dict[tuple[str, int], Path] = {}
     kin_files: dict[tuple[str, int], Path] = {}
 
-    for f in input_dir.iterdir():
-        if not f.is_file():
-            continue
-        m = _RE_EVENTS.match(f.name)
-        if m:
-            event_files[(m.group(1), int(m.group(2)))] = f
-            continue
-        m = _RE_KINEMATICS.match(f.name)
-        if m:
-            kin_files[(m.group(1), int(m.group(2)))] = f
+    for root, dirs, files in os.walk(input_dir):
+        dirs[:] = [d for d in dirs if d.lower() not in _EXCLUDED_DIR_NAMES and not d.startswith((".", "_"))]
+        for fname in files:
+            m = _RE_EVENTS.match(fname)
+            if m:
+                event_files[(m.group(1), int(m.group(2)))] = Path(root) / fname
+                continue
+            m = _RE_KINEMATICS.match(fname)
+            if m:
+                kin_files[(m.group(1), int(m.group(2)))] = Path(root) / fname
 
     paired_keys = set(event_files) & set(kin_files)
     orphans_ev = set(event_files) - paired_keys

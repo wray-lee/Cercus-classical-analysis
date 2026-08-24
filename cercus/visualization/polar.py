@@ -73,7 +73,7 @@ def plot_escape_angle_distribution(
             else np.nan
         )
 
-        result = compute_trajectory_masks(grp, _onset_ms, _offset_ms)
+        result = compute_trajectory_masks(grp, _onset_ms, _offset_ms, context="polar")
         if result is None:
             continue
         traj_x, traj_y, *_rest = result
@@ -183,7 +183,7 @@ def plot_population_polar_histogram(
             else np.nan
         )
 
-        result = compute_trajectory_masks(grp, _onset_ms, _offset_ms)
+        result = compute_trajectory_masks(grp, _onset_ms, _offset_ms, context="polar")
         if result is None:
             continue
         traj_x, traj_y, *_rest = result

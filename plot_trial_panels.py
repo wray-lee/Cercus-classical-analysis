@@ -262,11 +262,16 @@ def plot_trial_panel(
         burst_dy = dy_body[xy_start:xy_end]
         burst_dz = dz_body[z_start:z_end]
 
+        _is_wind = "wind" in str(trial["type"].iloc[0]).lower() if "type" in trial.columns else False
+        from pipeline.constants import WIND_ANGLE_OFFSET_TARGETS
+        _apply_wind = _is_wind and ("trajectory" in WIND_ANGLE_OFFSET_TARGETS or "all" in WIND_ANGLE_OFFSET_TARGETS or "*" in WIND_ANGLE_OFFSET_TARGETS)
+
         traj_x, traj_y = _integrate_body_trajectory(
             burst_dx, burst_dy, burst_dz, use_rigid_rotation=True,
             macro_yaw_override=_macro_yaw_override,
             heading_dz=_heading_dz,
             heading_offset=_heading_offset,
+            wind_offset_deg=(None if _apply_wind else 0.0),
         )
         if traj_x is None:
             traj_x = np.array([])

@@ -162,7 +162,7 @@ def trial_escape_angles(
             else np.nan
         )
 
-        result = compute_trajectory_masks(grp, onset_ms, offset_ms)
+        result = compute_trajectory_masks(grp, onset_ms, offset_ms, context="individual")
         if result is None:
             continue
         traj_x, traj_y, *_rest = result

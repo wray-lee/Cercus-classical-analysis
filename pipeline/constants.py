@@ -99,6 +99,12 @@ except Exception:
     _wind_off = 0.0
 WIND_ANGLE_OFFSET_DEG: float = _wind_off
 
+# ponytail: array controlling which analysis modules apply wind angle correction (e.g. ["trajectory"], ["polar"], ["individual"])
+_raw_targets = _traj_cfg.get("wind_angle_offset_targets", ["trajectory", "polar", "individual"])
+if isinstance(_raw_targets, str):
+    _raw_targets = [_raw_targets]
+WIND_ANGLE_OFFSET_TARGETS: set[str] = {str(t).strip().lower() for t in _raw_targets}
+
 _DZ_RANGE_VALID = {"full_trial", "escape_interval", "trial_to_onset", "escape_angular_peak", "escape_onset_heading", "peak_bracket"}
 DZ_INTEGRATION_RANGE: str = _traj_cfg.get("dz_integration_range", "escape_interval")
 if DZ_INTEGRATION_RANGE not in _DZ_RANGE_VALID:
