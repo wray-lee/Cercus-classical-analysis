@@ -142,22 +142,48 @@ def _pair_sessions(fdir):
     return pairs
 
 
-def scan(input_dir, group_by):
-    """-> {group_key: [(events,kin)]}, {folder: group_key}, {folder: [(events,kin)]}"""
-    groups, folder_groups, folder_sessions = {}, {}, {}
-    for folder in sorted(os.listdir(input_dir)):
-        fdir = os.path.join(input_dir, folder)
-        if not os.path.isdir(fdir):
-            continue
-        pairs = _pair_sessions(fdir)
+EXCLUDED_DIR_NAMES = {"garbage", "pilot", "__pycache__", "trials", "figures", "results", "output"}
+
+
+def scan(input_dir, group_by="folder"):
+    """Scan *input_dir* (both flat CSVs and nested subdirectories).
+
+    Returns
+    -------
+    groups : dict[str, list[tuple[str, str]]]
+        ``{group_key: [(events_path, kinematics_path), ...]}``
+    """
+    groups = {}
+
+    for root, dirs, files in os.walk(input_dir):
+        dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIR_NAMES and not d.startswith((".", "_"))]
+
+        evs = {}
+        for f in files:
+            m = SESSION_RE.match(f)
+            if m and m.group(3) == "events":
+                evs[(m.group(1), int(m.group(2)))] = os.path.join(root, f)
+
+        pairs = []
+        for f in files:
+            m = SESSION_RE.match(f)
+            if m and m.group(3) == "kinematics":
+                k = (m.group(1), int(m.group(2)))
+                if k in evs:
+                    pairs.append((evs[k], os.path.join(root, f)))
+
         if not pairs:
             continue
-        folder_sessions[folder] = pairs
-        key = (SESSION_RE.match(os.path.basename(pairs[0][0])).group(1)
-               if group_by == "subject" else folder)
-        folder_groups[folder] = key
-        groups.setdefault(key, []).extend(pairs)
-    return groups, folder_groups, folder_sessions
+
+        pairs.sort(key=lambda p: _sesskey(p[0]))
+        folder_rel = os.path.relpath(root, input_dir)
+
+        for p in pairs:
+            subj = SESSION_RE.match(os.path.basename(p[0])).group(1)
+            key = subj if (group_by == "subject" or folder_rel in (".", "")) else folder_rel
+            groups.setdefault(key, []).append(p)
+
+    return groups
 
 # ══════════════════════════════════════════════════════════════════════════
 # per-trial loading, estimation, stats
@@ -297,12 +323,13 @@ def loo_delta_std(group_trials, expected_error):
 # correction writer
 # ══════════════════════════════════════════════════════════════════════════
 
-def write_corrected(input_dir, output_dir, folder_sessions, delta,
+def write_corrected(input_dir, output_dir, groups, delta,
                     left_angle, right_angle):
     import shutil
-    for folder, sess in folder_sessions.items():
+    for key, sess in groups.items():
         for ev_path, kin_path in sess:
-            out_dir = os.path.join(output_dir, folder)
+            rel_folder = os.path.relpath(os.path.dirname(ev_path), input_dir)
+            out_dir = os.path.normpath(os.path.join(output_dir, rel_folder))
             os.makedirs(out_dir, exist_ok=True)
             # events stay byte-identical to the original (same format, no added fields).
             shutil.copy(ev_path, os.path.join(out_dir, os.path.basename(ev_path)))
@@ -454,19 +481,18 @@ def selftest():
             for sess in (1, 2):
                 _synth_session(os.path.join(in_dir, gname), sess, trials, planted, rng)
         input_hashes = _dir_hashes(in_dir)
-        groups, folder_groups, folder_sessions = scan(in_dir, "folder")
+        groups = scan(in_dir, "folder")
         group_trials = {k: [] for k in groups}
-        for folder, pairs in folder_sessions.items():
+        for key, pairs in groups.items():
             sessions = [
                 {"session_id": int(SESSION_RE.match(os.path.basename(ev)).group(2)),
                  "events": Path(ev), "kinematics": Path(kin)}
                 for ev, kin in pairs
             ]
-            key = folder_groups[folder]
             group_trials[key] += load_group_escapes(sessions, 270.0, 90.0, 1.0)
         gdelta = global_delta([group_trials[k] for k in sorted(groups)], 18.0)
         loo = loo_delta_std([group_trials[k] for k in sorted(groups)], 18.0)
-        write_corrected(in_dir, out_dir, folder_sessions, gdelta, 270.0, 90.0)
+        write_corrected(in_dir, out_dir, groups, gdelta, 270.0, 90.0)
 
         ok_delta = abs(gdelta - planted) <= 3.0
         ok_loo = math.isfinite(loo)
@@ -555,19 +581,18 @@ def main(argv=None):
         print("error: --output must differ from --input", file=sys.stderr)
         sys.exit(2)
 
-    groups, folder_groups, folder_sessions = scan(args.input, args.group_by)
+    groups = scan(args.input, args.group_by)
     if args.groups is not None and len(groups) != args.groups:
         print(f"warning: --groups {args.groups} but discovered {len(groups)} groups",
               file=sys.stderr)
 
     group_trials = {k: [] for k in groups}
-    for folder, pairs in folder_sessions.items():
+    for key, pairs in groups.items():
         sessions = [
             {"session_id": int(SESSION_RE.match(os.path.basename(ev)).group(2)),
              "events": Path(ev), "kinematics": Path(kin)}
             for ev, kin in pairs
         ]
-        key = folder_groups[folder]
         group_trials[key] += load_group_escapes(sessions, args.left_angle,
                                                 args.right_angle, args.min_disp_mm)
 
@@ -588,7 +613,7 @@ def main(argv=None):
     if args.output is not None:
         os.makedirs(args.output, exist_ok=True)
         if not args.estimate_only:
-            write_corrected(args.input, args.output, folder_sessions, gdelta,
+            write_corrected(args.input, args.output, groups, gdelta,
                             args.left_angle, args.right_angle)
 
         pooled = [t for tr in gtrials_list for t in tr]
