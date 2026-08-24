@@ -518,8 +518,11 @@ def selftest():
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Calibrate ring-airflow stimulus angle offset.")
-    p.add_argument("--input", default="data")
-    p.add_argument("--output", default="data_corrected")
+    p.add_argument("--input", default="data",
+                   help="input data root directory containing per-subject session folders")
+    p.add_argument("--output", default=None,
+                   help="directory to save report files and corrected CSVs (optional; "
+                        "when omitted, delta is estimated and printed without writing files)")
     p.add_argument("--groups", type=int, default=None,
                    help="expected group count (warn on mismatch, don't crash)")
     p.add_argument("--group-by", choices=("folder", "subject"), default="folder")
@@ -548,7 +551,7 @@ def main(argv=None):
     if not os.path.isdir(args.input):
         print(f"error: input dir not found: {args.input}", file=sys.stderr)
         sys.exit(2)
-    if os.path.abspath(args.output) == os.path.abspath(args.input):
+    if args.output is not None and os.path.abspath(args.output) == os.path.abspath(args.input):
         print("error: --output must differ from --input", file=sys.stderr)
         sys.exit(2)
 
@@ -581,43 +584,55 @@ def main(argv=None):
         report_groups.append(st)
 
     loo_std = loo_delta_std(gtrials_list, args.expected_error_deg)
-    os.makedirs(args.output, exist_ok=True)
-    if not args.estimate_only:
-        write_corrected(args.input, args.output, folder_sessions, gdelta,
-                        args.left_angle, args.right_angle)
 
-    pooled = [t for tr in gtrials_list for t in tr]
-    report = {"n_groups": len(groups),
-              "delta_est_deg": gdelta,
-              "delta_method": ("single global device offset: (mean_error_left + "
-                               "mean_error_right)/2 + expected_error, pooled over ALL "
-                               "groups (all input data); makes left/right as symmetric "
-                               "as possible about the -expected_error target"),
-              "pooled_circ_delta_deg": delta_from_trials(pooled, args.expected_error_deg),
-              "loo_delta_std_deg": loo_std,
-              "nominal_mapping": {"left": args.left_angle, "right": args.right_angle},
-              "cross_check_note": ("per_group_circ_delta_deg is the per-group pooled "
-                                   "circ-mean estimate (diagnostic; it spreads across "
-                                   "groups when individual responses are noisy). "
-                                   "regression_implied_delta_deg (=(intercept+1)/slope) "
-                                   "equals it only under the regression prior "
-                                   "(slope ~ 0.9, intercept ~ -1); diagnostic only."),
-              "parameters": vars(args), "groups": report_groups}
-    with open(os.path.join(args.output, "calibration_report.json"), "w") as fh:
-        json.dump(_clean(report), fh, indent=2)
+    if args.output is not None:
+        os.makedirs(args.output, exist_ok=True)
+        if not args.estimate_only:
+            write_corrected(args.input, args.output, folder_sessions, gdelta,
+                            args.left_angle, args.right_angle)
 
-    if args.plot:
-        make_plot(all_valid, gdelta,
-                  os.path.join(args.output, "calibration_report.png"))
+        pooled = [t for tr in gtrials_list for t in tr]
+        report = {"n_groups": len(groups),
+                  "delta_est_deg": gdelta,
+                  "delta_method": ("single global device offset: (mean_error_left + "
+                                   "mean_error_right)/2 + expected_error, pooled over ALL "
+                                   "groups (all input data); makes left/right as symmetric "
+                                   "as possible about the -expected_error target"),
+                  "pooled_circ_delta_deg": delta_from_trials(pooled, args.expected_error_deg),
+                  "loo_delta_std_deg": loo_std,
+                  "nominal_mapping": {"left": args.left_angle, "right": args.right_angle},
+                  "cross_check_note": ("per_group_circ_delta_deg is the per-group pooled "
+                                       "circ-mean estimate (diagnostic; it spreads across "
+                                       "groups when individual responses are noisy). "
+                                       "regression_implied_delta_deg (=(intercept+1)/slope) "
+                                       "equals it only under the regression prior "
+                                       "(slope ~ 0.9, intercept ~ -1); diagnostic only."),
+                  "parameters": vars(args), "groups": report_groups}
+        with open(os.path.join(args.output, "calibration_report.json"), "w") as fh:
+            json.dump(_clean(report), fh, indent=2)
 
-    print(f"groups: {len(groups)} | global delta_est={gdelta:.1f} | loo_delta_std={loo_std:.2f}")
+        if args.plot:
+            make_plot(all_valid, gdelta,
+                      os.path.join(args.output, "calibration_report.png"))
+
+    print("=" * 68)
+    print("Airflow Angle Calibration Result:")
+    print(f"  Analyzed {len(groups)} groups ({sum(len(v) for v in group_trials.values())} valid escape trials)")
+    print(f"  Global delta estimate: {gdelta:+.1f}°  (LOO std: {loo_std:.2f}°)")
+    print()
+    print("To apply this offset in config.yaml, set:")
+    print("  trajectory:")
+    print(f"    wind_angle_offset_deg: {round(gdelta, 1):+g}")
+    print("=" * 68)
     for st in report_groups:
-        print(f"  {st['group']}: n={st['n_trials']} "
-              f"per_group_circ_delta={st['per_group_circ_delta_deg']:.1f} "
-              f"circ_err={st['circ_mean_error_deg']:.1f} "
+        print(f"  {st['group']}: n={st['n_trials']:2d} "
+              f"per_group_delta={st['per_group_circ_delta_deg']:+5.1f}° "
+              f"circ_err={st['circ_mean_error_deg']:+5.1f}° "
               f"slope={st['slope']:.2f} r={st['r']:.2f}")
-    print(f"report: {os.path.join(args.output, 'calibration_report.json')}")
-    print(f"plot:   {os.path.join(args.output, 'calibration_report.png')}")
+    if args.output is not None:
+        print(f"Report: {os.path.join(args.output, 'calibration_report.json')}")
+        if args.plot:
+            print(f"Plot:   {os.path.join(args.output, 'calibration_report.png')}")
 
 
 if __name__ == "__main__":

@@ -83,6 +83,7 @@ python mcmc_analysis.py --input-dir path/to/data/ --output results/
 | `python -m cercus.cli.app mcmc --input <dir> --output <dir>` | Bayesian MCMC analysis | `mcmc_analysis.py` |
 | `python -m cercus.cli.app trial-panels --input <dir> --output <dir>` | Per-trial composite panels | `plot_trial_panels.py` |
 | `python -m cercus.cli.app trajectories --input <dir> --output <dir>` | Unified trajectory overlay | `plot_all_trajectories_fixed.py` |
+| `python -m cercus.cli.app calibrate --input <dir>` | Estimate airflow stimulus angle offset | `tools/calibrate_offset.py` |
 
 ### Import Paths
 

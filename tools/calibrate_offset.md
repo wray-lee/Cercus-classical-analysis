@@ -64,20 +64,29 @@ wsl -e zsh -i -c "source ~/.zshrc && openconda && conda activate torch && <pytho
 - ⚠ 直接放在 `--input` 根下的 CSV **不会被扫描**（根目录被当作「组」的容器）。
 - `--group-by subject` 改为按文件名前缀分组；本数据有两个 `0.886cricket` 文件夹，用 subject 会变 5 组，故默认用 `folder`。
 
-### 3.2 运行命令（全量校正，默认即用全部数据）
+### 3.2 运行命令
 
+**1. 最简模式：仅估计偏移角（无需 --output，不写出文件）**
 ```bash
 wsl -e zsh -i -c "source ~/.zshrc && openconda && conda activate torch && \
 cd /mnt/d/Projects/Cercus-cli && \
-python tools/calibrate_offset.py \
-  --input  /mnt/d/Data/bw/garbage/cali \
-  --output /mnt/d/Data/bw/garbage/cali_corrected \
-  --groups 6 \
-  --plot"
+python tools/calibrate_offset.py --input /mnt/d/Data/bw"
+```
+或通过统一 CLI：
+```bash
+python -m cercus.cli.app calibrate --input /mnt/d/Data/bw
+```
+终端会直接输出推荐填入 `config.yaml` 的校准参数。
+
+**2. 导出报告模式：指定 --output 保存诊断报告（json + png）**
+```bash
+python tools/calibrate_offset.py --input /mnt/d/Data/bw --output results/cali --estimate-only
 ```
 
-`--input` 必须指向**父目录**（含各组子文件夹）。默认就用全部 6 组 pooled 出一个全局 δ，
-不需要额外 flag。`--groups 6` 仅告警校验；`--plot` 默认开（生成 report.png），`--no-plot` 关。
+**3. 全量复制模式：写出旋转校正后的 CSV 数据副本**
+```bash
+python tools/calibrate_offset.py --input /mnt/d/Data/bw --output /mnt/d/Data/bw_corrected
+```
 
 ### 3.3 快速自检
 
@@ -87,7 +96,7 @@ cd /mnt/d/Projects/Cercus-cli && python tools/calibrate_offset.py --selftest"
 ```
 
 植入全局 delta=7.0°，应恢复在 ±3° 内，且 `originals_unchanged / mirror_ok /
-events_gained_angles / all_classified_escape` 均为 `True`，结尾 `PASS`。
+events_same_format / all_classified_escape` 均为 `True`，结尾 `PASS`。
 
 ---
 
@@ -96,15 +105,15 @@ events_gained_angles / all_classified_escape` 均为 `True`，结尾 `PASS`。
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--input` | `data` | 数据根目录（含各组子文件夹） |
-| `--output` | `data_corrected` | 校正输出目录，**必须 ≠ --input** |
+| `--output` | `None` | 校正输出目录（可选；**省略时不生成任何文件，仅在终端输出 $\delta$ 估算值**） |
 | `--groups` | 无 | 期望的组数，仅告警校验 |
 | `--group-by` | `folder` | `folder`（子文件夹为一组）或 `subject`（文件名前缀为一组） |
 | `--left-angle` | `270.0` | 软件认定的左侧喷嘴标称角（escape 帧 atan2(x,y)，0=+y 正前，90=+x 右） |
 | `--right-angle` | `90.0` | 软件认定的右侧喷嘴标称角（右沿 = 90） |
 | `--min-disp-mm` | `1.0` | 逃逸轨迹净位移低于此值的 trial 丢弃 |
 | `--expected-error-deg` | `18.0` | 健康群体先验：`response−(stim+180)` 的圆平均期望值 |
-| `--estimate-only` | 关 | 仅计算偏移量 $\delta$ 与生成诊断报告（**不复制/不写出校正后的 CSV 数据文件**） |
-| `--plot` / `--no-plot` | 开 | 是否生成报告图 |
+| `--estimate-only` | 关 | 当指定 `--output` 时，仅输出 json/png 诊断报告，**不复制写出庞大的 CSV 数据副本** |
+| `--plot` / `--no-plot` | 开 | 是否生成报告图（仅在指定 `--output` 时生效） |
 | `--selftest` | 关 | 运行合成正确性自检后退出 |
 
 ⚠ 标称角只影响 δ 的基准：`--left-angle/--right-angle` 需与软件实际标称一致（相差 180°），

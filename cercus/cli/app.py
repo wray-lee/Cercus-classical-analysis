@@ -107,5 +107,24 @@ def trajectories(
     run_traj([f"--input-dir={input}", f"--output={output}"])
 
 
+@app.command()
+def calibrate(
+    input: Path = typer.Option(..., "--input", "-i", help="Directory containing session CSV folders"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Directory to save report and corrected CSVs (optional)"),
+    estimate_only: bool = typer.Option(False, "--estimate-only", help="Only estimate delta without writing corrected CSVs"),
+    plot: bool = typer.Option(True, "--plot/--no-plot", help="Generate calibration report plot if output is set"),
+) -> None:
+    """Calibrate ring-airflow stimulus angle offset (equivalent to tools/calibrate_offset.py)."""
+    from tools.calibrate_offset import main as run_cali
+    argv = [f"--input={input}"]
+    if output:
+        argv.append(f"--output={output}")
+    if estimate_only:
+        argv.append("--estimate-only")
+    if not plot:
+        argv.append("--no-plot")
+    run_cali(argv)
+
+
 if __name__ == "__main__":
     app()
