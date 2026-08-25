@@ -21,6 +21,8 @@ individual:
 
 # Adaptive V_max thresholding in population_analysis.py
 vmax_thresholding:
+  # Set true to use adaptive threshold (KDE/GMM); false to use escape.vmax_threshold from config
+  use_adaptive: false
   # mm/s — used when all auto-threshold methods fail
   fallback_threshold: 120.0
   # mm/s — upper bound of the KDE valley search range

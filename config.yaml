@@ -15,6 +15,14 @@ escape:
   start_threshold: 10.0   # mm/s — latency onset anchor (speed exceeds this → escape start)
   vmax_threshold: 50.0    # mm/s — burst floor for valid escape (v_max must exceed this)
 
+# ── Population Analysis Adaptive Thresholding ──────────────────────────
+analysis:
+  vmax_thresholding:
+    use_adaptive: false       # false = use escape.vmax_threshold (50.0); true = auto KDE/GMM
+    fallback_threshold: 50.0  # mm/s — used when adaptive=true and all methods fail
+    kde_search_upper: 400.0   # mm/s — KDE valley search upper bound
+    enable_iqr_gmm: false     # set true to enable IQR-adaptive GMM candidate
+
 
 
 trajectory:

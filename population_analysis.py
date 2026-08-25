@@ -45,11 +45,13 @@ from cercus.visualization import (
 )
 
 from cercus.config import get_config, get_geometry
+from cercus.constants.thresholds import ESCAPE_VMAX_THRESHOLD
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 _cfg = get_config()
+_USE_ADAPTIVE_THRESHOLD = bool(_cfg.analysis.vmax_thresholding.use_adaptive)  # True = auto KDE/GMM; False = use config threshold
 _FALLBACK_VMAX_THRESHOLD = float(_cfg.analysis.vmax_thresholding.fallback_threshold)  # mm/s, used when all auto methods fail
 _KDE_SEARCH_UPPER = float(_cfg.analysis.vmax_thresholding.kde_search_upper)           # mm/s, upper bound for KDE valley search
 _ENABLE_IQR_GMM = bool(_cfg.analysis.vmax_thresholding.enable_iqr_gmm)               # set True to also compute IQR-GMM as a candidate
@@ -356,20 +358,24 @@ def main(argv: list[str] | None = None) -> None:
              f"{iqr_gmm_threshold:.1f}" if iqr_gmm_threshold else "None")
 
     # ── Priority cascade for tagging: KDE → Log-GMM → (IQR-GMM) → hardcoded ──
-    if kde_threshold is not None:
-        auto_vmax_threshold = kde_threshold
-        method = "KDE valley"
-    elif gmm_escape_threshold is not None:
-        auto_vmax_threshold = gmm_escape_threshold
-        method = "Log-GMM (escape)"
-    elif _ENABLE_IQR_GMM and iqr_gmm_threshold is not None:
-        auto_vmax_threshold = iqr_gmm_threshold
-        method = "IQR-GMM"
+    if _USE_ADAPTIVE_THRESHOLD:
+        if kde_threshold is not None:
+            auto_vmax_threshold = kde_threshold
+            method = "KDE valley"
+        elif gmm_escape_threshold is not None:
+            auto_vmax_threshold = gmm_escape_threshold
+            method = "Log-GMM (escape)"
+        elif _ENABLE_IQR_GMM and iqr_gmm_threshold is not None:
+            auto_vmax_threshold = iqr_gmm_threshold
+            method = "IQR-GMM"
+        else:
+            auto_vmax_threshold = _FALLBACK_VMAX_THRESHOLD
+            method = "hardcoded fallback"
+        log.info("Adaptive threshold selected: %.1f mm/s  [method=%s]", auto_vmax_threshold, method)
     else:
-        auto_vmax_threshold = _FALLBACK_VMAX_THRESHOLD
-        method = "hardcoded fallback"
-
-    log.info("Adaptive threshold selected: %.1f mm/s  [method=%s]", auto_vmax_threshold, method)
+        auto_vmax_threshold = ESCAPE_VMAX_THRESHOLD
+        method = "config (fixed)"
+        log.info("Using fixed threshold from config: %.1f mm/s  [adaptive disabled]", auto_vmax_threshold)
 
     all_data["is_valid_escape"] = all_data["v_max"] >= auto_vmax_threshold
 
