@@ -104,7 +104,7 @@ All configurable parameters are stored as YAML files in `cercus/config/defaults/
 
 | File | Contents |
 |---|---|
-| `thresholds.yaml` | Escape/PreWalk detection thresholds (`vmax_threshold`, `start_threshold`, etc.) |
+| `thresholds.yaml` | Escape/PreWalk detection thresholds (`vmax_threshold`, `start_threshold`, `use_angular_onset_refinement`, etc.) |
 | `geometry.yaml` | Arena geometry (`RADIUS_MM`), trajectory plot settings, speed window |
 | `colors.yaml` | Color palette (escape, prewalk, left/right, NPG palette, etc.) |
 | `trajectory.yaml` | Trajectory rendering presets (with all alternative presets documented) |
@@ -198,7 +198,7 @@ Two-stage decoupled design:
 ## Key Modules
 
 ### `cercus.core.kinematics.latency.py`
-Pure physics functions for escape latency detection via backward-search threshold crossing and escape interval computation. No matplotlib dependency.
+Pure physics functions for escape latency detection via backward-search threshold crossing and escape interval computation. Supports **angular-onset refinement** (opt-in via `escape.use_angular_onset_refinement`): pulls the latency onset earlier to the angular-velocity zero-crossing before the rotational peak, while preserving the coarse 10 mm/s anchor for PreWalk interval detection (`latency_coarse_ms`). No matplotlib dependency.
 
 ### `cercus.core.kinematics.trajectory_integration.py`
 Dual-stage trajectory integration algorithm:
@@ -248,12 +248,15 @@ Computes three candidate thresholds independently on **all trials** (not filtere
 |---|---|
 | `habituation.svg` | Fatigue inspection: per-subject V_max traces + mean ± SEM |
 | `vmax_gmm.svg` | Threshold determination: all trials + GMM markers |
+| `vmax_moving_gmm.svg` | 2-component moving GMM: windowed threshold evolution |
 | `vmax_response.svg` | Effective response inspection: Escape+PreWalk only |
 | `behavior_prob.svg` | Response proportions bar chart |
+| `prewalk_analysis_panel.svg` | PreWalk polar distribution + stillness scatter |
 | `prewalk_stillness.svg` | PreWalk stillness analysis |
 | `speed_kinetics.svg` | Population speed kinetics by response type |
 | `spaghetti_kinetics.svg` | Population spaghetti plots |
 | `spaghetti_kinetics_heatmap.svg` | Onset-aligned density heatmap |
+| `spaghetti_kinetics_heatmap_fullres.svg` | Full-trial high-resolution heatmap (no onset alignment) |
 | `escape_angle_distribution.svg` | Escape direction histogram + KDE |
 | `polar_direction_histogram.svg` | Polar rose with Rayleigh p-value |
 
@@ -301,12 +304,15 @@ figures/
 ├── subject_escape_rates.csv           # Per-subject escape rate summary
 ├── habituation.svg                    # Fatigue curve
 ├── vmax_gmm.svg                       # All trials V_max + GMM thresholds
+├── vmax_moving_gmm.svg                # 2-component moving GMM threshold evolution
 ├── vmax_response.svg                  # Escape+PreWalk V_max only
 ├── behavior_prob.svg                  # Response proportion bar chart
+├── prewalk_analysis_panel.svg         # PreWalk polar + stillness scatter
 ├── prewalk_stillness.svg              # PreWalk stillness analysis
 ├── speed_kinetics.svg                 # Population speed kinetics
 ├── spaghetti_kinetics.svg             # Population spaghetti plots
 ├── spaghetti_kinetics_heatmap.svg     # Onset-aligned density heatmap
+├── spaghetti_kinetics_heatmap_fullres.svg  # Full-trial high-res heatmap
 ├── escape_angle_distribution.svg      # Histogram of escape angles
 └── polar_direction_histogram.svg      # Polar rose with Rayleigh p-value
 ```
