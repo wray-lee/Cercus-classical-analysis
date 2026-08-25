@@ -13,6 +13,11 @@ wsl -e zsh -i -c "source ~/.zshrc && openconda && conda activate torch && <pytho
 - All paths must be WSL-compatible: `D:\x` → `/mnt/d/x`.
 - Source: `.claude/skills/orchestrator/SKILL.md`; `batsh.ps1` (native `python .\main.py ...`) is a legacy Windows-only runner and conflicts with this rule.
 
+## Git Identity & Commit Boundary (CRITICAL)
+- **Author / Committer**: MUST be `wray-lee <i@wray7.top>` (verified GitHub primary email).
+- **Rule**: Never override local `.git/config` with secondary or unlinked emails (e.g. `wray.lee@outlook.com`).
+- **Verification**: Always ensure `git config user.email` returns `i@wray7.top` before committing.
+
 ## Entry points
 | Typer command | Legacy script |
 |---|---|

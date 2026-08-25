@@ -643,11 +643,11 @@ def main(argv=None):
     print("=" * 68)
     print("Airflow Angle Calibration Result:")
     print(f"  Analyzed {len(groups)} groups ({sum(len(v) for v in group_trials.values())} valid escape trials)")
-    print(f"  Global delta estimate: {gdelta:+.1f}°  (LOO std: {loo_std:.2f}°)")
+    print(f"  Global delta estimate: {-gdelta:+.1f}°  (LOO std: {loo_std:.2f}°)")
     print()
     print("To apply this offset in config.yaml, set:")
     print("  trajectory:")
-    print(f"    wind_angle_offset_deg: {round(gdelta, 1):+g}")
+    print(f"    wind_angle_offset_deg: {round(-gdelta, 1):+g}")
     print("=" * 68)
     for st in report_groups:
         print(f"  {st['group']}: n={st['n_trials']:2d} "

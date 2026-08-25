@@ -26,9 +26,11 @@ from cercus.visualization import (
     plot_population_behavior_probability,
     plot_population_habituation,
     plot_population_polar_histogram,
+    plot_population_prewalk_integration,
     plot_population_spaghetti_kinetics,
     plot_population_speed_kinetics,
     plot_population_vmax_gmm,
+    plot_population_vmax_moving_gmm,
     plot_population_vmax_response,
     plot_prewalk_stillness,
     plot_single_trial_kinetics,
@@ -206,6 +208,10 @@ class TestVmaxPlots:
         fig = plot_population_vmax_gmm(sample_df)
         _assert_regression(fig, "population_vmax_gmm")
 
+    def test_population_vmax_moving_gmm(self, sample_df):
+        fig = plot_population_vmax_moving_gmm(sample_df)
+        _assert_regression(fig, "population_vmax_moving_gmm")
+
     def test_population_vmax_response(self, sample_df):
         fig = plot_population_vmax_response(sample_df)
         _assert_regression(fig, "population_vmax_response")
@@ -233,6 +239,10 @@ class TestBehaviorPlots:
     def test_prewalk_stillness(self, sample_df):
         fig = plot_prewalk_stillness(sample_df)
         _assert_regression(fig, "prewalk_stillness")
+
+    def test_population_prewalk_integration(self, sample_df):
+        fig = plot_population_prewalk_integration(sample_df)
+        _assert_regression(fig, "population_prewalk_integration")
 
 
 class TestPolarPlots:

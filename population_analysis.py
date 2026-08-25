@@ -33,9 +33,11 @@ from pipeline.visualization import (
     plot_population_behavior_probability,
     plot_population_habituation,
     plot_population_polar_histogram,
+    plot_population_prewalk_integration,
     plot_population_spaghetti_kinetics,
     plot_population_speed_kinetics,
     plot_population_vmax_gmm,
+    plot_population_vmax_moving_gmm,
     plot_population_vmax_response,
     plot_prewalk_stillness,
     plot_spaghetti_kinetics_heatmap,
@@ -164,55 +166,50 @@ def _compute_kde_valley_threshold(vmax_values: np.ndarray) -> float | None:
 
 def _compute_log_gmm_threshold(
     vmax_values: np.ndarray,
+    min_speed_floor: float = 10.0,
 ) -> tuple[float, float] | None:
-    """Fit a **3-component** GMM in log-space and return two physical-domain
-    thresholds: ``(start_threshold, escape_threshold)``.
+    """Fit a **2-component** GMM in log-space on moving trials (v_max >= min_speed_floor)
+    to separate Walking (spontaneous movement) from Escape bursts.
 
-    * ``start_threshold`` — boundary between the no-response cluster and the
-      weak-movement cluster.
-    * ``escape_threshold`` — boundary between weak movement and escape bursts.
-
-    Log-transform compresses the heavy right tail of the V_max distribution,
-    reducing the leverage of extreme outliers without discarding data.
+    Filtering out the stationary noise floor (< 10 mm/s) avoids spending GMM components
+    on near-zero noise, yielding the clean empirical escape threshold (~96-98 mm/s).
 
     Returns
     -------
     tuple[float, float] | None
         ``(start_threshold, escape_threshold)`` in mm/s, or ``None`` if
-        fitting fails or data is insufficient (< 15 valid samples).
+        fitting fails or data is insufficient (< 15 valid moving samples).
     """
-    vmax_clean = vmax_values[~np.isnan(vmax_values) & (vmax_values > 0)]
+    vmax_clean = vmax_values[~np.isnan(vmax_values) & (vmax_values >= min_speed_floor)]
     if len(vmax_clean) < 15:
-        log.warning("Log-GMM: only %d valid positive samples — skipping.", len(vmax_clean))
+        log.warning("Log-GMM: only %d valid active samples (>= %.1f mm/s) — skipping.", len(vmax_clean), min_speed_floor)
         return None
 
     try:
         log_vmax = np.log(vmax_clean)
         X = log_vmax.reshape(-1, 1)
 
-        gmm = GaussianMixture(n_components=3, covariance_type="full", random_state=42)
+        gmm = GaussianMixture(n_components=2, covariance_type="full", random_state=42)
         gmm.fit(X)
 
-        # Sort components by mean in log-space: low / mid / high
+        # Sort components by mean in log-space: low (walking) / high (escape)
         order = np.argsort(gmm.means_.ravel())
         means = gmm.means_.ravel()[order]
         vars_ = gmm.covariances_.ravel()[order]
         weights = gmm.weights_.ravel()[order]
 
-        # Find intersections between consecutive pairs
-        def _pair_diff(log_x: float, i: int, j: int) -> float:
-            return (weights[i] * norm.pdf(log_x, means[i], np.sqrt(vars_[i]))
-                    - weights[j] * norm.pdf(log_x, means[j], np.sqrt(vars_[j])))
+        def _pair_diff(log_x: float) -> float:
+            return (weights[0] * norm.pdf(log_x, means[0], np.sqrt(vars_[0]))
+                    - weights[1] * norm.pdf(log_x, means[1], np.sqrt(vars_[1])))
 
-        log_start = brentq(lambda x: _pair_diff(x, 0, 1), means[0], means[1])
-        log_escape = brentq(lambda x: _pair_diff(x, 1, 2), means[1], means[2])
-
-        start_threshold = float(np.exp(log_start))
+        log_escape = brentq(_pair_diff, means[0], means[1])
         escape_threshold = float(np.exp(log_escape))
+        start_threshold = float(min_speed_floor)
 
-        log.info("Log-GMM 3-component: start=%.1f, escape=%.1f mm/s  "
-                 "(log-mu=[%.2f, %.2f, %.2f])",
-                 start_threshold, escape_threshold, *means)
+        log.info("Log-GMM 2-component (moving >= %.1f mm/s): start=%.1f, escape=%.1f mm/s  "
+                 "(mu_walk=%.1f, mu_esc=%.1f mm/s)",
+                 min_speed_floor, start_threshold, escape_threshold,
+                 np.exp(means[0]), np.exp(means[1]))
         return start_threshold, escape_threshold
 
     except Exception as exc:
@@ -376,7 +373,7 @@ def main(argv: list[str] | None = None) -> None:
 
     all_data["is_valid_escape"] = all_data["v_max"] >= auto_vmax_threshold
 
-    # ── Per-subject escape rate ──
+    # ── Per-subject escape and prewalk response rates ──
     trial_level = (
         all_data.groupby(["subject_id", "global_trial_index"])
         .agg(response_type=("response_type", "first"),
@@ -389,16 +386,30 @@ def main(argv: list[str] | None = None) -> None:
         .agg(
             total_trials=("global_trial_index", "count"),
             valid_escape_trials=("is_valid_escape", "sum"),
+            escape_trials=("response_type", lambda s: (s == "Escape").sum()),
+            prewalk_trials=("response_type", lambda s: (s == "PreWalk").sum()),
+            no_response_trials=("response_type", lambda s: (s == "NoResponse").sum()),
         )
-        .assign(escape_rate=lambda d: d["valid_escape_trials"] / d["total_trials"])
+        .assign(
+            escape_rate=lambda d: d["valid_escape_trials"] / d["total_trials"],
+            prewalk_rate=lambda d: d["prewalk_trials"] / d["total_trials"],
+            no_response_rate=lambda d: d["no_response_trials"] / d["total_trials"],
+            prewalk_fraction=lambda d: np.where(
+                (d["escape_trials"] + d["prewalk_trials"]) > 0,
+                d["prewalk_trials"] / (d["escape_trials"] + d["prewalk_trials"]),
+                0.0
+            ),
+        )
         .reset_index()
     )
 
-    log.info("Per-subject escape rates (threshold=%.1f mm/s):", auto_vmax_threshold)
+    log.info("Per-subject response rates (auto-threshold=%.1f mm/s):", auto_vmax_threshold)
     for _, row in subject_rates.iterrows():
-        log.info("  %s: %.1f%% (%d/%d)",
-                 row["subject_id"], row["escape_rate"] * 100,
-                 row["valid_escape_trials"], row["total_trials"])
+        log.info("  %s: Escape=%.1f%% (%d/%d), PreWalk=%.1f%% (%d/%d), NoResp=%.1f%% (%d/%d)",
+                 row["subject_id"],
+                 row["escape_rate"] * 100, int(row["escape_trials"]), int(row["total_trials"]),
+                 row["prewalk_rate"] * 100, int(row["prewalk_trials"]), int(row["total_trials"]),
+                 row["no_response_rate"] * 100, int(row["no_response_trials"]), int(row["total_trials"]))
 
     # ──────────────────────────────────────────────────────────────────
     # CSV export  (summary + subject-level rates)
@@ -438,23 +449,33 @@ def main(argv: list[str] | None = None) -> None:
     _safe_savefig(fig1, pop_dir / "habituation.svg", dpi=300, bbox_inches="tight")
     plt.close(fig1)
 
-    fig2 = plot_population_vmax_gmm(
-        all_data,
-        gmm_start_threshold=gmm_start_threshold,
-        gmm_escape_threshold=gmm_escape_threshold,
-        iqr_gmm_threshold=iqr_gmm_threshold,
-        draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
-    )
-    _safe_savefig(fig2, pop_dir / "vmax_gmm.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig2)
+    # ── [Legacy Vmax distribution plots commented out per user instruction] ──
+    # fig2 = plot_population_vmax_gmm(
+    #     all_data,
+    #     gmm_start_threshold=gmm_start_threshold,
+    #     gmm_escape_threshold=gmm_escape_threshold,
+    #     iqr_gmm_threshold=iqr_gmm_threshold,
+    #     draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
+    # )
+    # _safe_savefig(fig2, pop_dir / "vmax_gmm.svg", dpi=300, bbox_inches="tight")
+    # plt.close(fig2)
+    #
+    # fig3 = plot_population_vmax_response(
+    #     all_data,
+    #     auto_threshold=auto_vmax_threshold,
+    #     draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
+    # )
+    # _safe_savefig(fig3, pop_dir / "vmax_response.svg", dpi=300, bbox_inches="tight")
+    # plt.close(fig3)
 
-    fig3 = plot_population_vmax_response(
+    # ── New Population Vmax GMM Figure (Active/Moving Trials) ──
+    fig_vmax_moving = plot_population_vmax_moving_gmm(
         all_data,
-        auto_threshold=auto_vmax_threshold,
+        gmm_escape_threshold=gmm_escape_threshold,
         draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
     )
-    _safe_savefig(fig3, pop_dir / "vmax_response.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig3)
+    _safe_savefig(fig_vmax_moving, pop_dir / "vmax_moving_gmm.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_vmax_moving)
 
     fig4 = plot_population_behavior_probability(all_data)
     _safe_savefig(fig4, pop_dir / "behavior_prob.svg", dpi=300, bbox_inches="tight")
@@ -463,6 +484,10 @@ def main(argv: list[str] | None = None) -> None:
     fig4b = plot_prewalk_stillness(all_data)
     _safe_savefig(fig4b, pop_dir / "prewalk_stillness.svg", dpi=300, bbox_inches="tight")
     plt.close(fig4b)
+
+    fig4c = plot_population_prewalk_integration(all_data)
+    _safe_savefig(fig4c, pop_dir / "prewalk_integration.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig4c)
 
     # ── Population speed kinetics by response type (Escape / PreWalk / NoResponse) ──
     fig_speed = plot_population_speed_kinetics(all_data)
@@ -507,7 +532,7 @@ def main(argv: list[str] | None = None) -> None:
         filter_low_n = getattr(args, "individual_checks_filter_low_n", False)
         run_individual_checks(all_data, output_dir, filter_low_n=filter_low_n)
 
-    log.info("Figures saved to %s/: habituation.svg, vmax_gmm.svg, vmax_response.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg", pop_dir.name)
+    log.info("Figures saved to %s/: habituation.svg, vmax_moving_gmm.svg, behavior_prob.svg, prewalk_stillness.svg, prewalk_integration.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg", pop_dir.name)
     log.info("Heatmaps saved to %s/heatmap/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name)
     log.info("All output in: %s", output_dir)
 

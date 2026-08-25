@@ -24,7 +24,7 @@ trajectory:
   use_angular_velocity_offset: false
   dz_integration_range: "peak_bracket"
   use_rigid_rotation: true
-  wind_angle_offset_deg: 0.0  # ponytail: 0 = legacy no-op; a *positive* value rotates body (dx,dy) CCW (arena trajectory CW). Set to calibrate_offset.py delta (e.g. -13.8 from Data/bw, 402 escapes, pooled) — rotates body CCW 13.8° → fixes wind-only left/right asymmetry; applies to wind trials only.
+  wind_angle_offset_deg: 0  # wind -12.6 ponytail: 0 = legacy no-op; a *positive* value rotates body (dx,dy) CCW (arena trajectory CW). Set to calibrate_offset.py delta (e.g. -13.8 from Data/bw, 402 escapes, pooled) — rotates body CCW 13.8° → fixes wind-only left/right asymmetry; applies to wind trials only.
   wind_angle_offset_targets:   # Array of modules to apply offset: ["trajectory"], ["polar"], ["individual"]
     - "trajectory"
 

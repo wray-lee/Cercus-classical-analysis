@@ -10,7 +10,9 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import gaussian_kde
+from scipy.optimize import brentq
+from scipy.stats import gaussian_kde, norm
+from sklearn.mixture import GaussianMixture
 
 from pipeline.constants import (
     ESCAPE_START_THRESHOLD,
@@ -383,6 +385,148 @@ def plot_population_vmax_response(
         fontweight="bold",
     )
     ax.legend(loc="upper right", frameon=False, fontsize=6)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+def plot_population_vmax_moving_gmm(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (5.5, 4.0),
+    min_speed_floor: float = 10.0,
+    gmm_escape_threshold: float | None = None,
+    draw_fixed_thresholds: bool = True,
+) -> plt.Figure:
+    """V_max distribution of active trials (v_max >= min_speed_floor) with 2-component GMM curves.
+
+    Fits a 2-component log-GMM on moving trials (excluding stationary noise < 10 mm/s)
+    to separate Walking/Spontaneous Movement from true Escape bursts (~98 mm/s).
+    """
+    trial_vmax = _get_trial_vmax(df)
+    moving_vmax = trial_vmax[trial_vmax >= min_speed_floor]
+
+    if len(moving_vmax) < 2:
+        log.warning("Insufficient moving V_max values (>= %.1f mm/s) — skipping.", min_speed_floor)
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(
+            0.5, 0.5, "No valid moving V$_{max}$",
+            ha="center", va="center", transform=ax.transAxes, fontsize=12,
+        )
+        return fig
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    x_upper = max(
+        np.percentile(moving_vmax, 99) * 1.15,
+        gmm_escape_threshold * 1.15 if gmm_escape_threshold else 0,
+        250,
+    )
+
+    bins = np.linspace(min_speed_floor, x_upper, 41)
+    ax.hist(
+        moving_vmax,
+        bins=bins,
+        density=True,
+        color="#D0D0D0",
+        edgecolor="white",
+        linewidth=0.5,
+        alpha=0.8,
+        label=f"Active Trials (≥{min_speed_floor:.0f} mm/s)",
+        zorder=2,
+    )
+
+    kde = gaussian_kde(moving_vmax, bw_method="scott")
+    x_eval = np.linspace(min_speed_floor, x_upper, 500)
+    ax.plot(x_eval, kde(x_eval), color="black", lw=1.2, alpha=0.85, label="Empirical KDE", zorder=3)
+
+    # ── Fit 2-component Log-GMM curves if enough samples ──
+    fitted_th = gmm_escape_threshold
+    if len(moving_vmax) >= 15:
+        try:
+            log_v = np.log(moving_vmax)
+            gmm = GaussianMixture(n_components=2, covariance_type="full", random_state=42).fit(log_v.reshape(-1, 1))
+            order = np.argsort(gmm.means_.ravel())
+            means = gmm.means_.ravel()[order]
+            covs = gmm.covariances_.ravel()[order]
+            weights = gmm.weights_.ravel()[order]
+
+            # Physical domain log-normal densities: pdf(v) = w * N(log(v)|mu, var) / v
+            def _comp_pdf(v: np.ndarray, mu: float, var: float, w: float) -> np.ndarray:
+                lv = np.log(v)
+                return w * norm.pdf(lv, mu, np.sqrt(var)) / v
+
+            c0_pdf = _comp_pdf(x_eval, means[0], covs[0], weights[0])
+            c1_pdf = _comp_pdf(x_eval, means[1], covs[1], weights[1])
+            gmm_tot = c0_pdf + c1_pdf
+
+            ax.plot(
+                x_eval, c0_pdf, color="#00468B", lw=1.3, ls="--",
+                label=f"Walking (μ={np.exp(means[0]):.1f})", zorder=4,
+            )
+            ax.plot(
+                x_eval, c1_pdf, color="#ED0000", lw=1.3, ls="--",
+                label=f"Escape (μ={np.exp(means[1]):.1f})", zorder=4,
+            )
+            ax.plot(
+                x_eval, gmm_tot, color="#42B540", lw=1.3,
+                label="GMM Total", zorder=4,
+            )
+
+            if fitted_th is None:
+                def _pair_diff(lx: float) -> float:
+                    return (weights[0] * norm.pdf(lx, means[0], np.sqrt(covs[0]))
+                            - weights[1] * norm.pdf(lx, means[1], np.sqrt(covs[1])))
+                log_th = brentq(_pair_diff, means[0], means[1])
+                fitted_th = float(np.exp(log_th))
+        except Exception as exc:
+            log.warning("GMM density curve plotting failed: %s", exc)
+
+    # ── Threshold markers ──
+    if fitted_th is not None:
+        ax.axvline(fitted_th, color="#ED0000", ls="-", lw=1.5, alpha=0.9, zorder=5)
+        ax.text(
+            fitted_th + x_upper * 0.015,
+            ax.get_ylim()[1] * 0.85,
+            f"GMM Escape Vmax\n{fitted_th:.1f} mm/s",
+            fontsize=7,
+            color="#ED0000",
+            fontweight="bold",
+            va="top",
+        )
+
+    if draw_fixed_thresholds:
+        ax.axvline(ESCAPE_START_THRESHOLD, color="0.5", ls=":", lw=1.0, alpha=0.8, zorder=4)
+        ax.text(
+            ESCAPE_START_THRESHOLD + x_upper * 0.01,
+            ax.get_ylim()[1] * 0.95,
+            f"Noise Floor\n{ESCAPE_START_THRESHOLD:.0f} mm/s",
+            fontsize=6,
+            color="0.4",
+            va="top",
+        )
+
+    ax.set_xlim(0, x_upper)
+    ax.set_xlabel("$V_{max}$ (mm/s)")
+    ax.set_ylabel("Probability Density")
+    ax.set_title(
+        "$V_{max}$ Distribution — Moving Trials (GMM Threshold Model)",
+        fontweight="bold",
+    )
+    ax.legend(loc="upper right", frameon=False, fontsize=6)
+
+    n_subjects = df["subject_id"].nunique()
+    ax.text(
+        0.97,
+        0.52,
+        f"n = {len(moving_vmax)} active / {len(trial_vmax)} total\n({n_subjects} subjects)",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=7,
+        bbox=dict(
+            boxstyle="round,pad=0.3", facecolor="white", edgecolor="0.8"
+        ),
+    )
 
     fig.tight_layout(pad=1.0)
     return fig

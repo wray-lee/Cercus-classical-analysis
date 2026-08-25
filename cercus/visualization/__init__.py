@@ -22,6 +22,7 @@ from cercus.visualization.heatmaps import (
 )
 from cercus.visualization.vmax import (
     plot_population_vmax_gmm,
+    plot_population_vmax_moving_gmm,
     plot_population_vmax_response,
     plot_vmax_distribution,
 )
@@ -30,6 +31,7 @@ from cercus.visualization.behavior import (
     plot_habituation_curve,
     plot_population_behavior_probability,
     plot_population_habituation,
+    plot_population_prewalk_integration,
     plot_prewalk_stillness,
 )
 from cercus.visualization.polar import (
@@ -62,11 +64,13 @@ __all__ = [
     "plot_trial_stacked_heatmap",
     "plot_vmax_distribution",
     "plot_population_vmax_gmm",
+    "plot_population_vmax_moving_gmm",
     "plot_population_vmax_response",
     "plot_behavior_probability",
     "plot_habituation_curve",
     "plot_population_habituation",
     "plot_population_behavior_probability",
+    "plot_population_prewalk_integration",
     "plot_prewalk_stillness",
     "plot_escape_angle_distribution",
     "plot_population_polar_histogram",
