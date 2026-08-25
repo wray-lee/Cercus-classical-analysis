@@ -131,11 +131,11 @@ class ConfigManager:
 
     @staticmethod
     def _merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-        """Deep-merge *overlay* into a copy of *base* (dict values merged per key)."""
+        """Deep-merge *overlay* into a copy of *base* (dict values merged recursively)."""
         merged = base.copy()
         for key, value in overlay.items():
             if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-                merged[key].update(value)
+                merged[key] = ConfigManager._merge(merged[key], value)
             else:
                 merged[key] = value
         return merged

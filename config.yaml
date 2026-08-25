@@ -11,17 +11,23 @@
 # ══════════════════════════════════════════════════════════════════════
 
 # ── Escape Detection Thresholds ──────────────────────────────────────
-escape:
-  start_threshold: 10.0   # mm/s — latency onset anchor (speed exceeds this → escape start)
-  vmax_threshold: 50.0    # mm/s — burst floor for valid escape (v_max must exceed this)
+thresholds:
+  escape:
+    start_threshold: 10.0   # mm/s - latency onset anchor (speed exceeds this -> escape start)
+    vmax_threshold: 50.0    # mm/s - burst floor for valid escape (v_max must exceed this)
 
 # ── Population Analysis Adaptive Thresholding ──────────────────────────
 analysis:
   vmax_thresholding:
     use_adaptive: false       # false = use escape.vmax_threshold (50.0); true = auto KDE/GMM
-    fallback_threshold: 50.0  # mm/s — used when adaptive=true and all methods fail
-    kde_search_upper: 400.0   # mm/s — KDE valley search upper bound
+    fallback_threshold: 50.0  # mm/s - used when adaptive=true and all methods fail
+    kde_search_upper: 400.0   # mm/s - KDE valley search upper bound
     enable_iqr_gmm: false     # set true to enable IQR-adaptive GMM candidate
+  # ── Individual-Level Robustness Analysis ─────────────────────────────
+  individual:
+    min_trials_second_order: 3   # min escape trials to enter per-animal second-order Rayleigh
+    min_trials_wallraff: 5       # min escape trials to enter k-sample Wallraff dispersion test
+    bootstrap_iterations: 1000   # animal-level bootstrap resamples for the pooled-mu CI
 
 
 
@@ -60,10 +66,3 @@ trajectory:
 # ── Visualization Style ──────────────────────────────────────────────
 visualization:
   bar_label_style: "inline"
-
-# ── Individual-Level Robustness Analysis ─────────────────────────────
-analysis:
-  individual:
-    min_trials_second_order: 3   # min escape trials to enter per-animal second-order Rayleigh
-    min_trials_wallraff: 5       # min escape trials to enter k-sample Wallraff dispersion test
-    bootstrap_iterations: 1000   # animal-level bootstrap resamples for the pooled-mu CI
