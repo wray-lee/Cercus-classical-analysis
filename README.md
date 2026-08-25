@@ -81,11 +81,11 @@ python mcmc_analysis.py --input-dir path/to/data/ --output results/
 | `python -m cercus.cli.app single --input <dir> --output <dir>` | Single-subject analysis | `main.py` |
 | `python -m cercus.cli.app population --input <dir> --output <dir> [--workers N]` | Population-level batch (parallel) | `population_analysis.py` |
 | `python -m cercus.cli.app mcmc --input <dir> --output <dir>` | Bayesian MCMC analysis | `mcmc_analysis.py` |
-| `python -m cercus.cli.app trial-panels --input <dir> --output <dir>` | Per-trial composite panels | `plot_trial_panels.py` |
+| `python -m cercus.cli.app trial-panels --input <dir> --output <dir> [--workers N]` | Per-trial composite panels (parallel) | `plot_trial_panels.py` |
 | `python -m cercus.cli.app trajectories --input <dir> --output <dir>` | Unified trajectory overlay | `plot_all_trajectories_fixed.py` |
 | `python -m cercus.cli.app calibrate --input <dir>` | Estimate airflow stimulus angle offset | `tools/calibrate_offset.py` |
 
-**Performance Note**: The `population` command uses multiprocessing to parallelize subject processing and visualization rendering. Use `--workers N` to control concurrency (default: all CPU cores). Single-threaded fallback: `--workers 1`.
+**Performance Note**: The `population` and `trial-panels` commands use multiprocessing to parallelize subject processing and visualization rendering. Use `--workers N` to control concurrency (default: all CPU cores). Single-threaded fallback: `--workers 1`.
 
 ### Import Paths
 

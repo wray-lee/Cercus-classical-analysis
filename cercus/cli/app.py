@@ -47,6 +47,7 @@ def single(
 def population(
     input: Path = typer.Option(..., "--input", "-i", help="Directory containing session CSV files"),
     output: Path = typer.Option(..., "--output", "-o", help="Directory to save results"),
+    workers: Optional[int] = typer.Option(None, "--workers", help="Number of parallel workers (default: all CPUs)"),
     individual_checks: bool = typer.Option(
         False, "--individual-checks",
         help="Also run per-animal robustness checks (second-order Rayleigh, "
@@ -61,6 +62,8 @@ def population(
     """Population-level analysis (equivalent to population_analysis.py)."""
     from population_analysis import main as run_population
     argv = [f"--input-dir={input}", f"--output={output}"]
+    if workers is not None:
+        argv.append(f"--workers={workers}")
     if individual_checks:
         argv.append("--individual-checks")
     if individual_checks_filter_low_n:
@@ -91,10 +94,14 @@ def mcmc(
 def trial_panels(
     input: Path = typer.Option(..., "--input", "-i", help="Directory containing session CSV files"),
     output: Path = typer.Option(..., "--output", "-o", help="Directory to save figures"),
+    workers: Optional[int] = typer.Option(None, "--workers", help="Number of parallel workers (default: all CPUs)"),
 ) -> None:
     """Generate trial panel figures (equivalent to plot_trial_panels.py)."""
     from plot_trial_panels import main as run_panels
-    run_panels([f"--input-dir={input}", f"--output={output}"])
+    argv = [f"--input-dir={input}", f"--output={output}"]
+    if workers is not None:
+        argv.append(f"--workers={workers}")
+    run_panels(argv)
 
 
 @app.command()

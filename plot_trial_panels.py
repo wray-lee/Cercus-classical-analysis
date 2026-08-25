@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
 
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -353,7 +354,31 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Directory containing session CSV files.")
     p.add_argument("--output", required=True,
                    help="Directory to save output figures.")
+    p.add_argument(
+        "--workers", type=int, default=None,
+        help="Number of parallel workers (default: all CPUs).",
+    )
     return p
+
+
+def _render_trial_panel(job_tuple) -> str:
+    """Wrapper for parallel trial panel rendering."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    trial_data, lat, vmax, tid, response_type, interval, interval_onset, interval_offset, output_path = job_tuple
+    try:
+        fig = plot_trial_panel(
+            trial_data, lat, vmax, tid, response_type=response_type,
+            interval_ms=interval, interval_onset_ms=interval_onset, interval_offset_ms=interval_offset,
+        )
+        fig.savefig(output_path, bbox_inches="tight")
+        plt.close(fig)
+        return str(output_path)
+    except Exception as exc:
+        log.error("Failed to render trial %d: %s", tid, exc)
+        return ""
 
 
 def _export_trials(
@@ -361,12 +386,15 @@ def _export_trials(
     output_dir: Path,
     response_type: str,
     label: str,
+    n_workers: int = 1,
 ) -> None:
-    """Generate composite panel figures for each trial in a response-type slice."""
+    """Generate composite panel figures for each trial (parallel)."""
     if df_slice.empty:
         return
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build job list
+    jobs = []
     for tid, grp in df_slice.groupby("global_trial_index"):
         trial_data = grp.sort_values("t_rel")
         row = grp.iloc[0]
@@ -375,37 +403,25 @@ def _export_trials(
         interval = float(row.get("escape_interval_ms", np.nan))
         interval_onset = float(row.get("interval_onset_ms", np.nan))
         interval_offset = float(row.get("interval_offset_ms", np.nan))
+        output_path = output_dir / f"trial_{int(tid)}_{response_type.lower()}.svg"
 
-        fig = plot_trial_panel(
-            trial_data, lat, vmax, int(tid), response_type=response_type,
-            interval_ms=interval, interval_onset_ms=interval_onset, interval_offset_ms=interval_offset,
-        )
-        fig.savefig(
-            output_dir / f"trial_{int(tid)}_{response_type.lower()}.svg",
-            bbox_inches="tight",
-        )
-        plt.close(fig)
+        jobs.append((trial_data, lat, vmax, int(tid), response_type, interval, interval_onset, interval_offset, output_path))
+
+    if n_workers == 1:
+        for job in jobs:
+            _render_trial_panel(job)
+    else:
+        with Pool(processes=n_workers) as pool:
+            pool.map(_render_trial_panel, jobs)
 
     n = df_slice["global_trial_index"].nunique()
     log.info("Exported %d %s trial panels to %s", n, label, output_dir)
 
 
-def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
-    input_dir = Path(args.input_dir)
-    save_dir = Path(args.output)
-
-    if not input_dir.is_dir():
-        raise FileNotFoundError(f"--input-dir does not exist: {input_dir}")
-
-    subjects = scan_and_pair_sessions(input_dir)
-    if not subjects:
-        log.error("No valid (events, kinematics) pairs found in %s", input_dir)
-        return
-
-    for subject_name, sessions in subjects.items():
+def _process_subject_panels(subject_name: str, sessions: list, save_dir: Path, n_workers: int) -> dict:
+    """Process one subject: load → preprocess → classify → export trial panels."""
+    try:
         log.info("═══ Processing subject: %s ═══", subject_name)
-
         all_meta, all_windows, all_anchors, all_kin, _ = load_and_concat_sessions(sessions)
         df = preprocess(all_meta, all_windows, all_anchors, all_kin)
         df["global_trial_index"] = df["global_trial_id"]
@@ -417,9 +433,39 @@ def main(argv: list[str] | None = None) -> None:
         df_prewalk = df[df["response_type"] == "PreWalk"].copy()
         df_no_response = df[df["response_type"] == "NoResponse"].copy()
 
-        _export_trials(df_escape, subject_dir / "response", "Escape", "Escape")
-        _export_trials(df_prewalk, subject_dir / "prewalk", "PreWalk", "PreWalk")
-        _export_trials(df_no_response, subject_dir / "no_response", "NoResponse", "NoResponse")
+        _export_trials(df_escape, subject_dir / "response", "Escape", "Escape", n_workers)
+        _export_trials(df_prewalk, subject_dir / "prewalk", "PreWalk", "PreWalk", n_workers)
+        _export_trials(df_no_response, subject_dir / "no_response", "NoResponse", "NoResponse", n_workers)
+
+        return {"subject": subject_name, "status": "success"}
+    except Exception as exc:
+        log.error("Failed to process %s: %s", subject_name, exc)
+        return {"subject": subject_name, "status": "failed", "error": str(exc)}
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    input_dir = Path(args.input_dir)
+    save_dir = Path(args.output)
+    n_workers = args.workers if args.workers else cpu_count()
+
+    if not input_dir.is_dir():
+        raise FileNotFoundError(f"--input-dir does not exist: {input_dir}")
+
+    subjects = scan_and_pair_sessions(input_dir)
+    if not subjects:
+        log.error("No valid (events, kinematics) pairs found in %s", input_dir)
+        return
+
+    log.info("Processing %d subjects with %d workers...", len(subjects), n_workers)
+
+    if n_workers == 1:
+        for subject_name, sessions in subjects.items():
+            _process_subject_panels(subject_name, sessions, save_dir, n_workers)
+    else:
+        with Pool(processes=n_workers) as pool:
+            pool.starmap(_process_subject_panels,
+                        [(name, sess, save_dir, n_workers) for name, sess in subjects.items()])
 
     log.info("All subjects processed.")
 
