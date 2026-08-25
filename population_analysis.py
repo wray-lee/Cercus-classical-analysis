@@ -303,6 +303,23 @@ def _process_subject(subject_name: str, sessions: list[tuple[Path, Path]]) -> pd
         return pd.DataFrame()
 
 
+def _render_and_save(job_tuple) -> str:
+    """Wrapper for parallel figure rendering. job_tuple = (plot_func, output_path, args, kwargs)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plot_func, output_path, args, kwargs = job_tuple
+    try:
+        fig = plot_func(*args, **kwargs)
+        _safe_savefig(fig, output_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        return str(output_path)
+    except Exception as exc:
+        log.error("Failed to render %s: %s", output_path.name, exc)
+        return ""
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Main Pipeline
 # ══════════════════════════════════════════════════════════════════════
@@ -467,133 +484,54 @@ def main(argv: list[str] | None = None) -> None:
     # Create subdirectories
     pop_dir = output_dir / "population"
     heatmap_dir = pop_dir / "heatmap"
-    pop_dir.mkdir(parents=True, exist_ok=True)
-    heatmap_dir.mkdir(parents=True, exist_ok=True)
-
-    fig1 = plot_population_habituation(all_data)
-    _safe_savefig(fig1, pop_dir / "habituation.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig1)
-
-    # ── [Legacy Vmax distribution plots commented out per user instruction] ──
-    # fig2 = plot_population_vmax_gmm(
-    #     all_data,
-    #     gmm_start_threshold=gmm_start_threshold,
-    #     gmm_escape_threshold=gmm_escape_threshold,
-    #     iqr_gmm_threshold=iqr_gmm_threshold,
-    #     draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
-    # )
-    # _safe_savefig(fig2, pop_dir / "vmax_gmm.svg", dpi=300, bbox_inches="tight")
-    # plt.close(fig2)
-    #
-    # fig3 = plot_population_vmax_response(
-    #     all_data,
-    #     auto_threshold=auto_vmax_threshold,
-    #     draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
-    # )
-    # _safe_savefig(fig3, pop_dir / "vmax_response.svg", dpi=300, bbox_inches="tight")
-    # plt.close(fig3)
-
-    # ── New Population Vmax GMM Figure (Active/Moving Trials) ──
-    fig_vmax_moving = plot_population_vmax_moving_gmm(
-        all_data,
-        gmm_escape_threshold=gmm_escape_threshold,
-        draw_fixed_thresholds=_DRAW_FIXED_THRESHOLDS,
-    )
-    _safe_savefig(fig_vmax_moving, pop_dir / "vmax_moving_gmm.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_vmax_moving)
-
-    fig4 = plot_population_behavior_probability(all_data)
-    _safe_savefig(fig4, pop_dir / "behavior_prob.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig4)
-
-    fig4b = plot_prewalk_stillness(all_data)
-    _safe_savefig(fig4b, pop_dir / "prewalk_stillness.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig4b)
-
-    # ── Population speed kinetics by response type (Escape / PreWalk / NoResponse) ──
-    fig_speed = plot_population_speed_kinetics(all_data)
-    _safe_savefig(fig_speed, pop_dir / "speed_kinetics.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_speed)
-
-    # ── Population spaghetti kinetics by response type ──
-    fig_spaghetti = plot_population_spaghetti_kinetics(all_data)
-    _safe_savefig(fig_spaghetti, pop_dir / "spaghetti_kinetics.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_spaghetti)
-
-    # ── Heatmap figures go to heatmap/ and heatmap/full_trial/ subdirectories ──
-    heatmap_dir = pop_dir / "heatmap"
     full_trial_dir = heatmap_dir / "full_trial"
     pop_dir.mkdir(parents=True, exist_ok=True)
     heatmap_dir.mkdir(parents=True, exist_ok=True)
     full_trial_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Standard / zoomed heatmaps (in heatmap/)
-    fig_heatmap = plot_spaghetti_kinetics_heatmap(all_data)
-    _safe_savefig(fig_heatmap, heatmap_dir / "spaghetti_density_heatmap.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_heatmap)
-
-    fig_trial_ttc = plot_trial_stacked_heatmap(all_data, align="ttc")
-    _safe_savefig(fig_trial_ttc, heatmap_dir / "trial_stacked_heatmap_ttc.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_trial_ttc)
-
-    fig_trial_onset = plot_trial_stacked_heatmap(all_data, align="onset")
-    _safe_savefig(fig_trial_onset, heatmap_dir / "trial_stacked_heatmap_onset.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_trial_onset)
-
-    # 2. Full-trial high-resolution heatmaps (in heatmap/full_trial/)
+    # ── Prepare full-trial config ──
     geom_cfg = get_geometry()
     hm_cfg = getattr(geom_cfg, "heatmap", None)
     ft_cfg = getattr(hm_cfg, "full_trial", None) if hm_cfg else None
-
     ft_t_window_ttc = tuple(float(x) for x in getattr(ft_cfg, "t_window_ttc", [-3.5, 1.5])) if ft_cfg else (-3.5, 1.5)
     ft_t_window_onset = tuple(float(x) for x in getattr(ft_cfg, "t_window_onset", [-3.5, 1.5])) if ft_cfg else (-3.5, 1.5)
     ft_t_window_density = tuple(float(x) for x in getattr(ft_cfg, "t_window_density", [-3500.0, 1500.0])) if ft_cfg else (-3500.0, 1500.0)
     ft_t_bin_s = float(getattr(ft_cfg, "t_bin_s", 0.005)) if ft_cfg else 0.005
     ft_dt_ms = float(getattr(ft_cfg, "dt_ms", 2.0)) if ft_cfg else 2.0
 
-    fig_ft_heatmap = plot_spaghetti_kinetics_heatmap(
-        all_data,
-        t_window=ft_t_window_density,
-        dt=ft_dt_ms,
-        orientation="vertical",
-        figsize=(8.0, 7.5),
-    )
-    _safe_savefig(fig_ft_heatmap, full_trial_dir / "spaghetti_density_heatmap.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_ft_heatmap)
+    # ── Build plot job list: (func, output_path, args, kwargs) ──
+    plot_jobs = [
+        (plot_population_habituation, pop_dir / "habituation.svg", (all_data,), {}),
+        (plot_population_vmax_moving_gmm, pop_dir / "vmax_moving_gmm.svg", (all_data,),
+         {"gmm_escape_threshold": gmm_escape_threshold, "draw_fixed_thresholds": _DRAW_FIXED_THRESHOLDS}),
+        (plot_population_behavior_probability, pop_dir / "behavior_prob.svg", (all_data,), {}),
+        (plot_prewalk_stillness, pop_dir / "prewalk_stillness.svg", (all_data,), {}),
+        (plot_population_speed_kinetics, pop_dir / "speed_kinetics.svg", (all_data,), {}),
+        (plot_population_spaghetti_kinetics, pop_dir / "spaghetti_kinetics.svg", (all_data,), {}),
+        (plot_spaghetti_kinetics_heatmap, heatmap_dir / "spaghetti_density_heatmap.svg", (all_data,), {}),
+        (plot_trial_stacked_heatmap, heatmap_dir / "trial_stacked_heatmap_ttc.svg", (all_data,), {"align": "ttc"}),
+        (plot_trial_stacked_heatmap, heatmap_dir / "trial_stacked_heatmap_onset.svg", (all_data,), {"align": "onset"}),
+        (plot_spaghetti_kinetics_heatmap, full_trial_dir / "spaghetti_density_heatmap.svg", (all_data,),
+         {"t_window": ft_t_window_density, "dt": ft_dt_ms, "orientation": "vertical", "figsize": (8.0, 7.5)}),
+        (plot_trial_stacked_heatmap, full_trial_dir / "trial_stacked_heatmap_ttc.svg", (all_data,),
+         {"align": "ttc", "t_window": ft_t_window_ttc, "t_bin_s": ft_t_bin_s, "orientation": "vertical", "figsize": (8.0, 7.5)}),
+        (plot_trial_stacked_heatmap, full_trial_dir / "trial_stacked_heatmap_onset.svg", (all_data,),
+         {"align": "onset", "t_window": ft_t_window_onset, "t_bin_s": ft_t_bin_s, "orientation": "vertical", "figsize": (8.0, 7.5)}),
+        (plot_escape_angle_distribution, pop_dir / "escape_angle_distribution.svg", (all_data,), {}),
+        (plot_population_polar_histogram, pop_dir / "polar_direction_histogram.svg", (all_data,), {}),
+        (plot_population_pre_movement_prewalk, pop_dir / "pre_movement_prewalk.svg", (all_data,), {}),
+    ]
 
-    fig_ft_trial_ttc = plot_trial_stacked_heatmap(
-        all_data,
-        align="ttc",
-        t_window=ft_t_window_ttc,
-        t_bin_s=ft_t_bin_s,
-        orientation="vertical",
-        figsize=(8.0, 7.5),
-    )
-    _safe_savefig(fig_ft_trial_ttc, full_trial_dir / "trial_stacked_heatmap_ttc.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_ft_trial_ttc)
+    log.info("Rendering %d figures with %d workers...", len(plot_jobs), n_workers)
 
-    fig_ft_trial_onset = plot_trial_stacked_heatmap(
-        all_data,
-        align="onset",
-        t_window=ft_t_window_onset,
-        t_bin_s=ft_t_bin_s,
-        orientation="vertical",
-        figsize=(8.0, 7.5),
-    )
-    _safe_savefig(fig_ft_trial_onset, full_trial_dir / "trial_stacked_heatmap_onset.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig_ft_trial_onset)
-
-    fig5 = plot_escape_angle_distribution(all_data)
-    _safe_savefig(fig5, pop_dir / "escape_angle_distribution.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig5)
-
-    fig6 = plot_population_polar_histogram(all_data)
-    _safe_savefig(fig6, pop_dir / "polar_direction_histogram.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig6)
-
-    fig7 = plot_population_pre_movement_prewalk(all_data)
-    _safe_savefig(fig7, pop_dir / "pre_movement_prewalk.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig7)
+    if n_workers == 1:
+        # Sequential fallback
+        for job in plot_jobs:
+            _render_and_save(job)
+    else:
+        # Parallel rendering
+        with Pool(processes=n_workers) as pool:
+            pool.map(_render_and_save, plot_jobs)
 
     # ── Individual-level robustness checks (pseudo-replication guard) ──
     if args.individual_checks:
