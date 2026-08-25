@@ -39,6 +39,8 @@ Directory of paired CSVs auto-discovered by `pipeline/io.py::scan_and_pair_sessi
 ## Pipeline flow
 `pipeline/io.py` (load+pair) → `pipeline/kinematics.py::preprocess` (per-trial TTC alignment + Savitzky-Golay smoothing + speed/angular-velocity) → `pipeline/classifier.py::label_trials` (adds `response_type`, `v_max`, `latency_ms`, `escape_interval_ms`, `interval_onset_ms`, `interval_offset_ms`) → plotting/export.
 
+**Performance**: `population_analysis.py` uses multiprocessing for parallel subject processing and visualization rendering. Default: all CPU cores; override with `--workers N`. Each subject's load→preprocess→classify runs independently; visualization jobs (15 plots) render in parallel after data aggregation.
+
 Key time-axis logic in `pipeline/kinematics.py::preprocess`:
 - multimodal (`looming_wind*`) → `t_rel=0` at TTC (`wind_onset - target_ttc_ms/1000`)
 - visual-only/looming → TTC anchor or theoretical `lv/(1−sinθ)`
