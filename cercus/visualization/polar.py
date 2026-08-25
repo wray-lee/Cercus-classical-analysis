@@ -80,7 +80,11 @@ def plot_escape_angle_distribution(
         if traj_x is None or len(traj_x) < 2:
             continue
 
-        angle_deg = float(np.degrees(np.arctan2(traj_y[-1], traj_x[-1])))
+        ss = _get_unified_side(grp)
+        if ss == "left":
+            traj_x = -traj_x
+
+        angle_deg = float(np.degrees(np.arctan2(traj_x[-1], traj_y[-1])))
         angles_by_type[response_type].append(angle_deg)
 
     esc_angles = np.array(angles_by_type["Escape"])
@@ -153,8 +157,10 @@ def plot_escape_angle_distribution(
 
 def plot_population_polar_histogram(
     df: pd.DataFrame,
+    response_types: list[str] | tuple[str, ...] | str | None = None,
     figsize: tuple[float, float] = (6.0, 4.8),
     bins: int = 36,
+    title: str | None = None,
 ) -> plt.Figure:
     """360° polar rose of population escape-direction dispersion."""
     group_cols = (
@@ -162,14 +168,22 @@ def plot_population_polar_histogram(
         if "subject_id" in df.columns
         else ["global_trial_id"]
     )
-    escape_types = ["Escape", "PreWalk"]
+    if response_types is None:
+        escape_types = ["Escape", "PreWalk"]
+    elif isinstance(response_types, str):
+        escape_types = [response_types]
+    else:
+        escape_types = list(response_types)
+
     df_esc = df[df["response_type"].isin(escape_types)].copy()
 
-    angles_by_type: dict[str, list[float]] = {"Escape": [], "PreWalk": []}
+    angles_by_type: dict[str, list[float]] = {rtype: [] for rtype in escape_types}
 
     for keys, grp in df_esc.groupby(group_cols):
         grp = grp.sort_values("t_rel")
         response_type = grp["response_type"].iloc[0]
+        if response_type not in angles_by_type:
+            continue
 
         t_vals = grp["t_rel"].values
         _onset_ms = (
@@ -197,14 +211,15 @@ def plot_population_polar_histogram(
         angle_rad = float(np.arctan2(traj_x[-1], traj_y[-1]))
         angles_by_type[response_type].append(angle_rad)
 
-    esc = np.asarray(angles_by_type["Escape"])
-    pw = np.asarray(angles_by_type["PreWalk"])
+    esc = np.asarray(angles_by_type.get("Escape", []))
+    pw = np.asarray(angles_by_type.get("PreWalk", []))
 
-    if esc.size == 0 and pw.size == 0:
+    if all(len(v) == 0 for v in angles_by_type.values()):
         log.warning("No valid trials for polar direction histogram.")
         fig, ax = plt.subplots(figsize=figsize)
+        empty_msg = "No valid escape trials" if "Escape" in escape_types else "No valid trials"
         ax.text(
-            0.5, 0.5, "No valid escape trials",
+            0.5, 0.5, empty_msg,
             ha="center", va="center", transform=ax.transAxes, fontsize=12, color="0.5",
         )
         return fig
@@ -265,12 +280,9 @@ def plot_population_polar_histogram(
     bin_width = 2 * np.pi / bins
 
     series = [
-        (name, angles, color)
-        for name, angles, color in [
-            ("Escape", esc, COLOR_ESCAPE),
-            ("PreWalk", pw, COLOR_PREWALK),
-        ]
-        if angles.size > 0
+        (name, np.asarray(angles_by_type[name]), COLOR_PREWALK if name == "PreWalk" else COLOR_ESCAPE)
+        for name in escape_types
+        if len(angles_by_type.get(name, [])) > 0
     ]
 
     radii_by_name: dict[str, np.ndarray] = {}
@@ -359,7 +371,13 @@ def plot_population_polar_histogram(
             [path_effects.withStroke(linewidth=2.0, foreground="white")]
         )
 
-    ax.set_title("Escape Direction Distribution", fontweight="bold", pad=22)
+    if title is not None:
+        plot_title = title
+    elif escape_types == ["PreWalk"]:
+        plot_title = "PreWalk Direction Distribution"
+    else:
+        plot_title = "Escape Direction Distribution"
+    ax.set_title(plot_title, fontweight="bold", pad=22)
 
     if not np.isnan(p_ww) and "Escape" in mu_by_name and "PreWalk" in mu_by_name:
         mu_esc = mu_by_name["Escape"]
@@ -391,3 +409,196 @@ def plot_population_polar_histogram(
     )
 
     return fig
+
+
+def plot_population_pre_movement_prewalk(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (6.0, 4.8),
+    bins: int = 36,
+    title: str = "Pre-movement Direction Distribution (PreWalk)",
+) -> plt.Figure:
+    """360° polar rose of population PreWalk pre-movement direction dispersion.
+
+    Integrates trajectory from trial start to escape onset (interval_onset_ms)
+    to quantify spontaneous walking direction before stimulus/escape.
+    """
+    group_cols = (
+        ["subject_id", "global_trial_id"]
+        if "subject_id" in df.columns
+        else ["global_trial_id"]
+    )
+    df_pw = df[df["response_type"] == "PreWalk"].copy()
+
+    pw_angles: list[float] = []
+
+    for keys, grp in df_pw.groupby(group_cols):
+        grp = grp.sort_values("t_rel")
+        t_vals = grp["t_rel"].values
+        if len(t_vals) < 2:
+            continue
+
+        _onset_ms = (
+            grp["interval_onset_ms"].iloc[0]
+            if "interval_onset_ms" in grp.columns
+            else np.nan
+        )
+        if pd.isna(_onset_ms) or _onset_ms <= t_vals[0]:
+            _onset_ms = (
+                grp["latency_ms"].iloc[0]
+                if "latency_ms" in grp.columns and pd.notna(grp["latency_ms"].iloc[0])
+                else 0.0
+            )
+
+        offset_idx = int(np.argmin(np.abs(t_vals - _onset_ms)))
+        if offset_idx < 2:
+            continue
+
+        mask_xy = np.zeros(len(t_vals), dtype=bool)
+        mask_xy[:offset_idx] = True
+        mask_z = mask_xy
+
+        from cercus.core.kinematics.trajectory_integration import body_to_traj
+
+        traj_x, traj_y = body_to_traj(
+            grp,
+            mask_xy,
+            use_z=True,
+            use_rigid_rotation=False,
+            mask_z=mask_z,
+            context="polar",
+        )
+        if traj_x is None or len(traj_x) < 2:
+            continue
+
+        ss = _get_unified_side(grp)
+        if ss == "left":
+            traj_x = -traj_x
+
+        angle_rad = float(np.arctan2(traj_x[-1], traj_y[-1]))
+        pw_angles.append(angle_rad)
+
+    angles_arr = np.asarray(pw_angles)
+
+    if angles_arr.size == 0:
+        log.warning("No valid PreWalk trials for pre-movement polar plot.")
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.text(
+            0.5, 0.5, "No valid PreWalk trials",
+            ha="center", va="center", transform=ax.transAxes, fontsize=12, color="0.5",
+        )
+        return fig
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="polar")
+
+    ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)
+    ax.set_thetagrids(
+        [0, 90, 180, 270],
+        ["0°", "90°\nIpsi", "±180°", "−90°\nContra"],
+        fontsize=9,
+        color="0.2",
+    )
+    ax.tick_params(axis="x", pad=6)
+
+    ax.grid(True, color="0.88", linewidth=0.7, linestyle="-")
+    ax.set_axisbelow(True)
+
+    bin_edges = np.linspace(-np.pi, np.pi, bins + 1)
+    bin_width = 2 * np.pi / bins
+
+    counts, _ = np.histogram(angles_arr, bins=bin_edges)
+    radii = counts / angles_arr.size * 100.0
+    rmax = max(radii.max() * 1.30, 10.0)
+
+    ax.bar(
+        bin_edges[:-1],
+        radii,
+        width=bin_width,
+        align="edge",
+        facecolor=mcolors.to_rgba(COLOR_PREWALK, 0.30),
+        edgecolor="white",
+        linewidth=0.7,
+        zorder=2,
+    )
+
+    if angles_arr.size > 1 and np.std(angles_arr) > 1e-6:
+        kde = gaussian_kde(angles_arr, bw_method="scott")
+        x_kde = np.linspace(-np.pi, np.pi, 361)
+        dens = kde(x_kde) + kde(x_kde - 2 * np.pi) + kde(x_kde + 2 * np.pi)
+        dens[0] = dens[-1] = 0.5 * (dens[0] + dens[-1])
+        ax.plot(
+            x_kde,
+            dens * bin_width * 100.0,
+            color=COLOR_PREWALK,
+            lw=2.0,
+            solid_capstyle="round",
+            zorder=4,
+        )
+
+    mu = float(circmean(angles_arr, high=np.pi, low=-np.pi))
+    resultant = float(np.abs(np.exp(1j * angles_arr).mean()))
+    p_rayleigh = rayleigh_p(resultant, angles_arr.size)
+    arrow = ax.annotate(
+        "",
+        xy=(mu, resultant * rmax),
+        xytext=(mu, 0.03 * rmax),
+        arrowprops=dict(
+            arrowstyle="-|>",
+            color=COLOR_PREWALK,
+            lw=1.4,
+            mutation_scale=10,
+            shrinkA=0,
+            shrinkB=0,
+            connectionstyle="arc3,rad=0",
+        ),
+        zorder=5,
+    )
+    arrow.arrow_patch.set_path_effects(
+        [path_effects.withStroke(linewidth=2.6, foreground="white")]
+    )
+
+    p_rayleigh_str = "p < 1e-15" if p_rayleigh < 1e-15 else f"p = {p_rayleigh:.2e}"
+    legend_handles = [
+        Patch(
+            facecolor=mcolors.to_rgba(COLOR_PREWALK, 0.30),
+            edgecolor=COLOR_PREWALK,
+            linewidth=1.2,
+            label=f"PreWalk (n = {angles_arr.size})\nμ = {np.degrees(mu):.0f}°, R = {resultant:.2f}\n{p_rayleigh_str}",
+        )
+    ]
+
+    ax.set_ylim(0, rmax)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, prune="lower"))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{v:g}%"))
+
+    spokes = np.arange(0, 360, 45)
+    spoke_bins = [
+        min(int(((np.deg2rad(s) + np.pi) % (2 * np.pi)) / bin_width), bins - 1)
+        for s in spokes
+    ]
+    spoke_mass = [radii[max(b - 1, 0) : b + 2].sum() for b in spoke_bins]
+    ax.set_rlabel_position(float(spokes[int(np.argmin(spoke_mass))]))
+    ax.tick_params(axis="y", labelsize=7, colors="0.45", pad=1)
+    for lbl in ax.get_yticklabels():
+        lbl.set_path_effects(
+            [path_effects.withStroke(linewidth=2.0, foreground="white")]
+        )
+
+    ax.set_title(title, fontweight="bold", pad=22)
+
+    fig.legend(
+        handles=legend_handles,
+        loc="upper right",
+        bbox_to_anchor=(0.99, 0.99),
+        frameon=False,
+        fontsize=8,
+        handlelength=1.4,
+        labelspacing=0.6,
+    )
+
+    return fig
+
+
+# Backward compatibility alias
+plot_population_prewalk_polar = plot_population_pre_movement_prewalk

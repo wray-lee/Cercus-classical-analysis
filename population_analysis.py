@@ -28,12 +28,12 @@ from sklearn.mixture import GaussianMixture
 from pipeline.classifier import label_trials
 from pipeline.io import export_summary_metrics, load_and_concat_sessions, scan_and_pair_sessions
 from pipeline.kinematics import preprocess
-from pipeline.visualization import (
+from cercus.visualization import (
     plot_escape_angle_distribution,
     plot_population_behavior_probability,
     plot_population_habituation,
     plot_population_polar_histogram,
-    plot_population_prewalk_integration,
+    plot_population_pre_movement_prewalk,
     plot_population_spaghetti_kinetics,
     plot_population_speed_kinetics,
     plot_population_vmax_gmm,
@@ -44,7 +44,7 @@ from pipeline.visualization import (
     plot_trial_stacked_heatmap,
 )
 
-from cercus.config import get_config
+from cercus.config import get_config, get_geometry
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -485,10 +485,6 @@ def main(argv: list[str] | None = None) -> None:
     _safe_savefig(fig4b, pop_dir / "prewalk_stillness.svg", dpi=300, bbox_inches="tight")
     plt.close(fig4b)
 
-    fig4c = plot_population_prewalk_integration(all_data)
-    _safe_savefig(fig4c, pop_dir / "prewalk_integration.svg", dpi=300, bbox_inches="tight")
-    plt.close(fig4c)
-
     # ── Population speed kinetics by response type (Escape / PreWalk / NoResponse) ──
     fig_speed = plot_population_speed_kinetics(all_data)
     _safe_savefig(fig_speed, pop_dir / "speed_kinetics.svg", dpi=300, bbox_inches="tight")
@@ -499,22 +495,68 @@ def main(argv: list[str] | None = None) -> None:
     _safe_savefig(fig_spaghetti, pop_dir / "spaghetti_kinetics.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_spaghetti)
 
-    # ── Heatmap figures go to heatmap/ subdirectory ──
+    # ── Heatmap figures go to heatmap/ and heatmap/full_trial/ subdirectories ──
+    heatmap_dir = pop_dir / "heatmap"
+    full_trial_dir = heatmap_dir / "full_trial"
+    pop_dir.mkdir(parents=True, exist_ok=True)
+    heatmap_dir.mkdir(parents=True, exist_ok=True)
+    full_trial_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Population spaghetti kinetics heatmap (onset-aligned, density) ──
+    # 1. Standard / zoomed heatmaps (in heatmap/)
     fig_heatmap = plot_spaghetti_kinetics_heatmap(all_data)
     _safe_savefig(fig_heatmap, heatmap_dir / "spaghetti_density_heatmap.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_heatmap)
 
-    # ── Trial-stacked heatmap (TTC-aligned) ──
     fig_trial_ttc = plot_trial_stacked_heatmap(all_data, align="ttc")
     _safe_savefig(fig_trial_ttc, heatmap_dir / "trial_stacked_heatmap_ttc.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_trial_ttc)
 
-    # ── Trial-stacked heatmap (onset-aligned) ──
     fig_trial_onset = plot_trial_stacked_heatmap(all_data, align="onset")
     _safe_savefig(fig_trial_onset, heatmap_dir / "trial_stacked_heatmap_onset.svg", dpi=300, bbox_inches="tight")
     plt.close(fig_trial_onset)
+
+    # 2. Full-trial high-resolution heatmaps (in heatmap/full_trial/)
+    geom_cfg = get_geometry()
+    hm_cfg = getattr(geom_cfg, "heatmap", None)
+    ft_cfg = getattr(hm_cfg, "full_trial", None) if hm_cfg else None
+
+    ft_t_window_ttc = tuple(float(x) for x in getattr(ft_cfg, "t_window_ttc", [-3.5, 1.5])) if ft_cfg else (-3.5, 1.5)
+    ft_t_window_onset = tuple(float(x) for x in getattr(ft_cfg, "t_window_onset", [-3.5, 1.5])) if ft_cfg else (-3.5, 1.5)
+    ft_t_window_density = tuple(float(x) for x in getattr(ft_cfg, "t_window_density", [-3500.0, 1500.0])) if ft_cfg else (-3500.0, 1500.0)
+    ft_t_bin_s = float(getattr(ft_cfg, "t_bin_s", 0.005)) if ft_cfg else 0.005
+    ft_dt_ms = float(getattr(ft_cfg, "dt_ms", 2.0)) if ft_cfg else 2.0
+
+    fig_ft_heatmap = plot_spaghetti_kinetics_heatmap(
+        all_data,
+        t_window=ft_t_window_density,
+        dt=ft_dt_ms,
+        orientation="vertical",
+        figsize=(8.0, 7.5),
+    )
+    _safe_savefig(fig_ft_heatmap, full_trial_dir / "spaghetti_density_heatmap.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_ft_heatmap)
+
+    fig_ft_trial_ttc = plot_trial_stacked_heatmap(
+        all_data,
+        align="ttc",
+        t_window=ft_t_window_ttc,
+        t_bin_s=ft_t_bin_s,
+        orientation="vertical",
+        figsize=(8.0, 7.5),
+    )
+    _safe_savefig(fig_ft_trial_ttc, full_trial_dir / "trial_stacked_heatmap_ttc.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_ft_trial_ttc)
+
+    fig_ft_trial_onset = plot_trial_stacked_heatmap(
+        all_data,
+        align="onset",
+        t_window=ft_t_window_onset,
+        t_bin_s=ft_t_bin_s,
+        orientation="vertical",
+        figsize=(8.0, 7.5),
+    )
+    _safe_savefig(fig_ft_trial_onset, full_trial_dir / "trial_stacked_heatmap_onset.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig_ft_trial_onset)
 
     fig5 = plot_escape_angle_distribution(all_data)
     _safe_savefig(fig5, pop_dir / "escape_angle_distribution.svg", dpi=300, bbox_inches="tight")
@@ -524,6 +566,10 @@ def main(argv: list[str] | None = None) -> None:
     _safe_savefig(fig6, pop_dir / "polar_direction_histogram.svg", dpi=300, bbox_inches="tight")
     plt.close(fig6)
 
+    fig7 = plot_population_pre_movement_prewalk(all_data)
+    _safe_savefig(fig7, pop_dir / "pre_movement_prewalk.svg", dpi=300, bbox_inches="tight")
+    plt.close(fig7)
+
     # ── Individual-level robustness checks (pseudo-replication guard) ──
     if args.individual_checks:
         from cercus.analysis.individual import run_individual_checks
@@ -532,8 +578,8 @@ def main(argv: list[str] | None = None) -> None:
         filter_low_n = getattr(args, "individual_checks_filter_low_n", False)
         run_individual_checks(all_data, output_dir, filter_low_n=filter_low_n)
 
-    log.info("Figures saved to %s/: habituation.svg, vmax_moving_gmm.svg, behavior_prob.svg, prewalk_stillness.svg, prewalk_integration.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg", pop_dir.name)
-    log.info("Heatmaps saved to %s/heatmap/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name)
+    log.info("Figures saved to %s/: habituation.svg, vmax_moving_gmm.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg, pre_movement_prewalk.svg", pop_dir.name)
+    log.info("Heatmaps saved to %s/heatmap/ and %s/heatmap/full_trial/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name, pop_dir.name)
     log.info("All output in: %s", output_dir)
 
 

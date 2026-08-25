@@ -28,3 +28,9 @@ heatmap:
   t_bin_s: 0.01                    # seconds, time bin resolution
   vmax: 50.0                       # mm/s, color scale maximum
   gamma: 0.4                       # PowerNorm exponent (low speed 10-15 visible)
+  full_trial:
+    t_window_ttc: [-3.5, 1.5]      # seconds, covering full trial before TTC to after
+    t_window_onset: [-3.5, 1.5]    # seconds, covering full trial before onset
+    t_window_density: [-3500.0, 1500.0] # ms, for spaghetti density heatmap
+    t_bin_s: 0.005                 # seconds (5ms bin), high temporal resolution
+    dt_ms: 2.0                     # ms, density heatmap interpolation time step

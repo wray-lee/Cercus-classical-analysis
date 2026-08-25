@@ -26,7 +26,7 @@ from cercus.visualization import (
     plot_population_behavior_probability,
     plot_population_habituation,
     plot_population_polar_histogram,
-    plot_population_prewalk_integration,
+    plot_population_pre_movement_prewalk,
     plot_population_spaghetti_kinetics,
     plot_population_speed_kinetics,
     plot_population_vmax_gmm,
@@ -240,10 +240,6 @@ class TestBehaviorPlots:
         fig = plot_prewalk_stillness(sample_df)
         _assert_regression(fig, "prewalk_stillness")
 
-    def test_population_prewalk_integration(self, sample_df):
-        fig = plot_population_prewalk_integration(sample_df)
-        _assert_regression(fig, "population_prewalk_integration")
-
 
 class TestPolarPlots:
     """Regression tests for polar / angle plots."""
@@ -255,3 +251,7 @@ class TestPolarPlots:
     def test_population_polar_histogram(self, sample_df):
         fig = plot_population_polar_histogram(sample_df)
         _assert_regression(fig, "population_polar_histogram")
+
+    def test_population_pre_movement_prewalk(self, sample_df):
+        fig = plot_population_pre_movement_prewalk(sample_df)
+        _assert_regression(fig, "population_pre_movement_prewalk")

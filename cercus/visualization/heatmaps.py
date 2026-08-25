@@ -29,11 +29,13 @@ log = logging.getLogger(__name__)
 
 def plot_spaghetti_kinetics_heatmap(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (9, 3.5),
+    figsize: tuple[float, float] | None = None,
     t_window: tuple[float, float] = (-400.0, 500.0),
     speed_bins: int = 50,
     y_col: str = "speed",
     y_label: str = "Speed (mm/s)",
+    dt: float = 5.0,
+    orientation: str = "horizontal",
 ) -> plt.Figure:
     """Density heatmap of spaghetti kinetics, aligned to escape onset."""
     df = df.copy()
@@ -44,7 +46,6 @@ def plot_spaghetti_kinetics_heatmap(
         df["t_rel"],
     )
 
-    dt = 5.0
     t_common = np.arange(t_window[0], t_window[1] + dt, dt)
 
     response_types = ["Escape", "PreWalk", "NoResponse"]
@@ -55,13 +56,18 @@ def plot_spaghetti_kinetics_heatmap(
     }
 
     n_panels = len(response_types)
+    if figsize is None:
+        figsize = (8.0, 7.5) if orientation == "vertical" else (9, 3.5)
     fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(1, n_panels, hspace=0.1, wspace=0.15, figure=fig)
+    if orientation == "vertical":
+        gs = gridspec.GridSpec(n_panels, 1, hspace=0.35, wspace=0.1, figure=fig)
+    else:
+        gs = gridspec.GridSpec(1, n_panels, hspace=0.1, wspace=0.15, figure=fig)
 
     ax_panels: list[plt.Axes] = []
     for j in range(n_panels):
         sharey = ax_panels[0] if ax_panels else None
-        ax = fig.add_subplot(gs[0, j], sharey=sharey)
+        ax = fig.add_subplot(gs[j, 0] if orientation == "vertical" else gs[0, j], sharey=sharey)
         ax_panels.append(ax)
 
     speed_min, speed_max = 0.0, 600.0
@@ -118,7 +124,7 @@ def plot_spaghetti_kinetics_heatmap(
         sem[np.isnan(sem)] = 0
         valid = ~np.isnan(mean)
 
-        pre_mask = (t_common >= -400) & (t_common <= 0)
+        pre_mask = (t_common >= t_window[0]) & (t_common <= 0)
         pre_speeds = speed_matrix[:, pre_mask]
         pre_speeds = pre_speeds[~np.isnan(pre_speeds)]
         stillness = (
@@ -153,12 +159,12 @@ def plot_spaghetti_kinetics_heatmap(
         valid = valid_by_panel[j]
         stillness = stillness_by_panel[j]
 
-        dt = t_common[1] - t_common[0] if len(t_common) > 1 else 5.0
+        dt_step = t_common[1] - t_common[0] if len(t_common) > 1 else dt
         t_edges = np.concatenate(
             [
-                [t_common[0] - dt / 2],
+                [t_common[0] - dt_step / 2],
                 (t_common[:-1] + t_common[1:]) / 2,
-                [t_common[-1] + dt / 2],
+                [t_common[-1] + dt_step / 2],
             ]
         )
 
@@ -236,11 +242,18 @@ def plot_spaghetti_kinetics_heatmap(
         #     zorder=10,
         # )
 
-        ax.set_xlabel("Time from escape onset (ms)")
-        if j == 0:
+        if orientation == "vertical":
             ax.set_ylabel(y_label)
+            if j == n_panels - 1:
+                ax.set_xlabel("Time from escape onset (ms)")
+            else:
+                ax.set_xlabel("")
         else:
-            plt.setp(ax.get_yticklabels(), visible=False)
+            ax.set_xlabel("Time from escape onset (ms)")
+            if j == 0:
+                ax.set_ylabel(y_label)
+            else:
+                plt.setp(ax.get_yticklabels(), visible=False)
 
         ax.set_xlim(t_window)
         ax.set_ylim(speed_min, speed_max)
@@ -309,9 +322,10 @@ def plot_trial_stacked_heatmap(
     t_window: tuple[float, float] | None = None,
     t_bin_s: float | None = None,
     vmax: float | None = None,
-    figsize: tuple[float, float] = (12, 4.5),
+    figsize: tuple[float, float] | None = None,
     conditions: list[str] | None = None,
     max_trials_per_panel: int = 200,
+    orientation: str = "horizontal",
 ) -> plt.Figure:
     """Trial-stacked heatmap using config-driven windows and color scaling."""
     heatmap_cfg = get_geometry().heatmap
@@ -346,17 +360,20 @@ def plot_trial_stacked_heatmap(
             conditions = ["Escape", "PreWalk", "NoResponse"]
 
     n_panels = len(conditions)
+    if figsize is None:
+        figsize = (8.0, 7.5) if orientation == "vertical" else (12, 4.5)
     fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(
-        1, n_panels, hspace=0.15, wspace=0.25, figure=fig
-    )
+    if orientation == "vertical":
+        gs = gridspec.GridSpec(n_panels, 1, hspace=0.35, wspace=0.1, figure=fig)
+    else:
+        gs = gridspec.GridSpec(1, n_panels, hspace=0.15, wspace=0.25, figure=fig)
 
     t_common = np.arange(t_window[0], t_window[1], t_bin_s)
     norm = mcolors.PowerNorm(gamma=gamma, vmin=0, vmax=vmax)
     ims: list = []
 
     for j, cond in enumerate(conditions):
-        ax = fig.add_subplot(gs[0, j])
+        ax = fig.add_subplot(gs[j, 0] if orientation == "vertical" else gs[0, j])
 
         if n_types >= 4:
             subset = df[df["type"] == cond].copy()
@@ -429,15 +446,23 @@ def plot_trial_stacked_heatmap(
             ax.axvline(-1.0, color="white", ls=":", lw=0.8, alpha=0.5, zorder=7)
 
         ax.set_title(cond, fontweight="bold", fontsize=9)
-        if align == "ttc":
-            ax.set_xlabel("TTC (s)")
-        else:
-            ax.set_xlabel("Time from escape onset (s)")
-        if j == 0:
+        if orientation == "vertical":
             ax.set_ylabel("Trial")
             ax.set_yticks([])
+            if j == n_panels - 1:
+                ax.set_xlabel("TTC (s)" if align == "ttc" else "Time from escape onset (s)")
+            else:
+                ax.set_xlabel("")
         else:
-            plt.setp(ax.get_yticklabels(), visible=False)
+            if align == "ttc":
+                ax.set_xlabel("TTC (s)")
+            else:
+                ax.set_xlabel("Time from escape onset (s)")
+            if j == 0:
+                ax.set_ylabel("Trial")
+                ax.set_yticks([])
+            else:
+                plt.setp(ax.get_yticklabels(), visible=False)
 
         ax.text(
             0.02,
@@ -454,8 +479,12 @@ def plot_trial_stacked_heatmap(
             ],
         )
 
-    fig.subplots_adjust(right=0.92)
-    cbar_ax = fig.add_axes([0.93, 0.15, 0.02, 0.7])
+    if orientation == "vertical":
+        fig.subplots_adjust(right=0.88)
+        cbar_ax = fig.add_axes([0.90, 0.2, 0.02, 0.6])
+    else:
+        fig.subplots_adjust(right=0.92)
+        cbar_ax = fig.add_axes([0.93, 0.15, 0.02, 0.7])
     cmap = plt.get_cmap("inferno")
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     cbar = fig.colorbar(sm, cax=cbar_ax)
