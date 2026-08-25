@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from functools import partial
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import pandas as pd
@@ -94,6 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--individual-checks-filter-low-n", action="store_true",
         help="When --individual-checks is set, exclude animals with <3 (second-order) "
              "or <5 (Wallraff) response trials (default: include all with ≥1).",
+    )
+    p.add_argument(
+        "--workers", type=int, default=None,
+        help="Number of parallel workers for subject processing (default: all CPUs).",
     )
     return p
 
@@ -279,6 +285,25 @@ def _compute_iqr_gmm_threshold(vmax_values: np.ndarray) -> float | None:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Parallel Processing Helper
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _process_subject(subject_name: str, sessions: list[tuple[Path, Path]]) -> pd.DataFrame:
+    """Process one subject: load → preprocess → classify. Returns DataFrame with subject_id."""
+    try:
+        all_meta, all_windows, all_anchors, all_kin, _ = load_and_concat_sessions(sessions)
+        df = preprocess(all_meta, all_windows, all_anchors, all_kin)
+        df["global_trial_index"] = df["global_trial_id"]
+        df = label_trials(df)
+        df["subject_id"] = subject_name
+        return df
+    except Exception as exc:
+        log.error("Failed to process %s: %s", subject_name, exc)
+        return pd.DataFrame()
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Main Pipeline
 # ══════════════════════════════════════════════════════════════════════
 
@@ -298,26 +323,20 @@ def main(argv: list[str] | None = None) -> None:
         log.error("No valid (events, kinematics) pairs found in %s", input_dir)
         return
 
-    # ── Per-subject processing ──
-    population_parts: list[pd.DataFrame] = []
+    # ── Per-subject parallel processing ──
+    n_workers = args.workers if args.workers else cpu_count()
+    log.info("Processing %d subjects with %d workers...", len(subjects), n_workers)
 
-    for subject_name, sessions in subjects.items():
-        log.info("Processing subject: %s", subject_name)
+    if n_workers == 1:
+        # Single-threaded fallback
+        population_parts = [_process_subject(name, sess) for name, sess in subjects.items()]
+    else:
+        # Parallel processing
+        with Pool(processes=n_workers) as pool:
+            population_parts = pool.starmap(_process_subject, subjects.items())
 
-        # 1. Load & timestamp alignment
-        all_meta, all_windows, all_anchors, all_kin, _ = load_and_concat_sessions(sessions)
-        df = preprocess(all_meta, all_windows, all_anchors, all_kin)
-        df["global_trial_index"] = df["global_trial_id"]
-
-        # 2. Ternary state routing
-        df = label_trials(df)
-
-        # 3. Inject subject_id for cross-animal key isolation
-        df["subject_id"] = subject_name
-        population_parts.append(df)
-
-        n_trials = df["global_trial_index"].nunique()
-        log.info("  %s: %d trials classified", subject_name, n_trials)
+    # Filter out empty DataFrames
+    population_parts = [df for df in population_parts if not df.empty]
 
     if not population_parts:
         log.error("No data processed.")
