@@ -47,7 +47,7 @@ from pipeline.constants import (
     _apply_publication_style,
     _get_unified_side,
 )
-from pipeline.io import load_and_concat_sessions, scan_and_pair_sessions
+from pipeline.io import load_and_concat_sessions, scan_and_pair_sessions, _EXCLUDED_DIR_NAMES
 from pipeline.kinematics import _refine_offset_by_angular_velocity, preprocess
 from pipeline.visualization import (
     _add_threshold_lines,
@@ -433,9 +433,10 @@ def _process_subject_panels(subject_name: str, sessions: list, save_dir: Path, n
         df_prewalk = df[df["response_type"] == "PreWalk"].copy()
         df_no_response = df[df["response_type"] == "NoResponse"].copy()
 
-        _export_trials(df_escape, subject_dir / "response", "Escape", "Escape", n_workers)
-        _export_trials(df_prewalk, subject_dir / "prewalk", "PreWalk", "PreWalk", n_workers)
-        _export_trials(df_no_response, subject_dir / "no_response", "NoResponse", "NoResponse", n_workers)
+        # ponytail: inner Pool forbidden inside daemonic worker; serialize rendering here
+        _export_trials(df_escape, subject_dir / "response", "Escape", "Escape", 1)
+        _export_trials(df_prewalk, subject_dir / "prewalk", "PreWalk", "PreWalk", 1)
+        _export_trials(df_no_response, subject_dir / "no_response", "NoResponse", "NoResponse", 1)
 
         return {"subject": subject_name, "status": "success"}
     except Exception as exc:
@@ -454,8 +455,11 @@ def main(argv: list[str] | None = None) -> None:
 
     subjects = scan_and_pair_sessions(input_dir)
     if not subjects:
-        log.error("No valid (events, kinematics) pairs found in %s", input_dir)
-        return
+        raise FileNotFoundError(
+            f"No valid (events, kinematics) CSV pairs found in {input_dir}. "
+            f"Check the path exists and contains *_session_*_events.csv / *_session_*_kinematics.csv files. "
+            f"Note: directories named {{{', '.join(sorted(_EXCLUDED_DIR_NAMES))}}} are skipped."
+        )
 
     log.info("Processing %d subjects with %d workers...", len(subjects), n_workers)
 
