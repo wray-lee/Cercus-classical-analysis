@@ -48,7 +48,6 @@ import pandas as pd
 from cercus.config import get_analysis, get_visualization
 from cercus.visualization._circstats import circ_mean_rad, rayleigh_p, wallraff_test
 from cercus.visualization._core import compute_trajectory_masks
-from pipeline.constants import _get_unified_side
 
 log = logging.getLogger(__name__)
 
@@ -105,7 +104,7 @@ def trial_escape_angles(
     """One row per trial with its animal id and escape/response direction.
 
     The angle convention mirrors :func:`cercus.visualization.polar.plot_population_polar_histogram`
-    (``atan2(traj_x[-1], traj_y[-1])`` after unifying the stimulus side), so the
+    (``atan2(traj_x[-1], traj_y[-1])`` using raw physical coordinates), so the
     pooled mean recovered here is identical to the one drawn in the population
     rose plot.
 
@@ -168,10 +167,6 @@ def trial_escape_angles(
         traj_x, traj_y, *_rest = result
         if traj_x is None or len(traj_x) < 2:
             continue
-
-        # Unify stimulus side so left/right stimuli are pooled about 0°.
-        if _get_unified_side(grp) == "left":
-            traj_x = -traj_x
 
         angle_deg = float(np.degrees(np.arctan2(traj_x[-1], traj_y[-1])))
         rows.append((_animal, _trial, angle_deg))

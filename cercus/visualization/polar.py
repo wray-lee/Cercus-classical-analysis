@@ -19,7 +19,6 @@ from scipy.stats import circmean, gaussian_kde
 from pipeline.constants import (
     COLOR_ESCAPE,
     COLOR_PREWALK,
-    _get_unified_side,
 )
 from cercus.visualization._circstats import (
     rayleigh_p,
@@ -79,10 +78,6 @@ def plot_escape_angle_distribution(
         traj_x, traj_y, *_rest = result
         if traj_x is None or len(traj_x) < 2:
             continue
-
-        ss = _get_unified_side(grp)
-        if ss == "left":
-            traj_x = -traj_x
 
         angle_deg = float(np.degrees(np.arctan2(traj_x[-1], traj_y[-1])))
         angles_by_type[response_type].append(angle_deg)
@@ -203,10 +198,6 @@ def plot_population_polar_histogram(
         traj_x, traj_y, *_rest = result
         if traj_x is None or len(traj_x) < 2:
             continue
-
-        ss = _get_unified_side(grp)
-        if ss == "left":
-            traj_x = -traj_x
 
         angle_rad = float(np.arctan2(traj_x[-1], traj_y[-1]))
         angles_by_type[response_type].append(angle_rad)
@@ -469,10 +460,6 @@ def plot_population_pre_movement_prewalk(
         )
         if traj_x is None or len(traj_x) < 2:
             continue
-
-        ss = _get_unified_side(grp)
-        if ss == "left":
-            traj_x = -traj_x
 
         angle_rad = float(np.arctan2(traj_x[-1], traj_y[-1]))
         pw_angles.append(angle_rad)
