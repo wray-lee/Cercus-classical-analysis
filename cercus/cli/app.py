@@ -32,6 +32,7 @@ def single(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Directory to save SVG figures"),
     control_type: str = typer.Option("baseline_visual_test", "--control-type", help="Control condition type"),
     stim_type: str = typer.Option("looming_wind", "--stim-type", help="Stimulus condition type"),
+    workers: Optional[int] = typer.Option(None, "--workers", help="Number of parallel workers (default: all CPUs)"),
 ) -> None:
     """Single-subject analysis pipeline (equivalent to main.py)."""
     from main import main as run_main
@@ -40,6 +41,8 @@ def single(
         argv.append(f"--control-type={control_type}")
     if stim_type:
         argv.append(f"--stim-type={stim_type}")
+    if workers is not None:
+        argv.append(f"--workers={workers}")
     run_main(argv)
 
 
@@ -48,26 +51,12 @@ def population(
     input: Path = typer.Option(..., "--input", "-i", help="Directory containing session CSV files"),
     output: Path = typer.Option(..., "--output", "-o", help="Directory to save results"),
     workers: Optional[int] = typer.Option(None, "--workers", help="Number of parallel workers (default: all CPUs)"),
-    individual_checks: bool = typer.Option(
-        False, "--individual-checks",
-        help="Also run per-animal robustness checks (second-order Rayleigh, "
-             "leave-one-out, bootstrap) and save suppl figures + individual_summary.csv",
-    ),
-    individual_checks_filter_low_n: bool = typer.Option(
-        False, "--individual-checks-filter-low-n",
-        help="When --individual-checks is set, exclude animals with <3 (second-order) "
-             "or <5 (Wallraff) response trials (default: include all animals with ≥1).",
-    ),
 ) -> None:
     """Population-level analysis (equivalent to population_analysis.py)."""
     from population_analysis import main as run_population
     argv = [f"--input-dir={input}", f"--output={output}"]
     if workers is not None:
         argv.append(f"--workers={workers}")
-    if individual_checks:
-        argv.append("--individual-checks")
-    if individual_checks_filter_low_n:
-        argv.append("--individual-checks-filter-low-n")
     run_population(argv)
 
 
@@ -112,6 +101,18 @@ def trajectories(
     """Generate unified trajectory overlays (equivalent to plot_all_trajectories_fixed.py)."""
     from plot_all_trajectories_fixed import main as run_traj
     run_traj([f"--input-dir={input}", f"--output={output}"])
+
+
+@app.command("multisensory-traj")
+def multisensory_traj(
+    bv: Path = typer.Option(..., "--bv", help="Directory for baseline-visual data"),
+    bw: Path = typer.Option(..., "--bw", help="Directory for baseline-wind data"),
+    ms: Path = typer.Option(..., "--ms", help="Directory for multisensory data"),
+    output: Path = typer.Option(..., "--output", "-o", help="Path to save the output figure"),
+) -> None:
+    """Multisensory trajectory comparison: baselines (−x) vs multisensory (+x)."""
+    from plot_multisensory_trajectories import main as run_ms
+    run_ms([f"--bv={bv}", f"--bw={bw}", f"--ms={ms}", f"--output={output}"])
 
 
 @app.command()

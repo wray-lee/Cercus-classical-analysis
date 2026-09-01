@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from multiprocessing import Pool
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -32,6 +33,17 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 _apply_publication_style()
+
+
+def _process_subject(args: tuple[str, list]) -> pd.DataFrame:
+    """Process one subject. For multiprocessing."""
+    subject_name, sessions = args
+    all_meta, all_windows, all_anchors, all_kin, _ = load_and_concat_sessions(sessions)
+    df = preprocess(all_meta, all_windows, all_anchors, all_kin)
+    df["global_trial_index"] = df["global_trial_id"]
+    df = label_trials(df)
+    df["subject_id"] = subject_name
+    return df
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -78,26 +90,11 @@ def main(argv: list[str] | None = None) -> None:
         log.error("No valid (events, kinematics) pairs found in %s", input_dir)
         return
 
-    # ── Per-subject processing ──
-    population_parts: list[pd.DataFrame] = []
-
-    for subject_name, sessions in subjects.items():
-        log.info("Processing subject: %s", subject_name)
-
-        # 1. Load & timestamp alignment
-        all_meta, all_windows, all_anchors, all_kin, _ = load_and_concat_sessions(sessions)
-        df = preprocess(all_meta, all_windows, all_anchors, all_kin)
-        df["global_trial_index"] = df["global_trial_id"]
-
-        # 2. Ternary state routing
-        df = label_trials(df)
-
-        # 3. Inject subject_id for cross-animal key isolation
-        df["subject_id"] = subject_name
-        population_parts.append(df)
-
-        n_trials = df["global_trial_index"].nunique()
-        log.info("  %s: %d trials classified", subject_name, n_trials)
+    # ── Parallel per-subject processing ──
+    log.info("Processing %d subjects in parallel...", len(subjects))
+    args_list = list(subjects.items())
+    with Pool() as pool:
+        population_parts = pool.map(_process_subject, args_list)
 
     if not population_parts:
         log.error("No data processed.")

@@ -7,6 +7,7 @@ All plot_* functions re-exported at package level.
 
 from cercus.visualization.trajectories import (
     plot_global_trajectory_overlay_fixed,
+    plot_multisensory_trajectory_comparison,
     plot_trajectory_overlay,
 )
 from cercus.visualization.kinetics import (
@@ -56,6 +57,7 @@ from cercus.visualization._circstats import (
 __all__ = [
     "plot_trajectory_overlay",
     "plot_global_trajectory_overlay_fixed",
+    "plot_multisensory_trajectory_comparison",
     "plot_speed_kinetics",
     "plot_population_speed_kinetics",
     "plot_population_spaghetti_kinetics",

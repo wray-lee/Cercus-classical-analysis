@@ -58,6 +58,8 @@ _FALLBACK_VMAX_THRESHOLD = float(_cfg.analysis.vmax_thresholding.fallback_thresh
 _KDE_SEARCH_UPPER = float(_cfg.analysis.vmax_thresholding.kde_search_upper)           # mm/s, upper bound for KDE valley search
 _ENABLE_IQR_GMM = bool(_cfg.analysis.vmax_thresholding.enable_iqr_gmm)               # set True to also compute IQR-GMM as a candidate
 _DRAW_FIXED_THRESHOLDS = bool(_cfg.visualization.draw_fixed_thresholds)              # set False to hide start/vmax reference lines on vmax plots
+_INDIVIDUAL_CHECKS = True          # ponytail: hardcoded, flip here if needed
+_INDIVIDUAL_CHECKS_FILTER_LOW_N = False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -85,17 +87,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output", required=True,
         help="Directory for all output files (CSV + figures). Created if it doesn't exist.",
-    )
-    p.add_argument(
-        "--individual-checks", action="store_true",
-        help="Also run per-animal robustness checks (second-order Rayleigh, "
-             "leave-one-animal-out, animal-level bootstrap) and save supplementary "
-             "figures (figures/suppl_*.png) plus individual_summary.csv.",
-    )
-    p.add_argument(
-        "--individual-checks-filter-low-n", action="store_true",
-        help="When --individual-checks is set, exclude animals with <3 (second-order) "
-             "or <5 (Wallraff) response trials (default: include all with ≥1).",
     )
     p.add_argument(
         "--workers", type=int, default=None,
@@ -534,12 +525,11 @@ def main(argv: list[str] | None = None) -> None:
             pool.map(_render_and_save, plot_jobs)
 
     # ── Individual-level robustness checks (pseudo-replication guard) ──
-    if args.individual_checks:
+    if _INDIVIDUAL_CHECKS:
         from cercus.analysis.individual import run_individual_checks
 
-        log.info("Running per-animal robustness checks (--individual-checks)...")
-        filter_low_n = getattr(args, "individual_checks_filter_low_n", False)
-        run_individual_checks(all_data, output_dir, filter_low_n=filter_low_n)
+        log.info("Running per-animal robustness checks...")
+        run_individual_checks(all_data, output_dir, filter_low_n=_INDIVIDUAL_CHECKS_FILTER_LOW_N)
 
     log.info("Figures saved to %s/: habituation.svg, vmax_moving_gmm.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg, pre_movement_prewalk.svg", pop_dir.name)
     log.info("Heatmaps saved to %s/heatmap/ and %s/heatmap/full_trial/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name, pop_dir.name)
