@@ -87,11 +87,11 @@ def main(argv: list[str] | None = None) -> None:
         if not d.is_dir():
             raise FileNotFoundError(f"--{label} does not exist: {d}")
 
-    # Parallel load: bv, bw, ms
-    log.info("Loading 3 datasets in parallel...")
-    loader = partial(_load_dir, escape_only=escape_only)
-    with Pool(processes=3) as pool:
-        df_bv, df_bw, df_ms = pool.map(loader, [bv_dir, bw_dir, ms_dir])
+    # Sequential outer load (inner per-subject pool handles parallelism)
+    log.info("Loading 3 datasets...")
+    df_bv = _load_dir(bv_dir, escape_only=escape_only)
+    df_bw = _load_dir(bw_dir, escape_only=escape_only)
+    df_ms = _load_dir(ms_dir, escape_only=escape_only)
 
     fig = plot_multisensory_trajectory_comparison(df_bv, df_bw, df_ms)
 

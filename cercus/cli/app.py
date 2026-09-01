@@ -36,7 +36,9 @@ def single(
 ) -> None:
     """Single-subject analysis pipeline (equivalent to main.py)."""
     from main import main as run_main
-    argv = [f"--input-dir={input}", f"--output={output}"]
+    argv = [f"--input-dir={input}"]
+    if output is not None:
+        argv.append(f"--output={output}")
     if control_type:
         argv.append(f"--control-type={control_type}")
     if stim_type:
