@@ -39,9 +39,10 @@ trajectory:
   dz_integration_range: "peak_bracket"
   use_rigid_rotation: true
   ring_angle_offset_deg: 0  # ring -12.6 ponytail: 0 = legacy no-op; a *positive* value rotates body (dx,dy) CCW (arena trajectory CW). Set to calibrate_offset.py delta (e.g. -13.8 from Data/bw, 402 escapes, pooled) — rotates body CCW 13.8° → fixes wind-only left/right asymmetry; applies to wind trials only.
+  # python -m cercus.cli.app calibrate --input
   ring_angle_offset_targets:   # Array of modules to apply offset: ["trajectory"], ["polar"], ["individual"]
     - "trajectory"
-  wind_angle_offset_deg: 0  # multisensory-traj only — corrects wind baseline trajectories before mirroring
+  wind_angle_offset_deg: -12.6  # multisensory-traj only — corrects wind baseline trajectories before mirroring
 
 # ── Trajectory Rendering — baseline_visual ─────────────────────────
 # trajectory:

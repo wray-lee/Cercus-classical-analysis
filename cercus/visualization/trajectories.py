@@ -129,37 +129,46 @@ def plot_multisensory_trajectory_comparison(
             count += 1
         return count
 
-    n_bv = _plot_dataset(df_bv, bv_color, mirror_to_neg=True)
-    n_bw = _plot_dataset(df_bw, bw_color, mirror_to_neg=True, _wind_offset=wind_offset_deg)
-    n_ms = _plot_dataset(df_ms, ms_color, mirror_to_neg=False)
+    n_bv = _plot_dataset(df_bv, bv_color, mirror_to_neg=False)
+    n_bw = _plot_dataset(df_bw, bw_color, mirror_to_neg=False, _wind_offset=wind_offset_deg)
+    n_ms = _plot_dataset(df_ms, ms_color, mirror_to_neg=True)
 
-    draw_standardized_grid(
-        ax, max_radius=TRAJECTORY_MAX_RADIUS_MM, step=TRAJECTORY_STEP_MM
+    draw_standardized_grid(ax, max_radius=200.0, step=20.0)
+
+    # ── Half-region tinted backgrounds (zorder=0 so trajectories draw on top) ──
+    from matplotlib.patches import FancyBboxPatch
+    import matplotlib.colors as mcolors
+
+    # Baseline half (left, x < 0): light grey tint
+    ax.axvspan(-200, 0, color="0.85", alpha=0.15, zorder=0)
+    # Multisensory half (right, x > 0): light green tint
+    ax.axvspan(0, 200, color=ms_color, alpha=0.08, zorder=0)
+
+    # ── Section labels inside the tinted halves (top corner) ──
+    ax.text(
+        -100, 195, "Baseline",
+        ha="center", va="top",
+        fontsize=9, fontweight="bold", color="0.35",
+    )
+    ax.text(
+        100, 195, "Multisensory",
+        ha="center", va="top",
+        fontsize=9, fontweight="bold", color=ms_color,
     )
 
-    # Legend: simple color patches
+    # ── Legend outside axes (below) ──
     from matplotlib.lines import Line2D
     handles = [
         Line2D([0], [0], color=bv_color, lw=1.5, label=f"Baseline Visual (n={n_bv})"),
         Line2D([0], [0], color=bw_color, lw=1.5, label=f"Baseline Wind (n={n_bw})"),
         Line2D([0], [0], color=ms_color, lw=1.5, label=f"Multisensory (n={n_ms})"),
     ]
-    ax.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.8)
-
-    # Side labels
-    ax.text(
-        0.08, 0.5, "← Baselines",
-        transform=ax.transAxes, ha="center", va="center",
-        fontsize=8, color="0.4", rotation=90,
-    )
-    ax.text(
-        0.92, 0.5, "Multisensory →",
-        transform=ax.transAxes, ha="center", va="center",
-        fontsize=8, color=ms_color, rotation=-90,
+    ax.legend(
+        handles=handles, loc="upper center",
+        bbox_to_anchor=(0.5, -0.02), ncol=3, fontsize=7, framealpha=0.8,
     )
 
-    ax.set_title("Multisensory Trajectory Comparison", fontweight="bold")
-    fig.tight_layout(pad=1.0)
+    fig.tight_layout(pad=1.5)
     return fig
 
 
