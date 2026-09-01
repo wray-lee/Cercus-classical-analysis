@@ -240,8 +240,15 @@ def compute_trajectory_masks(
     dz_integration_range: str = DZ_INTEGRATION_RANGE,
     radius_mm: float = RADIUS_MM,
     context: str = "trajectory",
+    wind_offset_deg_override: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, float, np.ndarray | None] | None:
     """Compute trajectory masks and call body_to_traj for one trial group.
+
+    Parameters
+    ----------
+    wind_offset_deg_override : float | None
+        If not None, passed through to body_to_traj to bypass config-based
+        ring_angle_offset_deg (e.g. multisensory-traj wind baseline correction).
 
     Returns (traj_x, traj_y, mask_xy, mask_z, heading_offset, macro_yaw_override)
     or None if the trial has no valid trajectory.
@@ -342,6 +349,7 @@ def compute_trajectory_masks(
         macro_yaw_override=_macro_yaw_override,
         heading_offset=_heading_offset,
         context=context,
+        wind_offset_deg_override=wind_offset_deg_override,
     )
     return traj_x, traj_y, mask_xy, mask_z, _heading_offset, _macro_yaw_override
 

@@ -159,7 +159,7 @@ def integrate_body_trajectory(
         Frame indices for heading interpolation when arrays have different lengths.
     wind_offset_deg : float | None
         Global wind ring angle offset in degrees. ``None`` → read from
-        ``pipeline.constants.WIND_ANGLE_OFFSET_DEG`` (yaml ``trajectory.wind_angle_offset_deg``).
+        ``pipeline.constants.RING_ANGLE_OFFSET_DEG`` (yaml ``trajectory.ring_angle_offset_deg``).
         Positive rotates body (dx,dy) CCW so the arena trajectory rotates CW by delta,
         fixing left/right wind imbalance without touching file format.
     """
@@ -171,7 +171,7 @@ def integrate_body_trajectory(
     # non-finite rejected (NaN would silently produce empty plots).
     if wind_offset_deg is None:
         try:
-            from pipeline.constants import WIND_ANGLE_OFFSET_DEG as _cfg_off
+            from pipeline.constants import RING_ANGLE_OFFSET_DEG as _cfg_off
         except Exception:
             _cfg_off = 0.0  # type: ignore[assignment]
         wind_offset_deg = float(_cfg_off)
@@ -283,7 +283,7 @@ def build_angular_peak_dz_mask(
 def _is_wind_trial(grp: pd.DataFrame) -> bool | None:
     """True for wind trials, False for clearly visual/other, None if unknown.
 
-    Used to decide whether the global ``wind_angle_offset_deg`` ring rotation
+    Used to decide whether the global ``ring_angle_offset_deg`` ring rotation
     should apply: the offset models a physical wind-nozzle misalignment and must
     rotate only wind trials, never visual/looming ones.
     """
@@ -311,11 +311,18 @@ def body_to_traj(
     macro_yaw_override: float | None = None,
     heading_offset: float = 0.0,
     context: str = "trajectory",
+    wind_offset_deg_override: float | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """DataFrame wrapper around integrate_body_trajectory.
 
     Extracts body-frame dx/dy/dz from *grp* using boolean masks, then
     delegates to the shared integration core.
+
+    Parameters
+    ----------
+    wind_offset_deg_override : float | None
+        If not None, bypass the config-based ring_angle_offset_deg and use
+        this value directly (e.g. multisensory-traj wind baseline correction).
     """
     if mask_z is None:
         mask_z = mask_xy
@@ -335,16 +342,24 @@ def body_to_traj(
     src_idx = np.flatnonzero(_src) if _hd_len != len(burst_dx) else None
     dst_idx = np.flatnonzero(mask_xy) if _hd_len != len(burst_dx) else None
 
-    # ponytail: check if this context is in wind_angle_offset_targets (e.g. ["trajectory"])
+    # ponytail: check if this context is in ring_angle_offset_targets (e.g. ["trajectory"])
     try:
-        from pipeline.constants import WIND_ANGLE_OFFSET_TARGETS
+        from pipeline.constants import RING_ANGLE_OFFSET_TARGETS
         _in_scope = bool(
-            context.lower() in WIND_ANGLE_OFFSET_TARGETS
-            or "all" in WIND_ANGLE_OFFSET_TARGETS
-            or "*" in WIND_ANGLE_OFFSET_TARGETS
+            context.lower() in RING_ANGLE_OFFSET_TARGETS
+            or "all" in RING_ANGLE_OFFSET_TARGETS
+            or "*" in RING_ANGLE_OFFSET_TARGETS
         )
     except Exception:
         _in_scope = True
+
+    # Determine wind offset: explicit override > config-based ring offset
+    if wind_offset_deg_override is not None:
+        # Caller explicitly set a value (e.g. multisensory-traj wind correction)
+        _effective_offset = wind_offset_deg_override if _is_wind_trial(grp) is True else 0.0
+    else:
+        # Default: use ring_angle_offset_deg from config, scoped by context
+        _effective_offset = None if (_in_scope and _is_wind_trial(grp) is True) else 0.0
 
     return integrate_body_trajectory(
         burst_dx, burst_dy, burst_dz,
@@ -354,6 +369,5 @@ def body_to_traj(
         heading_dz=heading_dz,
         heading_offset=heading_offset,
         src_idx=src_idx, dst_idx=dst_idx,
-        # ponytail: wind ring offset applies ONLY to wind trials when context is in targets
-        wind_offset_deg=(None if (_in_scope and _is_wind_trial(grp) is True) else 0.0),
+        wind_offset_deg=_effective_offset,
     )

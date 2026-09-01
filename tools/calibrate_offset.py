@@ -647,7 +647,8 @@ def main(argv=None):
     print()
     print("To apply this offset in config.yaml, set:")
     print("  trajectory:")
-    print(f"    wind_angle_offset_deg: {round(-gdelta, 1):+g}")
+    print(f"    ring_angle_offset_deg: {round(-gdelta, 1):+g}   # global pipeline")
+    print(f"    wind_angle_offset_deg: {round(-gdelta, 1):+g}  # multisensory-traj only")
     print("=" * 68)
     for st in report_groups:
         print(f"  {st['group']}: n={st['n_trials']:2d} "

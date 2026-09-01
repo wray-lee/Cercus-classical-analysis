@@ -22,12 +22,14 @@ trajectory:
   use_angular_velocity_offset: false
   dz_integration_range: "escape_angular_peak"
   use_rigid_rotation: true
-  wind_angle_offset_deg: 0.0
-  # wind_angle_offset_deg: -13.8  # ring rotation correcting wind-nozzle offset. Sign: a *positive* value rotates body (dx,dy) CCW = arena trajectory CW by that angle. So calibrated -13.8 rotates body CCW 13.8°, arena CW 13.8°, centering left/right mean errors around -18°. ponytail: -13.8 = pooled global delta from Data/bw (tools/calibrate_offset.py, 402 escapes) fixing wind-only Unified Overlay n=504 left/right asymmetry; 0 preserves legacy
-  wind_angle_offset_targets:
+  ring_angle_offset_deg: 0.0
+  # ring_angle_offset_deg: -13.8  # ring rotation correcting wind-nozzle offset. Sign: a *positive* value rotates body (dx,dy) CCW = arena trajectory CW by that angle. So calibrated -13.8 rotates body CCW 13.8°, arena CW 13.8°, centering left/right mean errors around -18°. ponytail: -13.8 = pooled global delta from Data/bw (tools/calibrate_offset.py, 402 escapes) fixing wind-only Unified Overlay n=504 left/right asymmetry; 0 preserves legacy
+  ring_angle_offset_targets:
     - "trajectory"  # visual trajectory plots (overlays, trial panels)
     # - "polar"     # polar direction histograms and escape angle distributions
     # - "individual"# per-animal robustness checks (Rayleigh, Wallraff, LOO, bootstrap)
+  wind_angle_offset_deg: 0.0
+  # wind_angle_offset_deg: multisensory-traj only — corrects wind baseline trajectories before mirroring
 
 
 # trajectory:

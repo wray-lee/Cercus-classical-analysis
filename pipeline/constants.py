@@ -94,16 +94,27 @@ TRAJ_USE_ESCAPE_ONSET_ONLY_XY: bool = bool(_traj_cfg.get("use_escape_onset_only_
 TRAJ_USE_ANGULAR_VELOCITY_OFFSET: bool = bool(_traj_cfg.get("use_angular_velocity_offset", False))
 # ponytail: global ring-angle delta fixing wind nozzle offset; 0 is legacy, non-zero rotates (dx,dy) CCW by delta (arena CW)
 try:
-    _wind_off = float(_traj_cfg.get("wind_angle_offset_deg", 0.0))
+    _ring_off = float(_traj_cfg.get("ring_angle_offset_deg", _traj_cfg.get("wind_angle_offset_deg", 0.0)))
 except Exception:
-    _wind_off = 0.0
-WIND_ANGLE_OFFSET_DEG: float = _wind_off
+    _ring_off = 0.0
+RING_ANGLE_OFFSET_DEG: float = _ring_off
+# ponytail: backward compat alias — old code importing WIND_ANGLE_OFFSET_DEG keeps working
+WIND_ANGLE_OFFSET_DEG: float = _ring_off
 
-# ponytail: array controlling which analysis modules apply wind angle correction (e.g. ["trajectory"], ["polar"], ["individual"])
-_raw_targets = _traj_cfg.get("wind_angle_offset_targets", ["trajectory", "polar", "individual"])
+# ponytail: multisensory-traj-only wind baseline correction
+try:
+    _ms_wind_off = float(_traj_cfg.get("wind_angle_offset_deg", 0.0))
+except Exception:
+    _ms_wind_off = 0.0
+MS_WIND_ANGLE_OFFSET_DEG: float = _ms_wind_off
+
+# ponytail: array controlling which analysis modules apply ring angle correction (e.g. ["trajectory"], ["polar"], ["individual"])
+_raw_targets = _traj_cfg.get("ring_angle_offset_targets", _traj_cfg.get("wind_angle_offset_targets", ["trajectory", "polar", "individual"]))
 if isinstance(_raw_targets, str):
     _raw_targets = [_raw_targets]
-WIND_ANGLE_OFFSET_TARGETS: set[str] = {str(t).strip().lower() for t in _raw_targets}
+RING_ANGLE_OFFSET_TARGETS: set[str] = {str(t).strip().lower() for t in _raw_targets}
+# ponytail: backward compat alias
+WIND_ANGLE_OFFSET_TARGETS: set[str] = RING_ANGLE_OFFSET_TARGETS
 
 _DZ_RANGE_VALID = {"full_trial", "escape_interval", "trial_to_onset", "escape_angular_peak", "escape_onset_heading", "peak_bracket"}
 DZ_INTEGRATION_RANGE: str = _traj_cfg.get("dz_integration_range", "escape_interval")

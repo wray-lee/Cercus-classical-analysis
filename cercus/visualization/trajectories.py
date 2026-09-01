@@ -16,6 +16,7 @@ from pipeline.constants import (
     COLOR_LEFT,
     COLOR_RIGHT,
     DZ_INTEGRATION_RANGE,
+    MS_WIND_ANGLE_OFFSET_DEG,
     TRAJECTORY_MAX_RADIUS_MM,
     TRAJECTORY_STEP_MM,
     TRAJ_USE_ESCAPE_ONSET_HEADING,
@@ -50,6 +51,7 @@ def plot_multisensory_trajectory_comparison(
     USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
     USE_ESCAPE_ONSET_ONLY_XY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
     dz_integration_range: str = DZ_INTEGRATION_RANGE,
+    wind_offset_deg: float = MS_WIND_ANGLE_OFFSET_DEG,
 ) -> plt.Figure:
     """Multisensory comparison: baselines mirrored to −x, multisensory to +x.
 
@@ -58,14 +60,21 @@ def plot_multisensory_trajectory_comparison(
     df_bv : baseline-visual trials
     df_bw : baseline-wind trials
     df_ms : multisensory trials
+    wind_offset_deg : wind baseline correction angle (from config.yaml
+        trajectory.wind_angle_offset_deg). Applied to wind trials in df_bw
+        before mirroring.
     """
     fig, ax = plt.subplots(figsize=figsize)
 
-    def _plot_dataset(df: pd.DataFrame, color: str, mirror_to_neg: bool) -> int:
+    def _plot_dataset(
+        df: pd.DataFrame, color: str, mirror_to_neg: bool,
+        _wind_offset: float | None = None,
+    ) -> int:
         """Plot all trials in *df*. Returns count drawn.
 
         mirror_to_neg=True  → all trajectories end up on −x side
         mirror_to_neg=False → all trajectories end up on +x side
+        _wind_offset: if not None, override wind angle correction for this dataset
         """
         group_cols = (
             ["subject_id", "global_trial_id"]
@@ -94,6 +103,7 @@ def plot_multisensory_trajectory_comparison(
                 use_z_degree=USE_Z_DEGREE_TO_DRAW_TRAJECTORY,
                 use_rigid_rotation=USE_RIGID_ROTATION,
                 dz_integration_range=dz_integration_range,
+                wind_offset_deg_override=_wind_offset,
             )
             if result is None:
                 continue
@@ -120,7 +130,7 @@ def plot_multisensory_trajectory_comparison(
         return count
 
     n_bv = _plot_dataset(df_bv, bv_color, mirror_to_neg=True)
-    n_bw = _plot_dataset(df_bw, bw_color, mirror_to_neg=True)
+    n_bw = _plot_dataset(df_bw, bw_color, mirror_to_neg=True, _wind_offset=wind_offset_deg)
     n_ms = _plot_dataset(df_ms, ms_color, mirror_to_neg=False)
 
     draw_standardized_grid(
