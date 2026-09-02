@@ -8,7 +8,7 @@ pymc
 arviz
 numpyro
 lifelines
-jax
+jax[cuda13]
 jaxlib
 typer
 pydantic
