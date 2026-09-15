@@ -12,6 +12,7 @@ import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 import pandas as pd
 
@@ -21,6 +22,7 @@ from pipeline.constants import (
     COLOR_PREWALK,
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
+    PREWALK_WINDOW_MS,
 )
 from cercus.config import get_geometry
 
@@ -316,6 +318,45 @@ def plot_spaghetti_kinetics_heatmap(
     return fig
 
 
+def _flag_trial(
+    cond: str,
+    align: str,
+    n_types: int,
+    t_trial: np.ndarray,
+    s_trial: np.ndarray,
+    grp_sorted: pd.DataFrame,
+) -> dict | None:
+    """Per-trial PreWalk-window metadata for onset-aligned heatmaps.
+
+    Returns the classifier's *actual* PreWalk window in onset-aligned seconds
+    plus a ``prewind`` flag: escape onset earlier than wind onset, i.e. the
+    burst was triggered by vision alone before the wind arrived.  Only then is
+    the wind-anchored classifier window shifted right of the white onset line —
+    the case that reads as a misclassification without this annotation.
+    """
+    if align != "onset" or cond not in ("PreWalk", "Escape"):
+        return None
+    if n_types >= 4 and "wind" not in str(grp_sorted["type"].iloc[0]).lower():
+        return None
+    onset = grp_sorted["interval_onset_ms"].iloc[0]
+    if np.isnan(onset):
+        return None
+    wind = (
+        grp_sorted["target_ttc_ms"].iloc[0]
+        if "target_ttc_ms" in grp_sorted.columns
+        else np.nan
+    )
+    if pd.notna(wind):
+        lo = (wind - PREWALK_WINDOW_MS - onset) / 1000.0
+        hi = (wind - 50.0 - onset) / 1000.0
+        prewind = bool(onset < wind)
+    else:
+        lo, hi, prewind = -PREWALK_WINDOW_MS / 1000.0, -50.0 / 1000.0, False
+    m = (t_trial >= lo) & (t_trial < hi)
+    mean_in = float(np.nanmean(s_trial[m])) if m.any() else 0.0
+    return {"lo": lo, "hi": hi, "prewind": prewind, "mean_in": mean_in}
+
+
 def plot_trial_stacked_heatmap(
     df: pd.DataFrame,
     align: str = "ttc",
@@ -384,7 +425,7 @@ def plot_trial_stacked_heatmap(
             ax.set_title(cond, fontweight="bold")
             continue
 
-        trial_rows: list[tuple[float, np.ndarray]] = []
+        trial_rows: list[tuple[float, np.ndarray, dict | None]] = []
         for (_subj, _tid), grp in subset.groupby(
             ["subject_id", "global_trial_id"]
         ):
@@ -408,16 +449,22 @@ def plot_trial_stacked_heatmap(
             latency = (
                 float(t_common[above].min()) if above.any() else float("inf")
             )
-            trial_rows.append((latency, s_interp))
+            trial_rows.append((latency, s_interp, _flag_trial(
+                cond, align, n_types, t_trial, s_trial, grp_sorted,
+            )))
 
         if not trial_rows:
             ax.set_title(cond, fontweight="bold")
             continue
 
         if align == "onset" and cond == "PreWalk":
-            pre_mask = (t_common >= -1.0) & (t_common < 0)
+            # pre-wind escapes grouped at the bright edge, then by speed inside
+            # the *actual* (wind-anchored) classifier window
             trial_rows.sort(
-                key=lambda x: float(np.nanmean(x[1][pre_mask])) if np.any(pre_mask) else 0.0,
+                key=lambda x: (
+                    x[2]["prewind"] if x[2] else False,
+                    x[2]["mean_in"] if x[2] else 0.0,
+                ),
                 reverse=True,
             )
         else:
@@ -440,10 +487,37 @@ def plot_trial_stacked_heatmap(
         )
 
         ax.axvline(0, color="white", ls="--", lw=1.2, alpha=0.7)
-        # Mark prewalk classification window
-        if align == "onset":
-            ax.axvspan(-1.0, 0, color="white", alpha=0.06, zorder=0)
-            ax.axvline(-1.0, color="white", ls=":", lw=0.8, alpha=0.5, zorder=7)
+        # Per-trial: draw the classifier's ACTUAL PreWalk window (wind-anchored,
+        # converted to onset-aligned seconds) as a box on that trial's row.
+        # Gold + star = pre-wind escape (burst started before the stimulus).
+        for i, (_lat, _row, flag) in enumerate(trial_rows):
+            if flag is None:
+                continue
+            y = i + 0.5
+            if flag["prewind"]:
+                ax.add_patch(
+                    Rectangle(
+                        (flag["lo"], i), flag["hi"] - flag["lo"], 1.0,
+                        facecolor="gold", alpha=0.22, edgecolor="gold",
+                        lw=0.8, zorder=6,
+                    )
+                )
+                ax.plot(
+                    t_common[0] + 0.02, y, marker="*", ms=4, color="gold",
+                    zorder=7, clip_on=False,
+                )
+            else:
+                ax.plot(
+                    [flag["lo"], flag["hi"]], [y, y], color="white",
+                    lw=0.9, alpha=0.55, solid_capstyle="butt", zorder=6,
+                )
+        if align == "onset" and any(r[2] for r in trial_rows):
+            ax.text(
+                0.02, 0.02, "gold box/★ = pre-wind escape · white tick = classifier window",
+                transform=ax.transAxes, ha="left", va="bottom", fontsize=5,
+                color="white", alpha=0.85,
+                path_effects=[path_effects.withStroke(linewidth=1.5, foreground="black")],
+            )
 
         ax.set_title(cond, fontweight="bold", fontsize=9)
         if orientation == "vertical":
