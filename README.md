@@ -229,6 +229,18 @@ Publication-grade plotting (Nature/Science/Cell style), split into focused modul
 - `plot_spaghetti_kinetics_heatmap()` — **Onset-aligned heatmap** (re-aligns time to `interval_onset_ms=0`, uses trial density instead of alpha lines to avoid overplotting)
 - `plot_population_polar_histogram()` — 360° polar rose with circular mean μ, resultant R, and **Rayleigh test p-value** for non-uniformity
 
+#### Circular-Stat Tests on Polar Figures (`cercus/visualization/_circstats.py`)
+
+Angles are circular data — linear tests don't apply. The three tests answer three orthogonal questions and are the backbone of the first-level (population) directional analysis:
+
+| Test | Question | Null hypothesis | Where |
+|---|---|---|---|
+| **Rayleigh** (`rayleigh_p`) | Is there a preferred direction at all? | Directions uniformly distributed on the circle (R too small for n) | per-panel annotation in `polar.py`; per-subject in `individual.py` |
+| **Watson-Williams** (`watson_williams_test`) | Do two groups point the *same way*? | Equal mean angles across groups (circular ANOVA; requires grouping R̄ ≥ 0.45, else a correction is needed) | Escape vs PreWalk comparison in `polar.py` |
+| **Wallraff** (`wallraff_test`) | Do two groups *scatter* the same much? | Equal angular dispersion around (common) reference — consistency, not direction | Escape vs PreWalk in `polar.py`; cross-condition consistency in `individual.py` |
+
+Mnemonic: **Rayleigh = "is there a direction", Watson-Williams = "same direction?", Wallraff = "equally tight?"**
+
 ### `population_analysis.py`
 
 Cross-subject batch processor. Scans an input directory, runs the full preprocess → classify pipeline on every subject in parallel, and outputs unified summary CSV plus population-level visualizations.
