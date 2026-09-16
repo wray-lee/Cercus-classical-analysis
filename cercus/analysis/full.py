@@ -25,8 +25,8 @@ from pipeline.kinematics import preprocess
 
 log = logging.getLogger(__name__)
 
-# 排除目录：复用 io 的垃圾目录名单 + full 自身的输出目录约定
-_EXCLUDE_EXTRA = {"full", "output", "figures"}
+# 排除目录：pipeline 输出 / 测试残留 / full 自身的输出目录约定
+_EXCLUDE_EXTRA = {"full", "output", "figures", "results", "test", "train"}
 
 
 def _paradigm_sort_key(name: str) -> tuple[int, float, str]:

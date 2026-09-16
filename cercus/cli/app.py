@@ -136,5 +136,47 @@ def calibrate(
     run_cali(argv)
 
 
+@app.command()
+def full(
+    input: Path = typer.Option(..., "--input", "-i", help="Parent directory; each subdirectory = one paradigm"),
+    output: Path = typer.Option(..., "--output", "-o", help="Directory to save full_summary.csv + full_meta.json + figures"),
+    workers: Optional[int] = typer.Option(None, "--workers", help="Number of parallel workers (default: all CPUs)"),
+) -> None:
+    """Cross-paradigm (full) mode: global V_max threshold + lab-convention dumbbell figure."""
+    import json
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from cercus.analysis.full import aggregate_paradigm_table
+    from cercus.visualization.paradigm import plot_paradigm_dumbbell
+
+    df, meta = aggregate_paradigm_table(input, workers=workers)
+    output.mkdir(parents=True, exist_ok=True)
+
+    trial_cols = [
+        "paradigm", "subject_id", "global_trial_index", "response_type",
+        "v_max", "latency_ms", "interval_onset_ms", "interval_offset_ms",
+        "reaction_time_ms", "distance_mm", "distance_500ms_mm", "is_valid_escape",
+    ]
+    trial = (
+        df.groupby(["paradigm", "subject_id", "global_trial_index"])
+        .agg({c: "first" for c in trial_cols[3:]})
+        .reset_index()
+    )
+    trial.to_csv(output / "full_summary.csv", index=False)
+    (output / "full_meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+
+    fig = plot_paradigm_dumbbell(df)
+    out = output / "paradigm_dumbbell.svg"
+    if out.exists():
+        out.unlink()  # Windows OSError 22 workaround (same as _safe_savefig)
+    fig.savefig(out, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    log.info("Full mode done: %d paradigms, threshold=%.1f mm/s [%s] → %s",
+             len(meta["paradigms"]), meta["vmax_threshold"], meta["vmax_method"], output)
+
+
 if __name__ == "__main__":
     app()

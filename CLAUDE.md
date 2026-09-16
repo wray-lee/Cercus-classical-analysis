@@ -26,6 +26,7 @@ wsl -e zsh -i -c "source ~/.zshrc && openconda && conda activate torch && <pytho
 | `cercus.cli.app mcmc` | `mcmc_analysis.py` |
 | `cercus.cli.app trial-panels` | `plot_trial_panels.py` |
 | `cercus.cli.app trajectories` | `plot_all_trajectories_fixed.py` |
+| `cercus.cli.app full` | —（跨范式模式：输入=范式父目录，全局 V_max 阈值 + `paradigm_dumbbell.svg`）|
 
 Example:
 ```

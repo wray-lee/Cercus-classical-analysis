@@ -77,7 +77,8 @@ def plot_paradigm_dumbbell(
             vals = subj.loc[subj["paradigm"] == p, col].dropna().values
             if len(vals) == 0:
                 continue
-            mean, sd = float(np.mean(vals)), float(np.std(vals, ddof=1))
+            mean = float(np.mean(vals))
+            sd = float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
             c = colors[p]
             # 个体点（微横向 jitter 防重叠）→ 竖线 → 均值黑方块 ± SD
             ax.scatter(

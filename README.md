@@ -83,9 +83,12 @@ python mcmc_analysis.py --input-dir path/to/data/ --output results/
 | `python -m cercus.cli.app mcmc --input <dir> --output <dir>` | Bayesian MCMC analysis | `mcmc_analysis.py` |
 | `python -m cercus.cli.app trial-panels --input <dir> --output <dir> [--workers N]` | Per-trial composite panels (parallel) | `plot_trial_panels.py` |
 | `python -m cercus.cli.app trajectories --input <dir> --output <dir>` | Unified trajectory overlay | `plot_all_trajectories_fixed.py` |
+| `python -m cercus.cli.app full --input <parent-dir> --output <dir> [--workers N]` | Cross-paradigm (full) mode: global V_max threshold + dumbbell figure | — |
 | `python -m cercus.cli.app calibrate --input <dir>` | Estimate airflow stimulus angle offset | `tools/calibrate_offset.py` |
 
 **Performance Note**: The `population` and `trial-panels` commands use multiprocessing to parallelize subject processing and visualization rendering. Use `--workers N` to control concurrency (default: all CPU cores). Single-threaded fallback: `--workers 1`.
+
+**Full mode**: `--input` points at the *parent* directory whose subdirectories are the paradigms (e.g. `-373 30°`, `bv`). Each paradigm must contain paired `{subject}_session_{N}_{events,kinematics}.csv` files; empty/invalid directories are skipped with a warning. `Results/Test/train` (and `full/output/figures`) are excluded. The adaptive V_max threshold is computed **once on the pooled trials of all paradigms** and applied uniformly, keeping escape-probability comparisons across paradigms on a single scale. Outputs: `full_summary.csv` (trial-level, with `paradigm` + `is_valid_escape`), `full_meta.json` (threshold/method/paradigm order), and `paradigm_dumbbell.svg` — 3 panels (escape probability / stimulus-anchored RT / escape distance), where each dot is one animal's mean, the black square is the paradigm mean ± SD, and dots connect to the square by vertical lines (lab convention, cf. Frontiers fphys.2023.1153913 Fig 2). Paradigms are between-subject, so no cross-paradigm lines are drawn.
 
 ### Import Paths
 
