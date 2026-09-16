@@ -162,7 +162,8 @@ def plot_trial_panel(
         )
 
     if "stim_state" in trial.columns and trial["stim_state"].max() > 0:
-        stim = trial["stim_state"].values.astype(float)
+        # 二值钳制：单帧硬件毛刺值会撑爆 fill 高度（同 _core.draw_oscilloscope_channels）
+        stim = np.clip(trial["stim_state"].values.astype(float), 0.0, 1.0)
         dt_last = t[-1] - t[-2] if len(t) > 1 else 1.0
         t_ext = np.append(t, t[-1] + dt_last)
         stim_ext = np.append(stim, stim[-1])

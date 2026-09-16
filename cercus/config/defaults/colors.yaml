@@ -18,6 +18,9 @@ control: "#7C878E"
 osci_vis: "#ADB6B6"
 osci_hw: "#E69F00"
 
+# Wind-onset figure primitive (heatmap marks) — NPG sky blue, high contrast on inferno/magma
+wind_mark: "#56B4E9"
+
 # Stillness condition colors
 with_stillness: "#00468B"
 no_stillness: "#5B6770"

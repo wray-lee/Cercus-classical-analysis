@@ -36,7 +36,7 @@
 
 - 回滚 13e1210 的金色框 / 白色刻度 / ★ / 图例（PreEscape 成类后不再需要逐行分类窗解释）。
 - 保留 PreWalk 排序改进但改用 `response_type`（PreEscape 自己成面板）。
-- **wind onset 标识**：TTC 对齐面板 = 整根竖线（同面板内 `target_ttc_ms` 恒定）；onset 对齐面板 = 每行青色小刻度。
+- **wind onset 标识**：TTC 对齐面板 = 整根竖线（同面板内 `target_ttc_ms` 恒定）；onset 对齐面板 = 每行天蓝刻度（`colors.yaml wind_mark`）。
 
 ## 硬规矩（事实）
 

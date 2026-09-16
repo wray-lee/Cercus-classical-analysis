@@ -202,7 +202,8 @@ def draw_oscilloscope_channels(ax: plt.Axes, df: pd.DataFrame, cond: str) -> Non
             or grp["stim_state"].max() > 0
         ):
             t_wind = grp["t_rel"].values
-            stim = grp["stim_state"].values.astype(float)
+            # 单帧硬件毛刺（如 stim_state=72/967）会把 fill 高度撑爆产生伪边线 → 二值钳制
+            stim = np.clip(grp["stim_state"].values.astype(float), 0.0, 1.0)
             dt_last = t_wind[-1] - t_wind[-2] if len(t_wind) > 1 else 1.0
             t_wind_ext = np.append(t_wind, t_wind[-1] + dt_last)
             stim_ext = np.append(stim, stim[-1])

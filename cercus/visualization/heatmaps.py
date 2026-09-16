@@ -20,10 +20,10 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
     PREWALK_WINDOW_MS,
 )
-from cercus.config import get_geometry
+from cercus.config import get_colors, get_geometry
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
-_WIND_COLOR = "cyan"  # 风到达标识色（非行为类配色，纯图元）
+_WIND_COLOR = str(get_colors().wind_mark)  # 风到达标识色（NPG sky blue，非行为类配色，纯图元）
 
 log = logging.getLogger(__name__)
 
@@ -453,20 +453,21 @@ def plot_trial_stacked_heatmap(
         ax.axvline(0, color="white", ls="--", lw=1.2, alpha=0.7)
         # Wind-onset mark: TTC panel — wind arrives at a fixed axis position,
         # one full-height line per unique target_ttc_ms; onset panel — the wind
-        # time drifts per row (each trial starts at 0), so a small cyan tick on
-        # each row shows when the puff arrived relative to that trial's onset.
-        # TTC 面板风时刻恒定→整根竖线；onset 面板逐行漂移→每行青色刻度。
+        # time drifts per row (each trial starts at 0), so a small sky-blue tick
+        # on each row shows when the puff arrived relative to that trial's onset.
+        # TTC 面板风时刻恒定→整根竖线；onset 面板逐行漂移→每行天蓝刻度（NPG #56B4E9，inferno 上对比强）。
         if align == "ttc":
             for wv in sorted(set(wind_ttc_s)):
                 if t_window[0] <= wv <= t_window[1]:
-                    ax.axvline(wv, color=_WIND_COLOR, ls=":", lw=1.0, alpha=0.8)
+                    ax.axvline(wv, color=_WIND_COLOR, ls="--", lw=1.4, alpha=1.0, zorder=5)
                     ax.text(wv, 1.01, "wind", transform=ax.get_xaxis_transform(),
-                            ha="center", va="bottom", fontsize=6, color=_WIND_COLOR)
+                            ha="center", va="bottom", fontsize=6, color=_WIND_COLOR,
+                            fontweight="bold")
         else:
             for i, (_lat, _row, wrow) in enumerate(trial_rows):
                 if wrow is not None:
                     ax.plot([wrow - 0.015, wrow + 0.015], [i + 0.5, i + 0.5],
-                            color=_WIND_COLOR, lw=1.0, alpha=0.9,
+                            color=_WIND_COLOR, lw=1.6, alpha=1.0,
                             solid_capstyle="butt", zorder=6)
 
         ax.set_title(cond, fontweight="bold", fontsize=9)

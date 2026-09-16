@@ -34,6 +34,9 @@ COLOR_OSCI_VIS: str = str(_COLOR_OSCI_VIS)
 _COLOR_OSCI_HW = get_colors().osci_hw
 COLOR_OSCI_HW: str = str(_COLOR_OSCI_HW)
 
+_COLOR_WIND_MARK = get_colors().wind_mark
+COLOR_WIND_MARK: str = str(_COLOR_WIND_MARK)
+
 # ═══════════════════════════════════════════════════════════════════════
 # Response Type
 # ═══════════════════════════════════════════════════════════════════════
@@ -77,6 +80,7 @@ __all__ = [
     "COLOR_CONTROL",
     "COLOR_OSCI_VIS",
     "COLOR_OSCI_HW",
+    "COLOR_WIND_MARK",
     "COLOR_ESCAPE",
     "COLOR_PREWALK",
     "COLOR_NO_RESPONSE",
