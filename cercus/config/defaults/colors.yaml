@@ -3,6 +3,7 @@
 
 # Trial type colors
 escape: "#ED0000"
+preescape: "#E69F00"
 prewalk: "#00468B"
 no_response: "#7C878E"
 

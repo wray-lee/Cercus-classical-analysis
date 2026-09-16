@@ -12,19 +12,18 @@ import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 import numpy as np
 import pandas as pd
 
 from pipeline.constants import (
-    COLOR_ESCAPE,
-    COLOR_NO_RESPONSE,
-    COLOR_PREWALK,
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
     PREWALK_WINDOW_MS,
 )
 from cercus.config import get_geometry
+from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
+
+_WIND_COLOR = "cyan"  # 风到达标识色（非行为类配色，纯图元）
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +49,8 @@ def plot_spaghetti_kinetics_heatmap(
 
     t_common = np.arange(t_window[0], t_window[1] + dt, dt)
 
-    response_types = ["Escape", "PreWalk", "NoResponse"]
-    response_colors = {
-        "Escape": COLOR_ESCAPE,
-        "PreWalk": COLOR_PREWALK,
-        "NoResponse": COLOR_NO_RESPONSE,
-    }
+    response_types = list(RESPONSE_TYPES)
+    response_colors = dict(RESPONSE_COLORS)
 
     n_panels = len(response_types)
     if figsize is None:
@@ -318,45 +313,6 @@ def plot_spaghetti_kinetics_heatmap(
     return fig
 
 
-def _flag_trial(
-    cond: str,
-    align: str,
-    n_types: int,
-    t_trial: np.ndarray,
-    s_trial: np.ndarray,
-    grp_sorted: pd.DataFrame,
-) -> dict | None:
-    """Per-trial PreWalk-window metadata for onset-aligned heatmaps.
-
-    Returns the classifier's *actual* PreWalk window in onset-aligned seconds
-    plus a ``prewind`` flag: escape onset earlier than wind onset, i.e. the
-    burst was triggered by vision alone before the wind arrived.  Only then is
-    the wind-anchored classifier window shifted right of the white onset line —
-    the case that reads as a misclassification without this annotation.
-    """
-    if align != "onset" or cond not in ("PreWalk", "Escape"):
-        return None
-    if n_types >= 4 and "wind" not in str(grp_sorted["type"].iloc[0]).lower():
-        return None
-    onset = grp_sorted["interval_onset_ms"].iloc[0]
-    if np.isnan(onset):
-        return None
-    wind = (
-        grp_sorted["target_ttc_ms"].iloc[0]
-        if "target_ttc_ms" in grp_sorted.columns
-        else np.nan
-    )
-    if pd.notna(wind):
-        lo = (wind - PREWALK_WINDOW_MS - onset) / 1000.0
-        hi = (wind - 50.0 - onset) / 1000.0
-        prewind = bool(onset < wind)
-    else:
-        lo, hi, prewind = -PREWALK_WINDOW_MS / 1000.0, -50.0 / 1000.0, False
-    m = (t_trial >= lo) & (t_trial < hi)
-    mean_in = float(np.nanmean(s_trial[m])) if m.any() else 0.0
-    return {"lo": lo, "hi": hi, "prewind": prewind, "mean_in": mean_in}
-
-
 def plot_trial_stacked_heatmap(
     df: pd.DataFrame,
     align: str = "ttc",
@@ -398,7 +354,7 @@ def plot_trial_stacked_heatmap(
         if n_types >= 4:
             conditions = sorted(df["type"].dropna().unique())
         else:
-            conditions = ["Escape", "PreWalk", "NoResponse"]
+            conditions = list(RESPONSE_TYPES)
 
     n_panels = len(conditions)
     if figsize is None:
@@ -425,7 +381,8 @@ def plot_trial_stacked_heatmap(
             ax.set_title(cond, fontweight="bold")
             continue
 
-        trial_rows: list[tuple[float, np.ndarray, dict | None]] = []
+        trial_rows: list[tuple[float, np.ndarray, float | None]] = []
+        wind_ttc_s: list[float] = []
         for (_subj, _tid), grp in subset.groupby(
             ["subject_id", "global_trial_id"]
         ):
@@ -449,24 +406,31 @@ def plot_trial_stacked_heatmap(
             latency = (
                 float(t_common[above].min()) if above.any() else float("inf")
             )
-            trial_rows.append((latency, s_interp, _flag_trial(
-                cond, align, n_types, t_trial, s_trial, grp_sorted,
-            )))
+            # 风到达时刻：t_rel 轴 = target_ttc_ms；onset 对齐需减去本 trial 起跑点
+            _w = (grp["target_ttc_ms"].iloc[0]
+                  if "target_ttc_ms" in grp.columns else np.nan)
+            _o = (grp["interval_onset_ms"].iloc[0]
+                  if "interval_onset_ms" in grp.columns else np.nan)
+            wind_row_s: float | None = None
+            if pd.notna(_w):
+                wind_ttc_s.append(float(_w) / 1000.0)
+                if align == "onset" and pd.notna(_o):
+                    wind_row_s = (float(_w) - float(_o)) / 1000.0
+            trial_rows.append((latency, s_interp, wind_row_s))
 
         if not trial_rows:
             ax.set_title(cond, fontweight="bold")
             continue
 
         if align == "onset" and cond == "PreWalk":
-            # pre-wind escapes grouped at the bright edge, then by speed inside
-            # the *actual* (wind-anchored) classifier window
-            trial_rows.sort(
-                key=lambda x: (
-                    x[2]["prewind"] if x[2] else False,
-                    x[2]["mean_in"] if x[2] else 0.0,
-                ),
-                reverse=True,
-            )
+            # sort by mean speed inside each trial's classifier window
+            # ([wind−1000, wind−50] ms, onset-aligned coords; fallback [-1,0])
+            def _win_mean(row: tuple[float, np.ndarray, float | None]) -> float:
+                lo = row[2] - PREWALK_WINDOW_MS / 1000.0 if row[2] is not None else -1.0
+                hi = row[2] - 0.05 if row[2] is not None else 0.0
+                m = (t_common >= lo) & (t_common < hi)
+                return float(np.nanmean(row[1][m])) if m.any() else 0.0
+            trial_rows.sort(key=_win_mean, reverse=True)
         else:
             trial_rows.sort(key=lambda x: x[0] if np.isfinite(x[0]) else 1e9)
         if len(trial_rows) > max_trials_per_panel:
@@ -487,37 +451,23 @@ def plot_trial_stacked_heatmap(
         )
 
         ax.axvline(0, color="white", ls="--", lw=1.2, alpha=0.7)
-        # Per-trial: draw the classifier's ACTUAL PreWalk window (wind-anchored,
-        # converted to onset-aligned seconds) as a box on that trial's row.
-        # Gold + star = pre-wind escape (burst started before the stimulus).
-        for i, (_lat, _row, flag) in enumerate(trial_rows):
-            if flag is None:
-                continue
-            y = i + 0.5
-            if flag["prewind"]:
-                ax.add_patch(
-                    Rectangle(
-                        (flag["lo"], i), flag["hi"] - flag["lo"], 1.0,
-                        facecolor="gold", alpha=0.22, edgecolor="gold",
-                        lw=0.8, zorder=6,
-                    )
-                )
-                ax.plot(
-                    t_common[0] + 0.02, y, marker="*", ms=4, color="gold",
-                    zorder=7, clip_on=False,
-                )
-            else:
-                ax.plot(
-                    [flag["lo"], flag["hi"]], [y, y], color="white",
-                    lw=0.9, alpha=0.55, solid_capstyle="butt", zorder=6,
-                )
-        if align == "onset" and any(r[2] for r in trial_rows):
-            ax.text(
-                0.02, 0.02, "gold box/★ = pre-wind escape · white tick = classifier window",
-                transform=ax.transAxes, ha="left", va="bottom", fontsize=5,
-                color="white", alpha=0.85,
-                path_effects=[path_effects.withStroke(linewidth=1.5, foreground="black")],
-            )
+        # Wind-onset mark: TTC panel — wind arrives at a fixed axis position,
+        # one full-height line per unique target_ttc_ms; onset panel — the wind
+        # time drifts per row (each trial starts at 0), so a small cyan tick on
+        # each row shows when the puff arrived relative to that trial's onset.
+        # TTC 面板风时刻恒定→整根竖线；onset 面板逐行漂移→每行青色刻度。
+        if align == "ttc":
+            for wv in sorted(set(wind_ttc_s)):
+                if t_window[0] <= wv <= t_window[1]:
+                    ax.axvline(wv, color=_WIND_COLOR, ls=":", lw=1.0, alpha=0.8)
+                    ax.text(wv, 1.01, "wind", transform=ax.get_xaxis_transform(),
+                            ha="center", va="bottom", fontsize=6, color=_WIND_COLOR)
+        else:
+            for i, (_lat, _row, wrow) in enumerate(trial_rows):
+                if wrow is not None:
+                    ax.plot([wrow - 0.015, wrow + 0.015], [i + 0.5, i + 0.5],
+                            color=_WIND_COLOR, lw=1.0, alpha=0.9,
+                            solid_capstyle="butt", zorder=6)
 
         ax.set_title(cond, fontweight="bold", fontsize=9)
         if orientation == "vertical":
@@ -564,5 +514,7 @@ def plot_trial_stacked_heatmap(
     cbar = fig.colorbar(sm, cax=cbar_ax)
     cbar.set_label("Translational velocity (mm/s)", fontsize=8)
 
-    fig.tight_layout(pad=1.0)
+    # rect leaves room for the manually placed colorbar axes (avoids the
+    # tight_layout "Axes not compatible" warning). 为 cbar 预留边距
+    fig.tight_layout(pad=1.0, rect=(0, 0, 0.88 if orientation == "vertical" else 0.92, 1.0))
     return fig

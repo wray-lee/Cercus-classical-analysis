@@ -41,6 +41,9 @@ COLOR_OSCI_HW: str = str(_COLOR_OSCI_HW)
 _COLOR_ESCAPE = get_colors().escape
 COLOR_ESCAPE: str = str(_COLOR_ESCAPE)
 
+_COLOR_PRE_ESCAPE = get_colors().preescape
+COLOR_PRE_ESCAPE: str = str(_COLOR_PRE_ESCAPE)
+
 _COLOR_PREWALK = get_colors().prewalk
 COLOR_PREWALK: str = str(_COLOR_PREWALK)
 
