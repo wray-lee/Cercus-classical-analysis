@@ -587,7 +587,8 @@ def plot_reaction_distance_panel(
 ) -> plt.Figure | None:
     """Reaction time and escape distance distributions by response class.
 
-    左：刺激锚定 RT；右：逃逸窗内行程。Mann-Whitney 比较 Escape vs PreEscape。
+    左：刺激锚定 RT；右：逃逸窗内行程。箱体为 trial 级分布，散点为 per-subject
+    中位数（伪重复对策）；Mann-Whitney 以 subject 级中位数为单位（n=动物数）。
     Returns None when the required columns are absent (no figure to save).
     """
     if "reaction_time_ms" not in df.columns or "distance_mm" not in df.columns:
@@ -604,8 +605,11 @@ def plot_reaction_distance_panel(
         )
         .reset_index()
     )
+    # subject 级：每动物每类取中位数 → 检验与散点的单位（n = 动物数，非 trial 数）
+    subj_med = trial.groupby(["subject_id", "response_type"])[["rt", "dist"]].median()
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
+    rng = np.random.default_rng(42)
     for ax, col, title, xlabel in (
         (axes[0], "rt", "Reaction time", "RT vs stimulus (ms)"),
         (axes[1], "dist", "Escape distance", "Distance (mm)"),
@@ -634,23 +638,51 @@ def plot_reaction_distance_panel(
             patch.set_facecolor(mcolors.to_rgba(c, 0.30))
             patch.set_edgecolor(c)
             patch.set_linewidth(1.0)
+        # per-subject 中位数散点（伪重复对策：显示独立个体的变异）
+        for i, rt in enumerate(kept):
+            sv = (
+                subj_med.xs(rt, level="response_type")[col].dropna().values
+                if rt in subj_med.index.get_level_values("response_type")
+                else np.array([])
+            )
+            if len(sv) == 0:
+                continue
+            ax.scatter(
+                np.full(len(sv), i) + rng.uniform(-0.12, 0.12, len(sv)),
+                sv, s=9, c=RESPONSE_COLORS[rt], edgecolors="black",
+                linewidths=0.3, alpha=0.85, zorder=6,
+            )
         ax.set_ylabel(xlabel, fontsize=7)
         ax.set_title(title, fontweight="bold", fontsize=8)
         ax.tick_params(labelsize=6)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
+        ax.set_xlim(-0.5, len(kept) - 0.5)
         if col == "rt":
             ax.axhline(0, color="0.5", ls="--", lw=0.7)
 
-    # Escape vs PreEscape 机制分离检验
-    esc = trial.loc[trial["response_type"] == "Escape", "rt"].dropna()
-    pre = trial.loc[trial["response_type"] == "PreEscape", "rt"].dropna()
-    if len(esc) > 1 and len(pre) > 1:
-        from scipy.stats import mannwhitneyu
-        u_stat, p_val = mannwhitneyu(esc, pre)
+    # Escape vs PreEscape 机制分离检验（subject 级中位数，避免 trial 级伪重复）
+    from scipy.stats import mannwhitneyu
+    foot = []
+    for col, lbl in (("rt", "RT"), ("dist", "dist")):
+        esc = (
+            subj_med.xs("Escape", level="response_type")[col].dropna().values
+            if "Escape" in subj_med.index.get_level_values("response_type")
+            else np.array([])
+        )
+        pre = (
+            subj_med.xs("PreEscape", level="response_type")[col].dropna().values
+            if "PreEscape" in subj_med.index.get_level_values("response_type")
+            else np.array([])
+        )
+        if len(esc) > 1 and len(pre) > 1:
+            _, p_val = mannwhitneyu(esc, pre)
+            foot.append(f"{lbl}: n={len(esc)}+{len(pre)} subj, p = {p_val:.2g}")
+    if foot:
         fig.text(
             0.5, 0.01,
-            f"RT Escape vs PreEscape: Mann-Whitney p = {p_val:.2e}",
+            "Escape vs PreEscape (subject medians, Mann-Whitney) — "
+            + " | ".join(foot),
             ha="center", fontsize=6, color="0.3",
         )
 

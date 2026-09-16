@@ -154,7 +154,7 @@ Escape latency is defined as the first time speed exceeds 10 mm/s just before re
 
 Classification priority order: **NoResponse > PreEscape > PreWalk > Escape** (PreEscape only when the switch is on). A trial is routed to the first matching category — e.g. if both PreWalk and Escape conditions are met, the trial is classified as PreWalk. When baseline speed ≥ 10 mm/s and no pre-walk activity is detected, the trial falls back to NoResponse even if a valid burst exists.
 
-Alongside `latency_ms` / `escape_interval_ms`, each trial also carries stimulus-anchored **`reaction_time_ms`** (onset − wind onset on multimodal, onset − TTC otherwise; negative = started before the trigger, i.e. PreEscape lead time) and **`distance_mm`** / **`distance_500ms_mm`** (trapezoid integral of speed over the escape interval / first 500 ms after onset). All three land in `population_summary.csv` and feed `reaction_distance_panel.svg` (RT + distance boxplots per response class, Escape vs PreEscape Mann-Whitney). In trial-stacked heatmaps the wind arrival is marked in cyan: a full-height line per unique `target_ttc_ms` in TTC-aligned panels, per-row ticks in onset-aligned panels.
+Alongside `latency_ms` / `escape_interval_ms`, each trial also carries stimulus-anchored **`reaction_time_ms`** (onset − wind onset on multimodal, onset − TTC otherwise; negative = started before the trigger, i.e. PreEscape lead time) and **`distance_mm`** / **`distance_500ms_mm`** (trapezoid integral of speed over the escape interval / first 500 ms after onset). All three land in `population_summary.csv` and feed `reaction_distance_panel.svg` (RT + distance boxplots per response class with per-subject median scatter; Escape vs PreEscape Mann-Whitney on subject-level medians, n = animals, to avoid trial-level pseudoreplication). In trial-stacked heatmaps the wind arrival is marked in NPG sky blue (`colors.yaml: wind_mark`): a full-height line per unique `target_ttc_ms` in TTC-aligned panels, per-row ticks in onset-aligned panels.
 
 ### `baseline_visual` Special Handling
 
@@ -270,7 +270,7 @@ Computes three candidate thresholds independently on **all trials** (not filtere
 | `vmax_moving_gmm.svg` | 2-component moving GMM: windowed threshold evolution |
 | `vmax_response.svg` | Effective response inspection: Escape+PreWalk only |
 | `behavior_prob.svg` | Response proportions bar chart |
-| `reaction_distance_panel.svg` | Stimulus-anchored RT + escape distance boxplots by response class (Escape vs PreEscape Mann-Whitney) |
+| `reaction_distance_panel.svg` | Stimulus-anchored RT + escape distance boxplots by response class, per-subject median scatter (Escape vs PreEscape Mann-Whitney on subject medians) |
 | `prewalk_analysis_panel.svg` | PreWalk polar distribution + stillness scatter |
 | `prewalk_stillness.svg` | PreWalk stillness analysis |
 | `speed_kinetics.svg` | Population speed kinetics by response type |
