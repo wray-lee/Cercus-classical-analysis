@@ -36,10 +36,14 @@ from cercus.visualization.behavior import (
     plot_reaction_distance_panel,
 )
 from cercus.visualization.polar import (
-    plot_escape_angle_distribution,
     plot_population_polar_histogram,
     plot_population_pre_movement_prewalk,
     plot_population_prewalk_polar,
+    plot_escape_angle_distribution,
+)
+from cercus.visualization.paradigm import (
+    plot_paradigm_dumbbell,
+    summarize_subjects,
 )
 from cercus.visualization.individual import (
     plot_loo,
@@ -80,6 +84,8 @@ __all__ = [
     "plot_population_polar_histogram",
     "plot_population_pre_movement_prewalk",
     "plot_population_prewalk_polar",
+    "plot_paradigm_dumbbell",
+    "summarize_subjects",
     "plot_trial_counts",
     "plot_second_order",
     "plot_loo",
