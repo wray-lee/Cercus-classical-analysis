@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 
 from cercus.config import get_analysis, get_visualization
+from cercus.constants.response_types import RESPONSE_TYPES
 from cercus.visualization._circstats import circ_mean_rad, rayleigh_p, wallraff_test
 from cercus.visualization._core import compute_trajectory_masks
 
@@ -58,15 +59,18 @@ MIN_TRIALS_WALLRAFF: int = int(_ANALYSIS.individual.min_trials_wallraff)
 BOOTSTRAP_ITERATIONS: int = int(_ANALYSIS.individual.bootstrap_iterations)
 
 # ── Response classes pooled behind `population --individual-checks` ──
-# Defaults to ("Escape", "PreWalk") when the visualization toggle
-# ``individual_checks_include_prewalk`` is true (so most animals reach the
-# n>=3 second-order threshold); collapses to Escape-only when false. The
-# column values are capitalized ("Escape"/"PreWalk") — kept as exact matches.
+# Defaults to all burst classes (Escape, PreEscape, PreWalk — i.e. everything
+# but NoResponse, and the switch collapses PreEscape away when off) so most
+# animals reach the n>=3 second-order threshold; Escape-only when the toggle is
+# false.  Column values are capitalized — kept as exact matches.
 _INCLUDE_PREWALK: bool = bool(
     get_visualization().get("individual_checks_include_prewalk", True)
 )
+_BURST_TYPES: tuple[str, ...] = tuple(
+    rt for rt in RESPONSE_TYPES if rt != "NoResponse"
+)
 INDIVIDUAL_CHECK_RESPONSE_TYPES: tuple[str, ...] = (
-    ("Escape", "PreWalk") if _INCLUDE_PREWALK else ("Escape",)
+    _BURST_TYPES if _INCLUDE_PREWALK else ("Escape",)
 )
 
 

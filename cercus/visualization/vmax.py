@@ -18,8 +18,12 @@ from pipeline.constants import (
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
 )
+from cercus.constants.response_types import RESPONSE_TYPES
 
 log = logging.getLogger(__name__)
+
+# 有效反应 = 一切有 burst 的类别（开关关闭时自动退回 Escape+PreWalk）
+_RESPONSE_FILTER = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
 
 
 def _get_trial_vmax(
@@ -315,8 +319,8 @@ def plot_population_vmax_response(
     auto_threshold: float | None = None,
     draw_fixed_thresholds: bool = True,
 ) -> plt.Figure:
-    """V_max distribution of Escape + PreWalk trials only."""
-    trial_vmax = _get_trial_vmax(df, response_filter=["Escape", "PreWalk"])
+    """V_max distribution of response trials (all burst classes) only."""
+    trial_vmax = _get_trial_vmax(df, response_filter=_RESPONSE_FILTER)
 
     if len(trial_vmax) < 2:
         log.warning("Insufficient Escape+PreWalk V_max values — skipping.")
@@ -362,12 +366,13 @@ def plot_population_vmax_response(
         )
 
     n_esc = len(_get_trial_vmax(df, response_filter=["Escape"]))
+    n_pre = len(_get_trial_vmax(df, response_filter=["PreEscape"]))
     n_pw = len(_get_trial_vmax(df, response_filter=["PreWalk"]))
     n_subjects = df["subject_id"].nunique()
     ax.text(
         0.97,
         0.70,
-        f"Escape: {n_esc}  PreWalk: {n_pw}\n({n_subjects} subjects)",
+        f"Escape: {n_esc}  PreEscape: {n_pre}  PreWalk: {n_pw}\n({n_subjects} subjects)",
         transform=ax.transAxes,
         ha="right",
         va="top",

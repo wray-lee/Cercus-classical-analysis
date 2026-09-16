@@ -20,6 +20,7 @@ from pipeline.constants import (
     COLOR_ESCAPE,
     COLOR_PREWALK,
 )
+from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 from cercus.visualization._circstats import (
     rayleigh_p,
     watson_williams_test,
@@ -41,19 +42,19 @@ def plot_escape_angle_distribution(
         if "subject_id" in df.columns
         else ["global_trial_id"]
     )
-    escape_types = ["Escape", "PreWalk"]
+    escape_types = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
     df_esc = df[df["response_type"].isin(escape_types)].copy()
 
     if df_esc.empty:
-        log.warning("No Escape/PreWalk trials for angle distribution plot.")
+        log.warning("No response trials for angle distribution plot.")
         fig, ax = plt.subplots(figsize=figsize)
         ax.text(
-            0.5, 0.5, "No Escape / PreWalk trials",
+            0.5, 0.5, "No response trials",
             ha="center", va="center", transform=ax.transAxes, fontsize=12,
         )
         return fig
 
-    angles_by_type: dict[str, list[float]] = {"Escape": [], "PreWalk": []}
+    angles_by_type: dict[str, list[float]] = {rt: [] for rt in escape_types}
 
     for keys, grp in df_esc.groupby(group_cols):
         grp = grp.sort_values("t_rel")
@@ -82,10 +83,9 @@ def plot_escape_angle_distribution(
         angle_deg = float(np.degrees(np.arctan2(traj_x[-1], traj_y[-1])))
         angles_by_type[response_type].append(angle_deg)
 
-    esc_angles = np.array(angles_by_type["Escape"])
-    pw_angles = np.array(angles_by_type["PreWalk"])
-
-    if len(esc_angles) == 0 and len(pw_angles) == 0:
+    all_angles = np.concatenate([np.asarray(v) for v in angles_by_type.values()]) \
+        if any(len(v) for v in angles_by_type.values()) else np.array([])
+    if len(all_angles) == 0:
         log.warning("No valid trajectory endpoints for angle distribution.")
         fig, ax = plt.subplots(figsize=figsize)
         ax.text(
@@ -98,43 +98,27 @@ def plot_escape_angle_distribution(
     bin_edges = np.linspace(-180, 180, bins + 1)
     x_kde = np.linspace(-180, 180, 300)
 
-    color_esc = COLOR_ESCAPE
-    color_pw = COLOR_PREWALK
-
-    fc_esc = mcolors.to_rgba(color_esc, 0.35)
-    fc_pw = mcolors.to_rgba(color_pw, 0.35)
-
     ax.axvline(0, color="#9CA3AF", linestyle="--", linewidth=1.0, alpha=0.5, zorder=0)
 
-    if len(esc_angles) > 0:
+    # 逐行为类绘制直方图 + KDE（Escape / PreEscape / PreWalk）
+    for rt in escape_types:
+        angles = np.asarray(angles_by_type[rt])
+        if len(angles) == 0:
+            continue
+        color = RESPONSE_COLORS.get(rt, COLOR_ESCAPE)
         ax.hist(
-            esc_angles,
+            angles,
             bins=bin_edges,
             density=True,
-            facecolor=fc_esc,
-            edgecolor=color_esc,
+            facecolor=mcolors.to_rgba(color, 0.35),
+            edgecolor=color,
             linewidth=1.2,
-            label=f"Escape (n={len(esc_angles)})",
+            label=f"{rt} (n={len(angles)})",
             zorder=1,
         )
-        if len(esc_angles) > 1:
-            kde_esc = gaussian_kde(esc_angles, bw_method="scott")
-            ax.plot(x_kde, kde_esc(x_kde), color=color_esc, lw=2.5, alpha=0.9, zorder=3)
-
-    if len(pw_angles) > 0:
-        ax.hist(
-            pw_angles,
-            bins=bin_edges,
-            density=True,
-            facecolor=fc_pw,
-            edgecolor=color_pw,
-            linewidth=1.2,
-            label=f"PreWalk (n={len(pw_angles)})",
-            zorder=1,
-        )
-        if len(pw_angles) > 1:
-            kde_pw = gaussian_kde(pw_angles, bw_method="scott")
-            ax.plot(x_kde, kde_pw(x_kde), color=color_pw, lw=2.5, alpha=0.9, zorder=3)
+        if len(angles) > 1:
+            kde = gaussian_kde(angles, bw_method="scott")
+            ax.plot(x_kde, kde(x_kde), color=color, lw=2.5, alpha=0.9, zorder=3)
 
     ax.set_xlabel("Escape Angle (°)")
     ax.set_ylabel("Probability Density")
@@ -164,7 +148,7 @@ def plot_population_polar_histogram(
         else ["global_trial_id"]
     )
     if response_types is None:
-        escape_types = ["Escape", "PreWalk"]
+        escape_types = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
     elif isinstance(response_types, str):
         escape_types = [response_types]
     else:
@@ -271,7 +255,7 @@ def plot_population_polar_histogram(
     bin_width = 2 * np.pi / bins
 
     series = [
-        (name, np.asarray(angles_by_type[name]), COLOR_PREWALK if name == "PreWalk" else COLOR_ESCAPE)
+        (name, np.asarray(angles_by_type[name]), RESPONSE_COLORS.get(name, COLOR_ESCAPE))
         for name in escape_types
         if len(angles_by_type.get(name, [])) > 0
     ]

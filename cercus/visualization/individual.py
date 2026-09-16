@@ -33,7 +33,7 @@ def plot_trial_counts(
     filter_low_n: bool = False,
     figsize: tuple[float, float] = (6.0, 4.2),
 ) -> plt.Figure:
-    """Histogram of response trials (Escape + PreWalk) per animal.
+    """Histogram of response trials (all burst classes) per animal.
 
     x = trials per animal, y = number of animals with that many response trials.
     Reference lines at n≥3 / n≥5 are drawn only when *filter_low_n* is True
@@ -102,7 +102,7 @@ def plot_trial_counts(
 
     ax.set_xlabel("Response trials per animal")
     ax.set_ylabel("Number of animals")
-    ax.set_title("Response-trial distribution (Escape+PreWalk) across animals", fontweight="bold")
+    ax.set_title("Response-trial distribution (burst classes) across animals", fontweight="bold")
     ax.set_xticks(np.arange(0, max_c + 2, max(1, (max_c + 2) // 6)))
 
     caption = (

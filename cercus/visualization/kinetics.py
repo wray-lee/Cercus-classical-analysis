@@ -27,6 +27,7 @@ from cercus.visualization._core import (
     add_threshold_lines,
     draw_oscilloscope_channels,
 )
+from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
 log = logging.getLogger(__name__)
 
@@ -139,11 +140,7 @@ def plot_population_speed_kinetics(
     )
     df_binned["t_bin"] = df_binned["t_bin"].astype(float)
 
-    response_colors = {
-        "Escape": COLOR_ESCAPE,
-        "PreWalk": COLOR_PREWALK,
-        "NoResponse": COLOR_NO_RESPONSE,
-    }
+    response_colors = {rt: RESPONSE_COLORS[rt] for rt in RESPONSE_TYPES}
 
     for response_type, color in response_colors.items():
         subset = df_binned[df_binned["response_type"] == response_type]
@@ -205,12 +202,8 @@ def plot_population_spaghetti_kinetics(
         )
         return fig
 
-    response_types = ["Escape", "PreWalk", "NoResponse"]
-    response_colors = {
-        "Escape": COLOR_ESCAPE,
-        "PreWalk": COLOR_PREWALK,
-        "NoResponse": COLOR_NO_RESPONSE,
-    }
+    response_types = list(RESPONSE_TYPES)
+    response_colors = dict(RESPONSE_COLORS)
 
     n_panels = len(response_types)
     fig = plt.figure(figsize=(figsize[0] * n_panels / 3, figsize[1]))
@@ -455,7 +448,7 @@ def plot_single_trial_kinetics(
     t = trial["t_rel"].values
     y_vals = trial[y_col].values
 
-    curve_color = COLOR_ESCAPE if response_type == "Escape" else COLOR_PREWALK
+    curve_color = RESPONSE_COLORS.get(response_type, COLOR_ESCAPE)
 
     ax.plot(t, y_vals, color=curve_color, lw=1.0, alpha=0.85, label=y_label)
 

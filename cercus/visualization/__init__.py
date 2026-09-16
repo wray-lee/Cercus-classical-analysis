@@ -33,6 +33,7 @@ from cercus.visualization.behavior import (
     plot_population_behavior_probability,
     plot_population_habituation,
     plot_prewalk_stillness,
+    plot_reaction_distance_panel,
 )
 from cercus.visualization.polar import (
     plot_escape_angle_distribution,
@@ -74,6 +75,7 @@ __all__ = [
     "plot_population_habituation",
     "plot_population_behavior_probability",
     "plot_prewalk_stillness",
+    "plot_reaction_distance_panel",
     "plot_escape_angle_distribution",
     "plot_population_polar_histogram",
     "plot_population_pre_movement_prewalk",

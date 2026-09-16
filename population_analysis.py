@@ -42,6 +42,7 @@ from cercus.visualization import (
     plot_population_vmax_moving_gmm,
     plot_population_vmax_response,
     plot_prewalk_stillness,
+    plot_reaction_distance_panel,
     plot_spaghetti_kinetics_heatmap,
     plot_trial_stacked_heatmap,
 )
@@ -303,6 +304,8 @@ def _render_and_save(job_tuple) -> str:
     plot_func, output_path, args, kwargs = job_tuple
     try:
         fig = plot_func(*args, **kwargs)
+        if fig is None:  # figure not applicable to this dataset (missing cols)
+            return ""
         _safe_savefig(fig, output_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         return str(output_path)
@@ -420,6 +423,7 @@ def main(argv: list[str] | None = None) -> None:
             total_trials=("global_trial_index", "count"),
             valid_escape_trials=("is_valid_escape", "sum"),
             escape_trials=("response_type", lambda s: (s == "Escape").sum()),
+            preescape_trials=("response_type", lambda s: (s == "PreEscape").sum()),
             prewalk_trials=("response_type", lambda s: (s == "PreWalk").sum()),
             no_response_trials=("response_type", lambda s: (s == "NoResponse").sum()),
         )
@@ -457,13 +461,15 @@ def main(argv: list[str] | None = None) -> None:
     n_subjects = all_data["subject_id"].nunique()
     n_trials = trial_level.shape[0]
     n_escape = (trial_level["response_type"] == "Escape").sum()
+    n_preescape = (trial_level["response_type"] == "PreEscape").sum()
     n_prewalk = (trial_level["response_type"] == "PreWalk").sum()
     n_no_resp = (trial_level["response_type"] == "NoResponse").sum()
 
     log.info("Population export complete:")
     log.info("  Subjects: %d", n_subjects)
     log.info("  Total trials: %d", n_trials)
-    log.info("  Escape: %d | PreWalk: %d | NoResponse: %d", n_escape, n_prewalk, n_no_resp)
+    log.info("  Escape: %d | PreEscape: %d | PreWalk: %d | NoResponse: %d",
+             n_escape, n_preescape, n_prewalk, n_no_resp)
     log.info("  CSV: %s", csv_path)
     log.info("  Escape rates: %s", rates_csv_path)
 
@@ -496,6 +502,7 @@ def main(argv: list[str] | None = None) -> None:
         (plot_population_vmax_moving_gmm, pop_dir / "vmax_moving_gmm.svg", (all_data,),
          {"gmm_escape_threshold": gmm_escape_threshold, "draw_fixed_thresholds": _DRAW_FIXED_THRESHOLDS}),
         (plot_population_behavior_probability, pop_dir / "behavior_prob.svg", (all_data,), {}),
+        (plot_reaction_distance_panel, pop_dir / "reaction_distance_panel.svg", (all_data,), {}),
         (plot_prewalk_stillness, pop_dir / "prewalk_stillness.svg", (all_data,), {}),
         (plot_population_speed_kinetics, pop_dir / "speed_kinetics.svg", (all_data,), {}),
         (plot_population_spaghetti_kinetics, pop_dir / "spaghetti_kinetics.svg", (all_data,), {}),

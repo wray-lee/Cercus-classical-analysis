@@ -23,6 +23,7 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
     PREWALK_WINDOW_MS,
 )
+from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
 log = logging.getLogger(__name__)
 
@@ -33,15 +34,15 @@ _NPG8 = [
 
 
 def plot_behavior_probability(df: pd.DataFrame) -> plt.Figure:
-    """Bar chart of Escape / PreWalk / NoResponse proportions."""
+    """Bar chart of response-type proportions (RESPONSE_TYPES order)."""
     counts = df.groupby("global_trial_id")["response_type"].first().value_counts()
     total = counts.sum()
 
-    categories = ["Escape", "PreWalk", "NoResponse"]
+    categories = list(RESPONSE_TYPES)
     values = [
         counts.get(c, 0) / total if total > 0 else 0.0 for c in categories
     ]
-    colors = [COLOR_ESCAPE, COLOR_PREWALK, COLOR_NO_RESPONSE]
+    colors = [RESPONSE_COLORS[c] for c in categories]
 
     fig, ax = plt.subplots(figsize=(3.5, 3.0))
     bars = ax.bar(
@@ -84,13 +85,8 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
     x = trial_agg["global_trial_index"].values
     y = trial_agg["v_max"].values
 
-    color_map = {
-        "Escape": COLOR_ESCAPE,
-        "PreWalk": COLOR_PREWALK,
-        "NoResponse": COLOR_NO_RESPONSE,
-    }
     point_colors = [
-        color_map.get(rt, COLOR_NO_RESPONSE)
+        RESPONSE_COLORS.get(rt, COLOR_NO_RESPONSE)
         for rt in trial_agg["response_type"].values
     ]
 
@@ -154,11 +150,7 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
             markersize=5,
             label=l,
         )
-        for l, c in [
-            ("Escape", COLOR_ESCAPE),
-            ("PreWalk", COLOR_PREWALK),
-            ("NoResponse", COLOR_NO_RESPONSE),
-        ]
+        for l, c in [(rt, RESPONSE_COLORS[rt]) for rt in RESPONSE_TYPES]
     ]
     ax.legend(handles=handles, loc="upper right", frameon=False, fontsize=6)
 
@@ -312,11 +304,11 @@ def plot_population_behavior_probability(
 
     counts = trial_level["response_type"].value_counts()
     total = counts.sum()
-    categories = ["Escape", "PreWalk", "NoResponse"]
+    categories = list(RESPONSE_TYPES)
     values = [
         counts.get(c, 0) / total if total > 0 else 0.0 for c in categories
     ]
-    colors = [COLOR_ESCAPE, COLOR_PREWALK, COLOR_NO_RESPONSE]
+    colors = [RESPONSE_COLORS[c] for c in categories]
 
     subject_probs = (
         trial_level.groupby("subject_id")["response_type"]
@@ -587,3 +579,75 @@ def plot_prewalk_stillness(
     )
     return fig
 
+
+def plot_reaction_distance_panel(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] = (6.5, 3.5),
+) -> plt.Figure | None:
+    """Reaction time and escape distance distributions by response class.
+
+    左：刺激锚定 RT；右：逃逸窗内行程。Mann-Whitney 比较 Escape vs PreEscape。
+    Returns None when the required columns are absent (no figure to save).
+    """
+    if "reaction_time_ms" not in df.columns or "distance_mm" not in df.columns:
+        log.warning("reaction_time_ms/distance_mm missing — skipping panel.")
+        return None
+
+    classes = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
+    trial = (
+        df.groupby(["subject_id", "global_trial_id"])
+        .agg(
+            response_type=("response_type", "first"),
+            rt=("reaction_time_ms", "first"),
+            dist=("distance_mm", "first"),
+        )
+        .reset_index()
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    for ax, col, title, xlabel in (
+        (axes[0], "rt", "Reaction time", "RT vs stimulus (ms)"),
+        (axes[1], "dist", "Escape distance", "Distance (mm)"),
+    ):
+        data = [
+            trial.loc[trial["response_type"] == rt, col].dropna().values
+            for rt in classes
+        ]
+        data = [d for d in data if len(d) > 0]
+        kept = [rt for rt, d in zip(classes, data) if len(d) > 0]
+        if not data:
+            ax.text(0.5, 0.5, "no data", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=8, color="0.5")
+            ax.set_title(title, fontweight="bold", fontsize=8)
+            continue
+        bp = ax.boxplot(
+            data, tick_labels=kept, patch_artist=True, widths=0.55,
+            medianprops=dict(color="black", lw=1.2),
+            flierprops=dict(markersize=2, alpha=0.4),
+        )
+        for patch, rt in zip(bp["boxes"], kept):
+            patch.set_facecolor(RESPONSE_COLORS[rt])
+            patch.set_alpha(0.6)
+            patch.set_edgecolor("black")
+        ax.set_ylabel(xlabel, fontsize=7)
+        ax.set_title(title, fontweight="bold", fontsize=8)
+        ax.tick_params(labelsize=6)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        if col == "rt":
+            ax.axhline(0, color="0.5", ls="--", lw=0.7)
+
+    # Escape vs PreEscape 机制分离检验
+    esc = trial.loc[trial["response_type"] == "Escape", "rt"].dropna()
+    pre = trial.loc[trial["response_type"] == "PreEscape", "rt"].dropna()
+    if len(esc) > 1 and len(pre) > 1:
+        from scipy.stats import mannwhitneyu
+        u_stat, p_val = mannwhitneyu(esc, pre)
+        fig.text(
+            0.5, 0.01,
+            f"RT Escape vs PreEscape: Mann-Whitney p = {p_val:.2e}",
+            ha="center", fontsize=6, color="0.3",
+        )
+
+    fig.tight_layout(pad=1.0, rect=(0, 0.03, 1, 1))
+    return fig
