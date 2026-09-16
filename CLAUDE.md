@@ -1,7 +1,7 @@
 # CLAUDE.md — Cercus CLI
 
 ## What this repo is
-Cricket escape-response behavioral analysis pipeline (`README.md`). Raw kinematics CSVs → ternary classification (Escape / PreWalk / NoResponse) → publication-grade SVG figures + population CSV + Bayesian MCMC psychophysics (PyMC/NumPyro). Entry is `python -m cercus.cli.app <command>` (Typer) or the legacy root scripts.
+Cricket escape-response behavioral analysis pipeline (`README.md`). Raw kinematics CSVs → response-type classification (Escape / PreEscape / PreWalk / NoResponse) → publication-grade SVG figures + population CSV + Bayesian MCMC psychophysics (PyMC/NumPyro). Entry is `python -m cercus.cli.app <command>` (Typer) or the legacy root scripts.
 
 ## ENV_CONSTRAINT (MUST follow; no native-python, no default terminal)
 Any command that runs code / tests / training MUST run inside WSL via this atomic chain:
@@ -49,7 +49,9 @@ Key time-axis logic in `pipeline/kinematics.py::preprocess`:
 - wind-only → `stim_state` onset; else trial midpoint.
 
 Classification (see `Standardized Criteria.md` and `pipeline/classifier.py::classify_trial`):
-- Priority: **NoResponse > PreWalk > Escape**. No burst (window `v_max` ≤ `ESCAPE_VMAX_THRESHOLD`) ⇒ NoResponse absolute veto. The threshold comes from YAML (`thresholds.yaml` / `config.yaml`, default **98 mm/s**) — the `50 mm/s` appearing in old docstrings is stale.
+- Priority: **NoResponse > PreEscape > PreWalk > Escape**. No burst (window `v_max` ≤ `ESCAPE_VMAX_THRESHOLD`) ⇒ NoResponse absolute veto. The threshold comes from YAML (`thresholds.yaml` / `config.yaml`, default **98 mm/s**) — the `50 mm/s` appearing in old docstrings is stale.
+- **PreEscape** (switch `thresholds.classification.use_preescape`, default true): multimodal wind trials whose `interval_onset_ms < target_ttc_ms − preescape_buffer_ms` (50 ms) — pre-wind, pure-vision escapes; `false` reverts to the old ternary behavior. Response-class lists/colors flow from `cercus/constants/response_types.py::RESPONSE_TYPES/RESPONSE_COLORS` — never re-hardcode `["Escape","PreWalk","NoResponse"]`.
+- `label_trials` also adds `reaction_time_ms` (onset − stimulus anchor; negative = pre-wind lead) and `distance_mm`/`distance_500ms_mm` (trapezoid of speed over the escape interval) from `cercus/core/kinematics/distance.py` (pure physics).
 - Escape latency = backward search: locate the first frame exceeding `ESCAPE_VMAX_THRESHOLD` (98 mm/s), then scan backwards for the last frame below `ESCAPE_START_THRESHOLD` (10 mm/s).
 - `baseline_visual` trials use the whole stimulus period (`t_rel ≤ 0`), not `[onset, +250ms]`; PreWalk anchor differs per paradigm (wind → wind onset; pure looming → escape onset).
 

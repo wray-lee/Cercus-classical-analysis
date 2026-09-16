@@ -39,7 +39,7 @@ Cercus-cli/
 ├── pipeline/                        # Legacy backward-compat wrappers
 │   ├── io.py                        # CSV loading, session pairing, summary export
 │   ├── kinematics.py                # Kinematics integration (ORIGINAL, stable)
-│   ├── classifier.py                # Ternary classification
+│   ├── classifier.py                # Response-type classification (PreEscape switch)
 │   ├── visualization.py             # ***DEPRECATED*** — re-exports from cercus.visualization
 │   ├── constants.py                 # ***DEPRECATED*** — re-exports from cercus.constants + loader
 │   └── mcmc.py                      # Bayesian hierachical models (PyMC / NumPyro)
@@ -145,13 +145,16 @@ reload_config()
 
 | Type | Criteria |
 |---|---|
-| **Escape** | Pre-stimulus speed < 10 mm/s; post-stimulus V_max > (gmm threshold) mm/s within 250 ms |
-| **PreWalk** | Pre-stimulus speed > 10 mm/s in the 1-s window before onset; post-stimulus V_max > (gmm threshold) mm/s within 250 ms |
+| **Escape** | Valid burst; started at/after wind; no pre-walk activity in the wind window |
+| **PreEscape** | Multimodal (wind) trials only: burst onset earlier than `wind onset − preescape_buffer_ms` (50 ms) — pure-vision escape that preempts the wind, so the multisensory response is unevaluable. Switch: `thresholds.classification.use_preescape` (default **true**; **false** reverts to the old ternary behavior) |
+| **PreWalk** | Pre-stimulus speed > 10 mm/s in the 1-s window before wind onset; burst exists |
 | **NoResponse** | Post-stimulus V_max ≤ (gmm threshold) mm/s within 250 ms |
 
 Escape latency is defined as the first time speed exceeds 10 mm/s just before reaching 50 mm/s. The escape interval spans from latency onset to the point where speed drops back below 10 mm/s, with optional angular-velocity zero-crossing refinement.
 
-Classification priority order: **NoResponse > PreWalk > Escape**. A trial is routed to the first matching category — e.g. if both PreWalk and Escape conditions are met, the trial is classified as PreWalk. When baseline speed ≥ 10 mm/s and no pre-walk activity is detected, the trial falls back to NoResponse even if a valid burst exists.
+Classification priority order: **NoResponse > PreEscape > PreWalk > Escape** (PreEscape only when the switch is on). A trial is routed to the first matching category — e.g. if both PreWalk and Escape conditions are met, the trial is classified as PreWalk. When baseline speed ≥ 10 mm/s and no pre-walk activity is detected, the trial falls back to NoResponse even if a valid burst exists.
+
+Alongside `latency_ms` / `escape_interval_ms`, each trial also carries stimulus-anchored **`reaction_time_ms`** (onset − wind onset on multimodal, onset − TTC otherwise; negative = started before the trigger, i.e. PreEscape lead time) and **`distance_mm`** / **`distance_500ms_mm`** (trapezoid integral of speed over the escape interval / first 500 ms after onset). All three land in `population_summary.csv` and feed `reaction_distance_panel.svg` (RT + distance boxplots per response class, Escape vs PreEscape Mann-Whitney). In trial-stacked heatmaps the wind arrival is marked in cyan: a full-height line per unique `target_ttc_ms` in TTC-aligned panels, per-row ticks in onset-aligned panels.
 
 ### `baseline_visual` Special Handling
 
@@ -208,7 +211,7 @@ Dual-stage trajectory integration algorithm:
 - **Stage 2**: curvature-thresholded rigid macro rotation for correct left/right fan dispersion
 
 ### `pipeline/classifier.py`
-Ternary state classifier. Priority order: (1) NoResponse if no valid burst, (2) PreWalk if pre-stimulus activity exceeds threshold, (3) Escape if baseline is quiescent. Adds `response_type`, `v_max`, `latency_ms`, `interval_onset_ms`, `interval_offset_ms` columns.
+State classifier (Escape / PreEscape / PreWalk / NoResponse; PreEscape behind `classification.use_preescape`). Priority order: (1) NoResponse if no valid burst, (2) PreEscape if the burst started >50 ms before wind (multimodal only), (3) PreWalk if pre-wind activity exceeds threshold, (4) Escape. Adds `response_type`, `v_max`, `latency_ms`, `interval_onset_ms`, `interval_offset_ms`, `reaction_time_ms`, `distance_mm`, `distance_500ms_mm` columns.
 
 ### `cercus/visualization/`
 Publication-grade plotting (Nature/Science/Cell style), split into focused modules:
@@ -267,6 +270,7 @@ Computes three candidate thresholds independently on **all trials** (not filtere
 | `vmax_moving_gmm.svg` | 2-component moving GMM: windowed threshold evolution |
 | `vmax_response.svg` | Effective response inspection: Escape+PreWalk only |
 | `behavior_prob.svg` | Response proportions bar chart |
+| `reaction_distance_panel.svg` | Stimulus-anchored RT + escape distance boxplots by response class (Escape vs PreEscape Mann-Whitney) |
 | `prewalk_analysis_panel.svg` | PreWalk polar distribution + stillness scatter |
 | `prewalk_stillness.svg` | PreWalk stillness analysis |
 | `speed_kinetics.svg` | Population speed kinetics by response type |
