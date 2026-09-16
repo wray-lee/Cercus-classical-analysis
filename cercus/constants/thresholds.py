@@ -51,6 +51,14 @@ _POST_STIM_BUFFER_MS = get_thresholds().post_stim.buffer_ms
 POST_STIM_BUFFER_MS: float = float(_POST_STIM_BUFFER_MS)
 
 # ═══════════════════════════════════════════════════════════════════════
+# PreEscape Classification (multisensory paradigm)
+# ═══════════════════════════════════════════════════════════════════════
+
+_CLS_CFG = get_thresholds().classification
+USE_PRE_ESCAPE: bool = bool(_CLS_CFG.use_preescape)
+PREESCAPE_BUFFER_MS: float = float(_CLS_CFG.preescape_buffer_ms)
+
+# ═══════════════════════════════════════════════════════════════════════
 # Backward Compatibility Aliases
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -64,4 +72,6 @@ __all__ = [
     "PREWALK_THRESHOLD",
     "PREWALK_WINDOW_MS",
     "POST_STIM_BUFFER_MS",
+    "USE_PRE_ESCAPE",
+    "PREESCAPE_BUFFER_MS",
 ]

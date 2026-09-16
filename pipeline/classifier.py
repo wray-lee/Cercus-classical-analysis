@@ -2,7 +2,9 @@
 Cercus Framework — Ternary State Classifier
 ============================================
 Receives physical features from ``kinematics.py`` and routes each trial into
-one of three response categories: **Escape**, **PreWalk**, or **NoResponse**.
+response categories: **Escape**, **PreEscape**, **PreWalk**, or **NoResponse**
+(PreEscape is switch-controlled — ``classification.use_preescape``, default
+true — and only applies to multimodal wind trials).
 
 Classification is orthogonal to measurement — this module never re-derives
 geometric features; it only reads ``v_max`` / ``latency_ms`` and applies
@@ -17,8 +19,10 @@ import numpy as np
 import pandas as pd
 
 from .constants import (
+    PREESCAPE_BUFFER_MS,
     PREWALK_THRESHOLD,
     PREWALK_WINDOW_MS,
+    USE_PRE_ESCAPE,
 )
 from .kinematics import compute_escape_interval, compute_escape_latency
 
@@ -102,13 +106,27 @@ def classify_trial(
     if not has_burst:
         return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
 
-    # ── 3. PreWalk detection — paradigm-aware anchor ──
+    # ── 3. PreEscape detection (multisensory only, switch-controlled) ──
+    # Burst started before the wind arrived (minus buffer) → pure-vision escape
+    # that masks the multisensory response.  Routed ahead of PreWalk so the
+    # wind-anchored prewalk window can no longer mislabel it.
+    # 风前起跑 = 纯视觉触发的逃逸，优先于 PreWalk 单独成类。
+    is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
+    if (
+        USE_PRE_ESCAPE
+        and is_wind
+        and pd.notna(onset)
+        and pd.notna(interval_onset_ms)
+        and interval_onset_ms < onset - PREESCAPE_BUFFER_MS
+    ):
+        return {"response_type": "PreEscape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
+
+    # ── 4. PreWalk detection — paradigm-aware anchor ──
     # Wind trials: anchor at wind onset (onset = target_ttc_ms).  The 1-s
     # window before wind captures prewalk during sham-looming waiting.
     # Pure looming/visual: anchor at escape onset (interval_onset_ms or
     # latency_ms).  The 1-s window before escape captures true pre-escape
     # walking without wind-onset contamination.
-    is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
     if is_wind:
         anchor = onset
     else:
@@ -161,11 +179,12 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     df["interval_offset_ms"] = df["global_trial_id"].map(interval_offset_map)
 
     n_escape = sum(1 for v in classify_map.values() if v == "Escape")
+    n_preescape = sum(1 for v in classify_map.values() if v == "PreEscape")
     n_prewalk = sum(1 for v in classify_map.values() if v == "PreWalk")
     n_none = sum(1 for v in classify_map.values() if v == "NoResponse")
     n_total = len(classify_map)
     log.info(
-        "Ternary classification: Escape=%d, PreWalk=%d, NoResponse=%d (total=%d)",
-        n_escape, n_prewalk, n_none, n_total,
+        "Classification: Escape=%d, PreEscape=%d, PreWalk=%d, NoResponse=%d (total=%d)",
+        n_escape, n_preescape, n_prewalk, n_none, n_total,
     )
     return df

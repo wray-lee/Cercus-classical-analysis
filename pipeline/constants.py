@@ -44,6 +44,8 @@ from cercus.constants.thresholds import (
     POST_STIM_BUFFER_MS,
     PREWALK_THRESHOLD,
     PREWALK_WINDOW_MS,
+    PREESCAPE_BUFFER_MS,
+    USE_PRE_ESCAPE,
 )
 
 _log = logging.getLogger(__name__)

@@ -22,6 +22,8 @@ from cercus.constants.thresholds import (
     POST_STIM_BUFFER_MS,
     PREWALK_THRESHOLD,
     PREWALK_WINDOW_MS,
+    PREESCAPE_BUFFER_MS,
+    USE_PRE_ESCAPE,
 )
 
 # ── Geometry ──
@@ -58,6 +60,8 @@ __all__ = [
     "PREWALK_THRESHOLD",
     "PREWALK_WINDOW_MS",
     "POST_STIM_BUFFER_MS",
+    "USE_PRE_ESCAPE",
+    "PREESCAPE_BUFFER_MS",
     # Geometry
     "RADIUS_MM",
     "TRAJECTORY_MAX_RADIUS_MM",

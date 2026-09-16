@@ -195,6 +195,78 @@ _GOLDEN_EXPECTED = {
 # ══════════════════════════════════════════════════════════════════════
 
 
+def _trial_preescape() -> pd.DataFrame:
+    """Multimodal: sharp burst well before wind (wind at -373) -> PreEscape."""
+    t = np.linspace(-1500, 500, 1200)  # ~1.67 ms/frame
+    speed = np.ones_like(t) * 2.0
+    ramp = (t >= -600) & (t < -550)      # rise 2→300 mm/s, entirely pre-wind
+    speed[ramp] = np.linspace(2, 300, ramp.sum())
+    hold = (t >= -550) & (t < -300)      # stays >>98 through the wind window
+    speed[hold] = 300.0
+    decay = t >= -300
+    speed[decay] = 300.0 * np.exp(-np.linspace(0, 6, decay.sum()))
+    speed = np.maximum(0, speed)
+    return _make_trial(speed, t, trial_type="looming_wind", target_ttc_ms=-373.0)
+
+
+def _trial_burst_dies_before_wind() -> pd.DataFrame:
+    """Pre-wind burst fully over before the detection window -> veto NoResponse."""
+    t = np.linspace(-1500, 500, 1200)
+    speed = np.ones_like(t) * 2.0
+    burst = (t >= -900) & (t < -500)     # window is [-373, -123]: no v_max>98 inside
+    speed[burst] = 250.0 * np.sin(np.linspace(0, np.pi, burst.sum()))
+    speed = np.maximum(0, speed)
+    return _make_trial(speed, t, trial_type="looming_wind", target_ttc_ms=-373.0)
+
+
+def test_preescape_default_on():
+    """Switch default (true): pre-wind burst classifies as PreEscape."""
+    trial = _trial_preescape()
+    result = classify_trial(trial)
+    assert result["response_type"] == "PreEscape"
+    assert result["interval_onset_ms"] < -373.0 - 50.0
+
+
+def test_preescape_switch_off_reverts(monkeypatch):
+    """Switch false: same trial falls back to old ternary behavior."""
+    import pipeline.classifier as clf
+    monkeypatch.setattr(clf, "USE_PRE_ESCAPE", False)
+    trial = _trial_preescape()
+    result = classify_trial(trial)
+    assert result["response_type"] != "PreEscape"
+    assert result["response_type"] in ("Escape", "PreWalk", "NoResponse")
+
+
+def test_preescape_boundary(monkeypatch):
+    """Strict '<': onset exactly wind-buffer does not qualify; farther does."""
+    import pipeline.classifier as clf
+    trial = _trial_preescape()
+    onset = classify_trial(trial)["interval_onset_ms"]  # ≈ -600
+    # buffer pushes wind-buffer just before onset → onset not earlier, no PreEscape
+    monkeypatch.setattr(clf, "PREESCAPE_BUFFER_MS", -373.0 - onset + 5.0)
+    assert classify_trial(trial)["response_type"] != "PreEscape"
+    # buffer shrunk 10 ms → wind-buffer lands after onset → PreEscape
+    monkeypatch.setattr(clf, "PREESCAPE_BUFFER_MS", -373.0 - onset - 5.0)
+    assert classify_trial(trial)["response_type"] == "PreEscape"
+
+
+def test_preescape_needs_wind_paradigm(monkeypatch):
+    """Non-wind trials never become PreEscape."""
+    import pipeline.classifier as clf
+    trial = _trial_preescape()
+    trial = trial.copy()
+    trial["type"] = "looming_only"
+    trial["target_ttc_ms"] = np.nan
+    assert classify_trial(trial)["response_type"] != "PreEscape"
+
+
+def test_preescape_burst_veto_first():
+    """NoResponse absolute veto outranks PreEscape: no v_max>98 in window."""
+    trial = _trial_burst_dies_before_wind()
+    result = classify_trial(trial)
+    assert result["response_type"] == "NoResponse"
+
+
 @pytest.mark.parametrize(
     "trial_fn, expected",
     [
