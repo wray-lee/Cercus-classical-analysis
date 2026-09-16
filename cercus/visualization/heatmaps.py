@@ -455,19 +455,27 @@ def plot_trial_stacked_heatmap(
         # one full-height line per unique target_ttc_ms; onset panel — the wind
         # time drifts per row (each trial starts at 0), so a small sky-blue tick
         # on each row shows when the puff arrived relative to that trial's onset.
-        # TTC 面板风时刻恒定→整根竖线；onset 面板逐行漂移→每行天蓝刻度（NPG #56B4E9，inferno 上对比强）。
+        # TTC 面板风时刻恒定→整根竖线（蓝芯+黑衬，实线）；onset 面板逐行漂移→每行单色细 tick。
+        # 顶刊图元裁决（5 路调研）：逐行单色细 tick、无衬线（衬线是 over-engineered，且
+        # withStroke 衬底不跟随虚线 pattern——dashed+衬=黑条缀蓝点的渲染缺陷）。
+        # 蓝 #56B4E9 是唯一无衬也两端 ΔE≥50 的芯（inferno 无蓝通道，红绿 CVD 免疫）。
         if align == "ttc":
             for wv in sorted(set(wind_ttc_s)):
                 if t_window[0] <= wv <= t_window[1]:
-                    ax.axvline(wv, color=_WIND_COLOR, ls="--", lw=1.4, alpha=1.0, zorder=5)
+                    # 实线才有正确衬底渲染；dash 语义保留给白色 t=0 线
+                    ax.axvline(wv, color=_WIND_COLOR, ls="-", lw=1.6, alpha=1.0, zorder=5,
+                               path_effects=[path_effects.withStroke(
+                                   linewidth=3.0, foreground="black")])
                     ax.text(wv, 1.01, "wind", transform=ax.get_xaxis_transform(),
                             ha="center", va="bottom", fontsize=6, color=_WIND_COLOR,
-                            fontweight="bold")
+                            fontweight="bold",
+                            path_effects=[path_effects.withStroke(
+                                linewidth=2.0, foreground="black")])
         else:
             for i, (_lat, _row, wrow) in enumerate(trial_rows):
                 if wrow is not None:
-                    ax.plot([wrow - 0.015, wrow + 0.015], [i + 0.5, i + 0.5],
-                            color=_WIND_COLOR, lw=1.6, alpha=1.0,
+                    ax.plot([wrow - 0.04, wrow + 0.04], [i + 0.5, i + 0.5],
+                            color=_WIND_COLOR, lw=1.8, alpha=1.0,
                             solid_capstyle="butt", zorder=6)
 
         ax.set_title(cond, fontweight="bold", fontsize=9)
