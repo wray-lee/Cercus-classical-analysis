@@ -25,6 +25,7 @@ from .constants import (
     USE_PRE_ESCAPE,
 )
 from .kinematics import compute_escape_interval, compute_escape_latency
+from cercus.core.kinematics.distance import compute_reaction_and_distance
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def classify_trial(
     ``interval_onset_ms``, ``interval_offset_ms``
     """
     if trial.empty:
-        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
+        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, "reaction_time_ms": np.nan, "distance_mm": np.nan, "distance_500ms_mm": np.nan}
 
     speed_vals = trial["speed"].values
     t_vals = trial["t_rel"].values
@@ -102,9 +103,16 @@ def classify_trial(
     interval_onset_ms = interval_result["onset_ms"]
     interval_offset_ms = interval_result["offset_ms"]
 
+    # ── Stimulus-anchored RT + escape distance (NaN-safe; no-burst ⇒ NaN) ──
+    # 刺激锚定反应时与行程：wind trial 锚在 target_ttc，其余锚在 t_rel=0。
+    rt_dist = compute_reaction_and_distance(
+        t_vals, speed_vals, interval_onset_ms, interval_offset_ms,
+        anchor_ms=onset,
+    )
+
     # ── 2. Priority 1 — No-burst absolute veto ──
     if not has_burst:
-        return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan}
+        return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, **rt_dist}
 
     # ── 3. PreEscape detection (multisensory only, switch-controlled) ──
     # Burst started before the wind arrived (minus buffer) → pure-vision escape
@@ -119,7 +127,7 @@ def classify_trial(
         and pd.notna(interval_onset_ms)
         and interval_onset_ms < onset - PREESCAPE_BUFFER_MS
     ):
-        return {"response_type": "PreEscape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
+        return {"response_type": "PreEscape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
 
     # ── 4. PreWalk detection — paradigm-aware anchor ──
     # Wind trials: anchor at wind onset (onset = target_ttc_ms).  The 1-s
@@ -143,16 +151,17 @@ def classify_trial(
                 pre_max = float(np.nanmax(pre_slice))
                 frac_above = float(np.mean(pre_slice > PREWALK_THRESHOLD))
                 if pre_max > PREWALK_THRESHOLD and frac_above > 0.15:
-                    return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
+                    return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
 
-    # ── 4. Escape — burst detected, no pre-walk activity ──
-    return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms}
+    # ── 5. Escape — burst detected, no pre-walk activity ──
+    return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
 
 
 def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add ``response_type``, ``v_max``, ``latency_ms``, ``escape_interval_ms``,
-    ``interval_onset_ms``, and ``interval_offset_ms`` columns to a preprocessed DataFrame.
+    ``interval_onset_ms``, ``interval_offset_ms``, ``reaction_time_ms``,
+    ``distance_mm``, and ``distance_500ms_mm`` columns to a preprocessed DataFrame.
     """
     classify_map: dict = {}
     v_max_map: dict = {}
@@ -160,6 +169,9 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     interval_map: dict = {}
     interval_onset_map: dict = {}
     interval_offset_map: dict = {}
+    rt_map: dict = {}
+    dist_map: dict = {}
+    dist500_map: dict = {}
 
     for tid, grp in df.groupby("global_trial_id"):
         result = classify_trial(grp)
@@ -169,6 +181,9 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
         interval_map[tid] = result["escape_interval_ms"]
         interval_onset_map[tid] = result["interval_onset_ms"]
         interval_offset_map[tid] = result["interval_offset_ms"]
+        rt_map[tid] = result["reaction_time_ms"]
+        dist_map[tid] = result["distance_mm"]
+        dist500_map[tid] = result["distance_500ms_mm"]
 
     df = df.copy()
     df["response_type"] = df["global_trial_id"].map(classify_map)
@@ -177,6 +192,9 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     df["escape_interval_ms"] = df["global_trial_id"].map(interval_map)
     df["interval_onset_ms"] = df["global_trial_id"].map(interval_onset_map)
     df["interval_offset_ms"] = df["global_trial_id"].map(interval_offset_map)
+    df["reaction_time_ms"] = df["global_trial_id"].map(rt_map)
+    df["distance_mm"] = df["global_trial_id"].map(dist_map)
+    df["distance_500ms_mm"] = df["global_trial_id"].map(dist500_map)
 
     n_escape = sum(1 for v in classify_map.values() if v == "Escape")
     n_preescape = sum(1 for v in classify_map.values() if v == "PreEscape")

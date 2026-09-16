@@ -283,6 +283,9 @@ def export_summary_metrics(
         "escape_interval_ms": ("escape_interval_ms", "first"),
         "interval_onset_ms": ("interval_onset_ms", "first"),
         "interval_offset_ms": ("interval_offset_ms", "first"),
+        "reaction_time_ms": ("reaction_time_ms", "first"),
+        "distance_mm": ("distance_mm", "first"),
+        "distance_500ms_mm": ("distance_500ms_mm", "first"),
     }
     for col in ("wind_dir", "screen_side", "direction", "side", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"):
         if col in df.columns:
@@ -290,7 +293,7 @@ def export_summary_metrics(
 
     trial_agg = df.groupby(groupby).agg(**agg_spec).reset_index()
 
-    float_cols = ["latency_ms", "v_max", "escape_interval_ms", "interval_onset_ms", "interval_offset_ms", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"]
+    float_cols = ["latency_ms", "v_max", "escape_interval_ms", "interval_onset_ms", "interval_offset_ms", "reaction_time_ms", "distance_mm", "distance_500ms_mm", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"]
     for col in float_cols:
         if col in trial_agg.columns:
             trial_agg[col] = pd.to_numeric(trial_agg[col], errors="coerce")
