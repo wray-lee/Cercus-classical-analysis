@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+import matplotlib.colors as mcolors
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
@@ -623,12 +624,16 @@ def plot_reaction_distance_panel(
         bp = ax.boxplot(
             data, tick_labels=kept, patch_artist=True, widths=0.55,
             medianprops=dict(color="black", lw=1.2),
+            whiskerprops=dict(color="0.2", lw=0.9),
+            capprops=dict(color="0.2", lw=0.9),
             flierprops=dict(markersize=2, alpha=0.4),
         )
+        # 顶刊盒须样式：盒边=类别色实线，盒面=同色半透明（黑边+整体 alpha 会渲染成灰边）
         for patch, rt in zip(bp["boxes"], kept):
-            patch.set_facecolor(RESPONSE_COLORS[rt])
-            patch.set_alpha(0.6)
-            patch.set_edgecolor("black")
+            c = RESPONSE_COLORS[rt]
+            patch.set_facecolor(mcolors.to_rgba(c, 0.30))
+            patch.set_edgecolor(c)
+            patch.set_linewidth(1.0)
         ax.set_ylabel(xlabel, fontsize=7)
         ax.set_title(title, fontweight="bold", fontsize=8)
         ax.tick_params(labelsize=6)
