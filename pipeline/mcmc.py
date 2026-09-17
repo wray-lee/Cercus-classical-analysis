@@ -40,6 +40,7 @@ from .classifier import label_trials
 from .constants import NPG_PALETTE, _apply_publication_style
 from .io import load_and_concat_sessions, scan_and_pair_sessions
 from .kinematics import preprocess
+from cercus.constants.response_types import BURST_CLASSES, ESCAPE_CLASSES
 
 # ── JAX / numpyro CPU multi-device setup (must run before JAX initializes) ──
 try:
@@ -54,7 +55,11 @@ log = logging.getLogger(__name__)
 # MCMC Sampling Parameters (defaults; overridable via CLI)
 # ──────────────────────────────────────────────────────────────────────
 
-N_CHAINS: int = 8
+try:
+    import os
+    N_CHAINS: int = os.cpu_count() or 8
+except Exception:
+    N_CHAINS: int = 8
 N_DRAWS: int = 2000
 N_TUNE: int = 3000
 TARGET_ACCEPT: float = 0.9
@@ -165,9 +170,11 @@ def prepare_mcmc_data(
     valid = valid[valid["stim_condition"] != "unknown"].copy()
 
     if binary_mode == "escape_only":
+        # PreEscape 排除：风前纯视觉逃逸不等风，会拉偏 TTC–P(Escape) sigmoid
         valid["escape_binary"] = (valid["response_type"] == "Escape").astype(int)
     elif binary_mode == "escape_prewalk":
-        valid["escape_binary"] = valid["response_type"].isin(["Escape", "PreWalk"]).astype(int)
+        # "任何有 burst 的反应"——PreEscape 同样是逃逸事件，必须计入
+        valid["escape_binary"] = valid["response_type"].isin(BURST_CLASSES).astype(int)
     else:
         raise ValueError(f"Unknown binary_mode: {binary_mode}")
 
@@ -1571,9 +1578,10 @@ def prepare_survival_data(df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
         response = grp.iloc[0].get("response_type", "Unknown")
         t = grp[time_col]
 
-        if response == "Escape":
+        if response in ESCAPE_CLASSES:
             # Use the pre-computed escape onset latency (t_rel at escape start).
             # This is set per trial by label_trials → compute_escape_latency.
+            # PreEscape 也是逃逸事件（latency 同为 TTC 坐标，可为负=风前）。
             lat = grp.iloc[0].get("latency_ms", np.nan)
             if not np.isnan(lat):
                 ttc_at_event = float(lat)
@@ -1586,7 +1594,7 @@ def prepare_survival_data(df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
             # Censored: TTC at last observed frame
             ttc_at_event = float(t.iloc[-1])
 
-        event = 1 if response == "Escape" else 0
+        event = 1 if response in ESCAPE_CLASSES else 0
 
         # ── VERIFICATION: print first 10 samples ──
         if _debug_count < 10:

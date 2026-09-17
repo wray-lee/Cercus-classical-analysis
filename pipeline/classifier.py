@@ -119,11 +119,14 @@ def classify_trial(
     # that masks the multisensory response.  Routed ahead of PreWalk so the
     # wind-anchored prewalk window can no longer mislabel it.
     # 风前起跑 = 纯视觉触发的逃逸，优先于 PreWalk 单独成类。
+    # 必须多模态（looming+wind）且 target_ttc 存在才有"风前"参照；纯 wind 范式
+    # target_ttc 缺失（onset 退化为 0），刺激前自发奔跑不是视觉逃逸，不得成类。
     is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
+    is_multimodal = is_wind and "looming" in str(_trial_type).lower()
     if (
         USE_PRE_ESCAPE
-        and is_wind
-        and pd.notna(onset)
+        and is_multimodal
+        and stim_onset is not None
         and pd.notna(interval_onset_ms)
         and interval_onset_ms < onset - PREESCAPE_BUFFER_MS
     ):

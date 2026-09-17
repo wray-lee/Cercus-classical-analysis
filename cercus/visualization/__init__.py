@@ -43,7 +43,9 @@ from cercus.visualization.polar import (
 )
 from cercus.visualization.paradigm import (
     plot_paradigm_dumbbell,
+    plot_paradigm_rt_dist,
     summarize_subjects,
+    summarize_subjects_by_class,
 )
 from cercus.visualization.individual import (
     plot_loo,
@@ -85,7 +87,9 @@ __all__ = [
     "plot_population_pre_movement_prewalk",
     "plot_population_prewalk_polar",
     "plot_paradigm_dumbbell",
+    "plot_paradigm_rt_dist",
     "summarize_subjects",
+    "summarize_subjects_by_class",
     "plot_trial_counts",
     "plot_second_order",
     "plot_loo",

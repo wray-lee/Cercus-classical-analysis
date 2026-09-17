@@ -52,3 +52,36 @@ def test_dumbbell_structure():
               and c.get_paths() and c.get_paths()[0].vertices.shape[0] == 5]
         assert len(sq) >= 1
     plt.close(fig)
+
+
+def _synthetic_by_class() -> pd.DataFrame:
+    """含 PreEscape / PreWalk 的 trial 级表（范式 × 行为类对比用）。"""
+    rows = []
+    rng = np.random.default_rng(2)
+    classes3 = ("Escape", "PreEscape", "PreWalk")
+    for paradigm in ("bv", "-373 30°", "-308 36°"):
+        for s in range(4):
+            for t in range(12):
+                rt = float(rng.normal(40, 10))
+                rows.append({
+                    "paradigm": paradigm, "subject_id": f"subj{s}",
+                    "global_trial_index": t,
+                    "response_type": classes3[t % 3],
+                    "reaction_time_ms": rt, "distance_mm": rt + 30.0,
+                })
+    return pd.DataFrame(rows)
+
+
+def test_rt_dist_by_class():
+    from cercus.visualization.paradigm import (
+        plot_paradigm_rt_dist, summarize_subjects_by_class,
+    )
+    subj = summarize_subjects_by_class(_synthetic_by_class())
+    # 三类有 burst 行为（含 PreWalk）都保留；NoResponse 无 rt/dist 被排除
+    assert subj["response_type"].isin(["Escape", "PreEscape", "PreWalk"]).all()
+    assert set(subj["response_type"]) == {"Escape", "PreEscape", "PreWalk"}
+    # 每 (paradigm,subject,class) = 4 trial → 中位数逐动物一行
+    assert len(subj) == 3 * 4 * 3 and (subj["n"] == 4).all()
+    fig = plot_paradigm_rt_dist(_synthetic_by_class())
+    assert len(fig.axes) == 2
+    plt.close(fig)

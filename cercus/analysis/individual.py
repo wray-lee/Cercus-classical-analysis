@@ -46,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 from cercus.config import get_analysis, get_visualization
-from cercus.constants.response_types import RESPONSE_TYPES
+from cercus.constants.response_types import BURST_CLASSES
 from cercus.visualization._circstats import circ_mean_rad, rayleigh_p, wallraff_test
 from cercus.visualization._core import compute_trajectory_masks
 
@@ -66,11 +66,8 @@ BOOTSTRAP_ITERATIONS: int = int(_ANALYSIS.individual.bootstrap_iterations)
 _INCLUDE_PREWALK: bool = bool(
     get_visualization().get("individual_checks_include_prewalk", True)
 )
-_BURST_TYPES: tuple[str, ...] = tuple(
-    rt for rt in RESPONSE_TYPES if rt != "NoResponse"
-)
 INDIVIDUAL_CHECK_RESPONSE_TYPES: tuple[str, ...] = (
-    _BURST_TYPES if _INCLUDE_PREWALK else ("Escape",)
+    BURST_CLASSES if _INCLUDE_PREWALK else ("Escape",)
 )
 
 

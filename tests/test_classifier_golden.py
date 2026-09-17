@@ -260,6 +260,16 @@ def test_preescape_needs_wind_paradigm(monkeypatch):
     assert classify_trial(trial)["response_type"] != "PreEscape"
 
 
+def test_preescape_needs_looming_not_pure_wind():
+    """Pure-wind (baseline_wind) trials never become PreEscape: no looming →
+    无"风前视觉逃逸"语义，刺激前自发 burst 只能落 PreWalk/Escape/NoResponse。"""
+    trial = _trial_preescape()
+    trial = trial.copy()
+    trial["type"] = "baseline_wind"
+    trial["target_ttc_ms"] = np.nan  # 纯 wind 范式无 TTC（与 kinematics 一致）
+    assert classify_trial(trial)["response_type"] != "PreEscape"
+
+
 def test_preescape_burst_veto_first():
     """NoResponse absolute veto outranks PreEscape: no v_max>98 in window."""
     trial = _trial_burst_dies_before_wind()

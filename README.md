@@ -88,7 +88,7 @@ python mcmc_analysis.py --input-dir path/to/data/ --output results/
 
 **Performance Note**: The `population` and `trial-panels` commands use multiprocessing to parallelize subject processing and visualization rendering. Use `--workers N` to control concurrency (default: all CPU cores). Single-threaded fallback: `--workers 1`.
 
-**Full mode**: `--input` points at the *parent* directory whose subdirectories are the paradigms (e.g. `-373 30°`, `bv`). Each paradigm must contain paired `{subject}_session_{N}_{events,kinematics}.csv` files; empty/invalid directories are skipped with a warning. `Results/Test/train` (and `full/output/figures`) are excluded. The adaptive V_max threshold is computed **once on the pooled trials of all paradigms** and applied uniformly, keeping escape-probability comparisons across paradigms on a single scale. Outputs: `full_summary.csv` (trial-level, with `paradigm` + `is_valid_escape`), `full_meta.json` (threshold/method/paradigm order), and `paradigm_dumbbell.svg` — 3 panels (escape probability / stimulus-anchored RT / escape distance), where each dot is one animal's mean, the black square is the paradigm mean ± SD, and dots connect to the square by vertical lines (lab convention, cf. Frontiers fphys.2023.1153913 Fig 2). Paradigms are between-subject, so no cross-paradigm lines are drawn.
+**Full mode**: `--input` points at the *parent* directory whose subdirectories are the paradigms (e.g. `-373 30°`, `bv`). Each paradigm must contain paired `{subject}_session_{N}_{events,kinematics}.csv` files; empty/invalid directories are skipped with a warning. `Results/Test/train` (and `full/output/figures`) are excluded. The adaptive V_max threshold is computed **once on the pooled trials of all paradigms** and applied uniformly, keeping escape-probability comparisons across paradigms on a single scale. Outputs: `full_summary.csv` (trial-level, with `paradigm` + `is_valid_escape`), `full_meta.json` (threshold/method/paradigm order), and `paradigm_dumbbell.svg` — 3 panels (escape probability / stimulus-anchored RT / escape distance), where each dot is one animal's mean, the black square is the paradigm mean ± SD, and dots connect to the square by vertical lines (lab convention, cf. Frontiers fphys.2023.1153913 Fig 2). Paradigms are between-subject, so no cross-paradigm lines are drawn. Plus `paradigm_rt_dist.svg` — RT / escape distance compared **across paradigms × response class** (Escape / PreEscape / PreWalk boxes from per-subject medians, so no trial-level pseudoreplication; NoResponse excluded because RT/distance are undefined without an escape burst; Kruskal-Wallis across paradigms reported per class).
 
 ### Import Paths
 
@@ -149,7 +149,7 @@ reload_config()
 | Type | Criteria |
 |---|---|
 | **Escape** | Valid burst; started at/after wind; no pre-walk activity in the wind window |
-| **PreEscape** | Multimodal (wind) trials only: burst onset earlier than `wind onset − preescape_buffer_ms` (50 ms) — pure-vision escape that preempts the wind, so the multisensory response is unevaluable. Switch: `thresholds.classification.use_preescape` (default **true**; **false** reverts to the old ternary behavior) |
+| **PreEscape** | Multimodal (looming+wind) trials only: burst onset earlier than `wind onset − preescape_buffer_ms` (50 ms) — pure-vision escape that preempts the wind, so the multisensory response is unevaluable. Switch: `thresholds.classification.use_preescape` (default **true**; **false** reverts to the old ternary behavior) |
 | **PreWalk** | Pre-stimulus speed > 10 mm/s in the 1-s window before wind onset; burst exists |
 | **NoResponse** | Post-stimulus V_max ≤ (gmm threshold) mm/s within 250 ms |
 
@@ -290,8 +290,10 @@ Bayesian psychophysics via PyMC/NumPyro. Fits psychometric sigmoid functions to 
 
 | Mode | Escape (= 1) | Non-escape (= 0) |
 |---|---|---|
-| `escape_only` (default) | Escape | PreWalk, NoResponse |
-| `escape_prewalk` | Escape, PreWalk | NoResponse |
+| `escape_only` (default) | Escape | PreEscape, PreWalk, NoResponse |
+| `escape_prewalk` | Escape, PreEscape, PreWalk (any burst response) | NoResponse |
+
+`escape_only` deliberately **excludes PreEscape** from the sigmoid fit: a pre-wind, pure-vision escape is not waiting on the looming → including it would bias the TTC–P(Escape) curve. The Kaplan–Meier survival / race-model analysis, in contrast, counts both Escape and PreEscape as escape events (a burst is a burst, regardless of when it fires relative to the wind).
 
 ## Input Data Format
 

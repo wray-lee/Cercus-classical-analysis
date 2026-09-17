@@ -150,7 +150,7 @@ def full(
     import matplotlib.pyplot as plt
 
     from cercus.analysis.full import aggregate_paradigm_table
-    from cercus.visualization.paradigm import plot_paradigm_dumbbell
+    from cercus.visualization.paradigm import plot_paradigm_dumbbell, plot_paradigm_rt_dist
 
     df, meta = aggregate_paradigm_table(input, workers=workers)
     output.mkdir(parents=True, exist_ok=True)
@@ -172,6 +172,13 @@ def full(
     out = output / "paradigm_dumbbell.svg"
     if out.exists():
         out.unlink()  # Windows OSError 22 workaround (same as _safe_savefig)
+    fig.savefig(out, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    fig = plot_paradigm_rt_dist(df)
+    out = output / "paradigm_rt_dist.svg"
+    if out.exists():
+        out.unlink()
     fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     log.info("Full mode done: %d paradigms, threshold=%.1f mm/s [%s] → %s",
