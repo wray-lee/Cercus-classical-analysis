@@ -224,42 +224,21 @@ def _classify_conditions(df: pd.DataFrame) -> pd.Series:
     conditions[type_cleaned.isin(["baseline_visual", "visual_only", "visual"])] = "visual_only"
     conditions[type_cleaned.isin(["baseline_wind", "wind_only", "wind"])] = "wind_only"
 
-    # Bimodal: group TTC values, optionally stratified by delay_sec
+    # Bimodal: group by TTC only (delay_sec is per-animal batch ID, not paradigm dimension)
     mask_lw = df["type"] == "looming_wind"
     has_ttc = mask_lw & ttc_ms.notna()
 
     if has_ttc.any():
-        has_delay = "delay_sec" in df.columns and df.loc[has_ttc, "delay_sec"].notna().any()
-
-        if has_delay:
-            # Stratify by delay_sec → each delay is a separate condition group
-            delays = df.loc[has_ttc, "delay_sec"]
-            for delay_val in sorted(delays.dropna().unique()):
-                sub = has_ttc & (df["delay_sec"] == delay_val)
-                lw_ttc = ttc_ms[sub]
-                delay_label = f"d{delay_val:.3f}".rstrip("0").rstrip(".")
-                if lw_ttc.nunique() > MAX_TTC_BINS:
-                    try:
-                        bins = pd.qcut(lw_ttc, q=MAX_TTC_BINS, duplicates="drop")
-                        midpoints = bins.apply(lambda x: round((x.left + x.right) / 2)).astype(int)
-                        conditions[sub] = "looming_wind_" + delay_label + "_" + midpoints.astype(str)
-                    except ValueError:
-                        rounded = (lw_ttc / 50).round().mul(50).astype(int)
-                        conditions[sub] = "looming_wind_" + delay_label + "_" + rounded.astype(str)
-                else:
-                    conditions[sub] = "looming_wind_" + delay_label + "_" + lw_ttc.round().astype(int).astype(str)
+        lw_ttc = ttc_ms[has_ttc]
+        if lw_ttc.nunique() > MAX_TTC_BINS:
+            try:
+                bins = pd.qcut(lw_ttc, q=MAX_TTC_BINS, duplicates="drop")
+                midpoints = bins.apply(lambda x: round((x.left + x.right) / 2)).astype(int)
+                conditions[has_ttc] = "looming_wind_" + midpoints.astype(str)
+            except ValueError:
+                conditions[has_ttc] = "looming_wind_" + (lw_ttc / 50).round().mul(50).astype(int).astype(str)
         else:
-            # No delay info: original grouping by TTC only
-            lw_ttc = ttc_ms[has_ttc]
-            if lw_ttc.nunique() > MAX_TTC_BINS:
-                try:
-                    bins = pd.qcut(lw_ttc, q=MAX_TTC_BINS, duplicates="drop")
-                    midpoints = bins.apply(lambda x: round((x.left + x.right) / 2)).astype(int)
-                    conditions[has_ttc] = "looming_wind_" + midpoints.astype(str)
-                except ValueError:
-                    conditions[has_ttc] = "looming_wind_" + (lw_ttc / 50).round().mul(50).astype(int).astype(str)
-            else:
-                conditions[has_ttc] = "looming_wind_" + lw_ttc.round().astype(int).astype(str)
+            conditions[has_ttc] = "looming_wind_" + lw_ttc.round().astype(int).astype(str)
 
     return conditions
 
@@ -2004,8 +1983,18 @@ def plot_time_window_of_integration(
     try:
         n_pts = max(200, len(soa_arr) * 20)
         x_smooth = np.linspace(soa_arr[0], soa_arr[-1], n_pts)
-        y_smooth = make_interp_spline(soa_arr, vr_arr, k=min(3, len(soa_arr) - 1))(x_smooth)
+        spline_k = min(3, len(soa_arr) - 1)
+        y_smooth = make_interp_spline(soa_arr, vr_arr, k=spline_k)(x_smooth)
         ax.plot(x_smooth, y_smooth, color="#3C5488", linewidth=2.5, zorder=2)
+        # 显式标注插值类型（数据点不足时）
+        if spline_k == 1:
+            ax.text(0.98, 0.02, "Linear interpolation (2 data points)",
+                    transform=ax.transAxes, fontsize=9, color="0.4",
+                    ha="right", va="bottom", style="italic")
+        elif spline_k == 2:
+            ax.text(0.98, 0.02, "Quadratic spline (3 data points)",
+                    transform=ax.transAxes, fontsize=9, color="0.4",
+                    ha="right", va="bottom", style="italic")
     except Exception:
         ax.plot(soa_arr, vr_arr, color="#3C5488", linewidth=2.5, zorder=2)
 

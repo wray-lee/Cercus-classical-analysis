@@ -286,6 +286,11 @@ Computes three candidate thresholds independently on **all trials** (not filtere
 ### `pipeline/mcmc.py`
 Bayesian psychophysics via PyMC/NumPyro. Fits psychometric sigmoid functions to escape probability vs. TTC, tests multisensory integration hypotheses (ROPE-based posterior probability), computes Bayesian optimal integration (variance reduction), and performs survival analysis (Kaplan-Meier, Race Model Inequality).
 
+**Data Requirements**:
+- **Minimum**: ≥2 TTC conditions (e.g. `-308`, `-373`) for valid sigmoid fitting
+- **Recommended**: ≥4 TTC conditions for smooth Time-Window of Integration (TWoI) curves (2-3 conditions result in linear/quadratic interpolation, which is mathematically correct but visually appears as a straight/segmented line)
+- Each condition should have ≥5 trials for stable posterior estimation
+
 #### `--binary-mode`
 
 | Mode | Escape (= 1) | Non-escape (= 0) |

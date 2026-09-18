@@ -605,7 +605,7 @@ def plot_reaction_distance_panel(
         )
         .reset_index()
     )
-    # subject 级：每动物每类取中位数 → 检验与散点的单位（n = 动物数，非 trial 数）
+    # subject 级：每动物每类取中位数 → boxplot 与 scatter 的单位（n = 动物数，非 trial 数）
     subj_med = trial.groupby(["subject_id", "response_type"])[["rt", "dist"]].median()
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
@@ -614,24 +614,31 @@ def plot_reaction_distance_panel(
         (axes[0], "rt", "Reaction time", "RT vs stimulus (ms)"),
         (axes[1], "dist", "Escape distance", "Distance (mm)"),
     ):
-        data = [
-            trial.loc[trial["response_type"] == rt, col].dropna().values
+        pairs = [
+            (rt,
+             subj_med.xs(rt, level="response_type")[col].dropna().values
+             if rt in subj_med.index.get_level_values("response_type")
+             else np.array([]))
             for rt in classes
         ]
-        data = [d for d in data if len(d) > 0]
-        kept = [rt for rt, d in zip(classes, data) if len(d) > 0]
+        pairs = [(rt, d) for rt, d in pairs if len(d) > 0]
+        kept = [rt for rt, _ in pairs]
+        data = [d for _, d in pairs]
         if not data:
             ax.text(0.5, 0.5, "no data", transform=ax.transAxes,
                     ha="center", va="center", fontsize=8, color="0.5")
             ax.set_title(title, fontweight="bold", fontsize=8)
             continue
+        positions = list(range(len(data)))
         bp = ax.boxplot(
-            data, tick_labels=kept, patch_artist=True, widths=0.55,
+            data, positions=positions, patch_artist=True, widths=0.55,
             medianprops=dict(color="black", lw=1.2),
             whiskerprops=dict(color="0.2", lw=0.9),
             capprops=dict(color="0.2", lw=0.9),
             flierprops=dict(markersize=2, alpha=0.4),
         )
+        ax.set_xticks(positions)
+        ax.set_xticklabels(kept)
         # 顶刊盒须样式：盒边=类别色实线，盒面=同色半透明（黑边+整体 alpha 会渲染成灰边）
         for patch, rt in zip(bp["boxes"], kept):
             c = RESPONSE_COLORS[rt]
@@ -639,17 +646,10 @@ def plot_reaction_distance_panel(
             patch.set_edgecolor(c)
             patch.set_linewidth(1.0)
         # per-subject 中位数散点（伪重复对策：显示独立个体的变异）
-        for i, rt in enumerate(kept):
-            sv = (
-                subj_med.xs(rt, level="response_type")[col].dropna().values
-                if rt in subj_med.index.get_level_values("response_type")
-                else np.array([])
-            )
-            if len(sv) == 0:
-                continue
+        for i, (rt, vals) in enumerate(zip(kept, data)):
             ax.scatter(
-                np.full(len(sv), i) + rng.uniform(-0.12, 0.12, len(sv)),
-                sv, s=9, c=RESPONSE_COLORS[rt], edgecolors="black",
+                np.full(len(vals), i) + rng.uniform(-0.22, 0.22, len(vals)),
+                vals, s=9, c=RESPONSE_COLORS[rt], edgecolors="black",
                 linewidths=0.3, alpha=0.85, zorder=6,
             )
         ax.set_ylabel(xlabel, fontsize=7)
@@ -660,6 +660,18 @@ def plot_reaction_distance_panel(
         ax.set_xlim(-0.5, len(kept) - 0.5)
         if col == "rt":
             ax.axhline(0, color="0.5", ls="--", lw=0.7)
+            # RT 特殊处理：扩展正值区域并细化刻度（reaction time 通常 -200~+100 ms）
+            y_min, y_max = ax.get_ylim()
+            if y_max < 50:  # 若 auto-scale 砍掉了正值区域
+                y_max = max(50, y_max)
+            # 负值范围保留 auto，正值细化刻度间隔（每 25ms 一刻度）
+            ax.set_ylim(y_min, y_max)
+            ticks = list(ax.get_yticks())
+            # 在 [0, y_max] 区间插入细刻度
+            pos_ticks = np.arange(0, y_max + 1, 25)
+            ticks = sorted(set(ticks) | set(pos_ticks))
+            ax.set_yticks([t for t in ticks if y_min <= t <= y_max])
+            ax.grid(axis="y", color="#E5E7EB", lw=0.5, alpha=0.6)
 
     # Escape vs PreEscape 机制分离检验（subject 级中位数，避免 trial 级伪重复）
     from scipy.stats import mannwhitneyu

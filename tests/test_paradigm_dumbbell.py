@@ -85,3 +85,27 @@ def test_rt_dist_by_class():
     fig = plot_paradigm_rt_dist(_synthetic_by_class())
     assert len(fig.axes) == 2
     plt.close(fig)
+
+
+def test_rt_dist_ticks_and_offsets():
+    from cercus.visualization.paradigm import (
+        plot_paradigm_rt_dist, _compute_zero_anchored_ticks, _compute_distance_ticks,
+    )
+    vals_rt = np.array([-2200.0, 100.0])
+    (t_min, t_max), ticks = _compute_zero_anchored_ticks(vals_rt)
+    assert 0.0 in ticks
+    assert t_min <= vals_rt.min()
+    assert t_max >= vals_rt.max()
+
+    vals_dist = np.array([5.0, 320.0])
+    (d_min, d_max), d_ticks = _compute_distance_ticks(vals_dist)
+    assert d_min == 0.0
+    assert d_ticks[0] == 0.0
+    assert d_max >= vals_dist.max()
+
+    fig = plot_paradigm_rt_dist(_synthetic_by_class())
+    assert len(fig.axes) == 2
+    rt_ax, dist_ax = fig.axes
+    assert 0.0 in rt_ax.get_yticks()
+    assert 0.0 in dist_ax.get_yticks()
+    plt.close(fig)

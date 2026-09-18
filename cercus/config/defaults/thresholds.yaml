@@ -29,4 +29,4 @@ post_stim:
 # 风前纯视觉触发的真逃逸单独成类；false 回退三元行为
 classification:
   use_preescape: true          # 第四行为类开关
-  preescape_buffer_ms: 50.0    # onset 须早于 wind 超过此值才算 preescape
+  preescape_buffer_ms: 0.0     # onset 须早于 wind 超过此值才算 preescape（0 = 无死区，风前起跑皆为 PreEscape）
