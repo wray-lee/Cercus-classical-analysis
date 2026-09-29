@@ -306,7 +306,7 @@ def plot_population_behavior_probability(
 
     counts = trial_level["response_type"].value_counts()
     total = counts.sum()
-    categories = list(RESPONSE_TYPES)
+    categories = [rt for rt in RESPONSE_TYPES if rt != "PreEscape" or counts.get(rt, 0) > 0]
     values = [
         counts.get(c, 0) / total if total > 0 else 0.0 for c in categories
     ]

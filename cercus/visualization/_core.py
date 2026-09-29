@@ -178,8 +178,7 @@ def draw_oscilloscope_channels(ax: plt.Axes, df: pd.DataFrame, cond: str) -> Non
     wind_baseline = 3.0
 
     if "visual" in cond.lower() or "looming" in cond.lower():
-        stim_t_rel = df["t_rel"]
-        t_loom_start = stim_t_rel.min() if not stim_t_rel.empty else df["t_rel"].min()
+        t_loom_start = df["t_rel"].min()
         t_loom = np.array([t_loom_start, 0.0])
         ax.fill_between(
             t_loom,

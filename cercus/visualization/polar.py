@@ -19,6 +19,7 @@ from scipy.stats import circmean, gaussian_kde
 from pipeline.constants import (
     COLOR_ESCAPE,
     COLOR_PREWALK,
+    _get_unified_side,
 )
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 from cercus.visualization._circstats import (
@@ -29,6 +30,12 @@ from cercus.visualization._circstats import (
 from cercus.visualization._core import compute_trajectory_masks
 
 log = logging.getLogger(__name__)
+
+
+def _stimulus_relative_angle(traj_x, traj_y, side: str) -> float:
+    """Return the final trajectory angle in the right-stimulus frame."""
+    end_x = -traj_x[-1] if side == "left" else traj_x[-1]
+    return float(np.arctan2(end_x, traj_y[-1]))
 
 
 def plot_escape_angle_distribution(
@@ -141,7 +148,12 @@ def plot_population_polar_histogram(
     bins: int = 36,
     title: str | None = None,
 ) -> plt.Figure:
-    """360° polar rose of population escape-direction dispersion."""
+    """360° polar rose of stimulus-relative response directions.
+
+    For wind trials, right stimulus stays at +90° and left stimulus is
+    reflected to +90°. Thus +90° is ipsilateral and −90° contralateral.
+    Trials without a known stimulus side cannot be assigned either label.
+    """
     group_cols = (
         ["subject_id", "global_trial_id"]
         if "subject_id" in df.columns
@@ -163,8 +175,10 @@ def plot_population_polar_histogram(
         response_type = grp["response_type"].iloc[0]
         if response_type not in angles_by_type:
             continue
+        side = _get_unified_side(grp)
+        if side not in ("left", "right"):
+            continue
 
-        t_vals = grp["t_rel"].values
         _onset_ms = (
             grp["interval_onset_ms"].iloc[0]
             if "interval_onset_ms" in grp.columns
@@ -183,7 +197,8 @@ def plot_population_polar_histogram(
         if traj_x is None or len(traj_x) < 2:
             continue
 
-        angle_rad = float(np.arctan2(traj_x[-1], traj_y[-1]))
+        # Normalize to a right-side stimulus: −90° contra, +90° ipsi.
+        angle_rad = _stimulus_relative_angle(traj_x, traj_y, side)
         angles_by_type[response_type].append(angle_rad)
 
     esc = np.asarray(angles_by_type.get("Escape", []))
@@ -396,7 +411,7 @@ def plot_population_pre_movement_prewalk(
     """360° polar rose of population PreWalk pre-movement direction dispersion.
 
     Integrates trajectory from trial start to escape onset (interval_onset_ms)
-    to quantify spontaneous walking direction before stimulus/escape.
+    to quantify walking direction before the escape, relative to stimulus side.
     """
     group_cols = (
         ["subject_id", "global_trial_id"]
@@ -446,7 +461,8 @@ def plot_population_pre_movement_prewalk(
         if traj_x is None or len(traj_x) < 2:
             continue
 
-        angle_rad = float(np.arctan2(traj_x[-1], traj_y[-1]))
+        side = _get_unified_side(grp)
+        angle_rad = _stimulus_relative_angle(traj_x, traj_y, side)
         pw_angles.append(angle_rad)
 
     angles_arr = np.asarray(pw_angles)

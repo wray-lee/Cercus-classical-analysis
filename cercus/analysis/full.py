@@ -15,7 +15,6 @@ import re
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from cercus.analysis.vmax_threshold import select_vmax_threshold
@@ -117,7 +116,7 @@ def aggregate_paradigm_table(
         .dropna()
         .values
     )
-    threshold, method, _info = select_vmax_threshold(np.asarray(trial_vmax))
+    threshold, method, _info = select_vmax_threshold(trial_vmax)
     df["is_valid_escape"] = df["v_max"] >= threshold
 
     meta = {
