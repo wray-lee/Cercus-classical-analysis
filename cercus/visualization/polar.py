@@ -373,14 +373,15 @@ def plot_population_polar_histogram(
             ha="center", fontsize=7.5, color="0.35",
         )
 
-    fig.legend(
+    ax.legend(
         handles=legend_handles,
-        loc="upper right",
-        bbox_to_anchor=(0.99, 0.99),
+        loc="upper left",
+        bbox_to_anchor=(1.06, 1.0),
         frameon=False,
         fontsize=8,
         handlelength=1.4,
         labelspacing=0.6,
+        borderaxespad=0,
     )
 
     return fig

@@ -196,6 +196,41 @@ class TestHeatmapPlots:
         fig = plot_trial_stacked_heatmap(sample_df)
         _assert_regression(fig, "trial_stacked_heatmap")
 
+    @pytest.mark.parametrize("response_type", ["Escape", "PreEscape", "PreWalk", "NoResponse"])
+    @pytest.mark.parametrize("align", ["ttc", "onset"])
+    @pytest.mark.parametrize("orientation", ["horizontal", "vertical"])
+    def test_heatmap_sorts_by_classified_onset(self, response_type, align, orientation):
+        times = np.arange(-600.0, -199.0, 5.0)
+        rows = []
+        for tid, onset, early in [(0, -340.0, None), (1, -300.0, -500.0)]:
+            for t in times:
+                rows.append({
+                    "subject_id": "subj",
+                    "global_trial_id": tid,
+                    "response_type": response_type,
+                    "t_rel": t,
+                    "speed": 60.0 if t == onset or t == early else 0.0,
+                    "interval_onset_ms": onset,
+                    "target_ttc_ms": -373.0,
+                })
+        fig = plot_trial_stacked_heatmap(
+            pd.DataFrame(rows), align=align, orientation=orientation,
+            conditions=[response_type],
+        )
+        if align == "onset":
+            wind_markers = fig.axes[0].lines[1:]
+            assert len(wind_markers) == 2
+            assert [np.mean(line.get_xdata()) for line in wind_markers] == pytest.approx(
+                [-0.033, -0.073]
+            )
+        else:
+            image = fig.axes[0].images[0]
+            x_min, x_max = image.get_extent()[:2]
+            column = round(
+                (-0.34 - x_min) / (x_max - x_min) * (image.get_array().shape[1] - 1)
+            )
+            assert image.get_array()[0, column] > 50
+
 
 class TestVmaxPlots:
     """Regression tests for Vmax distribution plots."""
@@ -251,6 +286,13 @@ class TestPolarPlots:
     def test_population_polar_histogram(self, sample_df):
         fig = plot_population_polar_histogram(sample_df)
         _assert_regression(fig, "population_polar_histogram")
+
+    def test_population_polar_legend_clears_circle(self, sample_df):
+        fig = plot_population_polar_histogram(sample_df)
+        fig.canvas.draw()
+        ax = fig.axes[0]
+        renderer = fig.canvas.get_renderer()
+        assert ax.get_legend().get_window_extent(renderer).x0 > ax.get_window_extent(renderer).x1
 
     def test_population_pre_movement_prewalk(self, sample_df):
         fig = plot_population_pre_movement_prewalk(sample_df)

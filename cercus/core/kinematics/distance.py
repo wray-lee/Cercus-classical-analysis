@@ -60,7 +60,7 @@ def compute_reaction_and_distance(
         ss = np.concatenate((
             [np.interp(lo, t, s)], s[m], [np.interp(hi, t, s)],
         ))
-        return float(np.trapezoid(ss, tt) / 1000.0)
+        return float(np.sum((ss[:-1] + ss[1:]) * np.diff(tt)) / 2000.0)
 
     if np.isfinite(interval_offset_ms) and interval_offset_ms > interval_onset_ms:
         out["distance_mm"] = _integrate(interval_onset_ms, interval_offset_ms)

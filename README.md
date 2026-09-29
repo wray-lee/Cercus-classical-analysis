@@ -1,6 +1,6 @@
 # Cercus Framework
 
-Cricket escape-response behavioral analysis pipeline. Processes raw kinematics data, classifies trials into Escape / PreWalk / NoResponse, generates publication-grade figures (Nature/Science style), and performs Bayesian population-level inference via MCMC.
+Cricket escape-response behavioral analysis pipeline. Processes raw kinematics data, classifies trials into Escape / PreEscape / PreWalk / NoResponse, generates publication-grade figures (Nature/Science style), and performs Bayesian population-level inference via MCMC.
 
 ## Project Structure (Refactored)
 
@@ -146,28 +146,53 @@ reload_config()
 
 ## Standardized Classification Criteria
 
-| Type | Criteria |
-|---|---|
-| **Escape** | Valid burst; started at/after wind; no pre-walk activity in the wind window |
-| **PreEscape** | Multimodal (looming+wind) trials only: burst onset earlier than `wind onset − preescape_buffer_ms` (50 ms) — pure-vision escape that preempts the wind, so the multisensory response is unevaluable. Switch: `thresholds.classification.use_preescape` (default **true**; **false** reverts to the old ternary behavior) |
-| **PreWalk** | Pre-stimulus speed > 10 mm/s in the 1-s window before wind onset; burst exists |
-| **NoResponse** | Post-stimulus V_max ≤ (gmm threshold) mm/s within 250 ms |
+For each trial, let `v(t)` denote walking speed, `V_b` the burst threshold, `t_w` the wind onset, and `t_e` the measured escape onset. For every standard wind-containing trial, define the post-stimulus response interval
 
-Escape latency is defined as the first time speed exceeds 10 mm/s just before reaching 50 mm/s. The escape interval spans from latency onset to the point where speed drops back below 10 mm/s, with optional angular-velocity zero-crossing refinement.
+```text
+W = [t_w, t_w + 250 ms]
+```
 
-Classification priority order: **NoResponse > PreEscape > PreWalk > Escape** (PreEscape only when the switch is on). A trial is routed to the first matching category — e.g. if both PreWalk and Escape conditions are met, the trial is classified as PreWalk. When baseline speed ≥ 10 mm/s and no pre-walk activity is detected, the trial falls back to NoResponse even if a valid burst exists.
+where `t_w = target_ttc_ms`. For other non-`baseline_visual` trials, `t_w` is replaced by the trial's stimulus reference (`t_rel = 0`). A valid burst exists iff
 
-Alongside `latency_ms` / `escape_interval_ms`, each trial also carries stimulus-anchored **`reaction_time_ms`** (onset − wind onset on multimodal, onset − TTC otherwise; negative = started before the trigger, i.e. PreEscape lead time) and **`distance_mm`** / **`distance_500ms_mm`** (trapezoid integral of speed over the escape interval / first 500 ms after onset). All three land in `population_summary.csv` and feed `reaction_distance_panel.svg` (RT + distance boxplots per response class with per-subject median scatter; Escape vs PreEscape Mann-Whitney on subject-level medians, n = animals, to avoid trial-level pseudoreplication). In trial-stacked heatmaps the wind arrival is marked in NPG sky blue (`colors.yaml: wind_mark`): a full-height line per unique `target_ttc_ms` in TTC-aligned panels, per-row ticks in onset-aligned panels.
+```text
+max(v(t) : t ∈ W) > V_b
+```
 
-### `baseline_visual` Special Handling
+with `V_b = 98 mm/s` by package default and `V_b = 50 mm/s` under the current root `config.yaml`. If no valid burst exists, the response is `NoResponse`; no pre-stimulus condition can override this veto.
 
-For `baseline_visual` (visual-only looming) trials the stimulus onset precedes TTC (`t_rel = 0`), so the standard fixed-window burst detection does not apply. The classifier adapts as follows:
+For the pre-movement check, define
 
-| Aspect | Standard (wind / bimodal) | `baseline_visual` |
-|---|---|---|
-| Burst detection window | `[onset, onset + 250 ms]` | Entire stimulus period (`t_rel ≤ 0`) |
-| PreWalk check anchor | Stimulus onset (`t_rel = 0` or wind onset) | `latency_ms` (escape onset) |
-| Escape baseline check | Speed at stimulus onset | Speed at the frame immediately before `latency_ms` |
+```text
+P(a) = mean( v(t) > 10 mm/s | a − 1000 ms ≤ t < a − 50 ms )
+```
+
+using valid speed **frames** only. For wind trials, `a = t_w`; for other standard trials, `a = t_e`. `PreWalk` requires a valid burst and `P(a) > 0.15`; this is a cumulative frame proportion and does not require the above-threshold frames to be consecutive.
+
+For eligible multimodal (`looming+wind`) trials only, `PreEscape` requires a valid burst and
+
+```text
+t_e < t_w − preescape_buffer_ms
+```
+
+The current buffer is `0 ms`. `PreEscape` is disabled when `thresholds.classification.use_preescape` is false. `Escape` is the residual class:
+
+```text
+valid_burst ∧ ¬PreEscape ∧ ¬PreWalk
+```
+
+The implemented priority is therefore:
+
+```text
+NoResponse → PreEscape → PreWalk → Escape
+```
+
+`baseline_visual` is the only exception. Its response domain is `t ≤ TTC` rather than the standard 250-ms post-stimulus interval. A valid burst is defined by `max(v(t) : t ≤ TTC) > V_b`; its pre-movement check uses `a = t_e` in `P(a)`. `PreEscape` is undefined for this paradigm, so the effective routing is `NoResponse → PreWalk → Escape`.
+
+On the standard path, escape interval onset is obtained by locating the first sample above `V_b` in the response window and searching backward for the last sample below `10 mm/s`; the following sample is `t_e`. The interval offset is the first subsequent sample below `10 mm/s`. For `baseline_visual`, the interval instead brackets the maximum-speed peak up to TTC using the nearest below-threshold samples before and after that peak. Thus, a separate early movement that ends below `10 mm/s` before a later post-wind burst may be visible in a full-trial heatmap without determining `t_e` or satisfying the implemented `PreEscape` condition.
+
+The 250-ms duration and speed thresholds are configurable; the expressions above use the current timing setting. Missing response-window observations are routed to `NoResponse` by the implementation, but are not evidence of immobility. If the pre-movement window has no valid samples, `P(a)` is undefined and that check alone does not assign `PreWalk`.
+
+The exported `reaction_time_ms`, `distance_mm`, and `distance_500ms_mm` are derived from this measured interval. In trial-stacked heatmaps, wind arrival is shown using `colors.yaml: wind_mark`: a full-height line in TTC-aligned panels and one tick per row in onset-aligned panels.
 
 ## Trajectory Configuration (`config.yaml`)
 
@@ -214,7 +239,7 @@ Dual-stage trajectory integration algorithm:
 - **Stage 2**: curvature-thresholded rigid macro rotation for correct left/right fan dispersion
 
 ### `pipeline/classifier.py`
-State classifier (Escape / PreEscape / PreWalk / NoResponse; PreEscape behind `classification.use_preescape`). Priority order: (1) NoResponse if no valid burst, (2) PreEscape if the burst started >50 ms before wind (multimodal only), (3) PreWalk if pre-wind activity exceeds threshold, (4) Escape. Adds `response_type`, `v_max`, `latency_ms`, `interval_onset_ms`, `interval_offset_ms`, `reaction_time_ms`, `distance_mm`, `distance_500ms_mm` columns.
+State classifier (Escape / PreEscape / PreWalk / NoResponse; PreEscape behind `classification.use_preescape`). It first measures a valid burst in the configured detection window, then applies the exclusion checks in priority order: (1) `NoResponse` if no valid burst, (2) `PreEscape` if the measured burst onset is before wind onset (multimodal only), (3) `PreWalk` if pre-wind activity exceeds threshold, (4) residual `Escape`. Adds `response_type`, `v_max`, `latency_ms`, `interval_onset_ms`, `interval_offset_ms`, `reaction_time_ms`, `distance_mm`, `distance_500ms_mm` columns.
 
 ### `cercus/visualization/`
 Publication-grade plotting (Nature/Science/Cell style), split into focused modules:

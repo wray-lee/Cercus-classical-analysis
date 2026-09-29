@@ -18,7 +18,6 @@ import pandas as pd
 from pipeline.constants import (
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
-    PREWALK_WINDOW_MS,
 )
 from cercus.config import get_colors, get_geometry
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
@@ -416,23 +415,16 @@ def plot_trial_stacked_heatmap(
                 wind_ttc_s.append(float(_w) / 1000.0)
                 if align == "onset" and pd.notna(_o):
                     wind_row_s = (float(_w) - float(_o)) / 1000.0
-            trial_rows.append((latency, s_interp, wind_row_s))
+            sort_onset_ms = (
+                float(_o) if pd.notna(_o) else latency * 1000.0
+            )
+            trial_rows.append((sort_onset_ms, s_interp, wind_row_s))
 
         if not trial_rows:
             ax.set_title(cond, fontweight="bold")
             continue
 
-        if align == "onset" and cond == "PreWalk":
-            # sort by mean speed inside each trial's classifier window
-            # ([wind−1000, wind−50] ms, onset-aligned coords; fallback [-1,0])
-            def _win_mean(row: tuple[float, np.ndarray, float | None]) -> float:
-                lo = row[2] - PREWALK_WINDOW_MS / 1000.0 if row[2] is not None else -1.0
-                hi = row[2] - 0.05 if row[2] is not None else 0.0
-                m = (t_common >= lo) & (t_common < hi)
-                return float(np.nanmean(row[1][m])) if m.any() else 0.0
-            trial_rows.sort(key=_win_mean, reverse=True)
-        else:
-            trial_rows.sort(key=lambda x: x[0] if np.isfinite(x[0]) else 1e9)
+        trial_rows.sort(key=lambda x: x[0] if np.isfinite(x[0]) else 1e9)
         if len(trial_rows) > max_trials_per_panel:
             step = len(trial_rows) / max_trials_per_panel
             indices = np.arange(0, len(trial_rows), step).astype(int)

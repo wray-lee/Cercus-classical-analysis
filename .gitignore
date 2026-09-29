@@ -3,3 +3,4 @@ __pycache__
 *.sha256
 Thumbs.db
 .scratch/
+.playwright-mcp/
