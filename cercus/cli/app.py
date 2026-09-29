@@ -107,14 +107,18 @@ def trajectories(
 
 @app.command("multisensory-traj")
 def multisensory_traj(
-    bv: Path = typer.Option(..., "--bv", help="Directory for baseline-visual data"),
-    bw: Path = typer.Option(..., "--bw", help="Directory for baseline-wind data"),
-    ms: Path = typer.Option(..., "--ms", help="Directory for multisensory data"),
+    bv: Optional[Path] = typer.Option(None, "--bv", help="Directory for baseline-visual data"),
+    bw: Optional[Path] = typer.Option(None, "--bw", help="Directory for baseline-wind data"),
+    ms: Optional[Path] = typer.Option(None, "--ms", help="Directory for multisensory data"),
     output: Path = typer.Option(..., "--output", "-o", help="Path to save the output figure"),
 ) -> None:
-    """Multisensory trajectory comparison: baselines (−x) vs multisensory (+x)."""
+    """Multisensory trajectory comparison: baselines and multisensory trajectories."""
     from plot_multisensory_trajectories import main as run_ms
-    run_ms([f"--bv={bv}", f"--bw={bw}", f"--ms={ms}", f"--output={output}"])
+    argv = [f"--output={output}"]
+    for flag, path in (("--bv", bv), ("--bw", bw), ("--ms", ms)):
+        if path is not None:
+            argv.append(f"{flag}={path}")
+    run_ms(argv)
 
 
 @app.command()

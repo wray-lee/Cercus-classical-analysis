@@ -24,6 +24,7 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
     PREWALK_WINDOW_MS,
 )
+from cercus.config import get_visualization
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
 log = logging.getLogger(__name__)
@@ -658,6 +659,8 @@ def plot_reaction_distance_panel(
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.set_xlim(-0.5, len(kept) - 0.5)
+        if col == "dist":
+            ax.set_ylim(0, get_visualization().reaction_distance_max_mm)
         if col == "rt":
             ax.axhline(0, color="0.5", ls="--", lw=0.7)
             # RT 特殊处理：扩展正值区域并细化刻度（reaction time 通常 -200~+100 ms）

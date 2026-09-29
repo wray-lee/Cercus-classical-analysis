@@ -52,30 +52,30 @@ def plot_multisensory_trajectory_comparison(
     USE_ESCAPE_ONSET_ONLY_XY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
     dz_integration_range: str = DZ_INTEGRATION_RANGE,
     wind_offset_deg: float = MS_WIND_ANGLE_OFFSET_DEG,
+    present: tuple[str, ...] = ("bv", "bw", "ms"),
 ) -> plt.Figure:
-    """Multisensory comparison: baselines mirrored to −x, multisensory to +x.
+    """Plot supplied paradigms in their designated mirrored half.
 
-    Parameters
-    ----------
-    df_bv : baseline-visual trials
-    df_bw : baseline-wind trials
-    df_ms : multisensory trials
-    wind_offset_deg : wind baseline correction angle (from config.yaml
-        trajectory.wind_angle_offset_deg). Applied to wind trials in df_bw
-        before mirroring.
+    With one supplied dataset, the full grid remains visible; only its
+    mirrored trajectories and corresponding half-region annotation are shown.
     """
+    datasets = {
+        "bv": (df_bv, bv_color, False, None, "Baseline Visual"),
+        "bw": (df_bw, bw_color, False, wind_offset_deg, "Baseline Wind"),
+        "ms": (df_ms, ms_color, True, None, "Multisensory"),
+    }
+    if not present or any(label not in datasets for label in present):
+        raise ValueError("present must contain at least one of 'bv', 'bw', or 'ms'")
+    present = tuple(dict.fromkeys(present))
     fig, ax = plt.subplots(figsize=figsize)
 
     def _plot_dataset(
         df: pd.DataFrame, color: str, mirror_to_neg: bool,
         _wind_offset: float | None = None,
     ) -> int:
-        """Plot all trials in *df*. Returns count drawn.
-
-        mirror_to_neg=True  → all trajectories end up on −x side
-        mirror_to_neg=False → all trajectories end up on +x side
-        _wind_offset: if not None, override wind angle correction for this dataset
-        """
+        """Plot all trials in *df*. Returns count drawn."""
+        if df.empty:
+            return 0
         group_cols = (
             ["subject_id", "global_trial_id"]
             if "subject_id" in df.columns
@@ -84,18 +84,14 @@ def plot_multisensory_trajectory_comparison(
         count = 0
         for _keys, grp in df.groupby(group_cols):
             grp = grp.sort_values("t_rel")
-
             _onset_ms = (
                 grp["interval_onset_ms"].iloc[0]
-                if "interval_onset_ms" in grp.columns
-                else np.nan
+                if "interval_onset_ms" in grp.columns else np.nan
             )
             _offset_ms = (
                 grp["interval_offset_ms"].iloc[0]
-                if "interval_offset_ms" in grp.columns
-                else np.nan
+                if "interval_offset_ms" in grp.columns else np.nan
             )
-
             result = compute_trajectory_masks(
                 grp, _onset_ms, _offset_ms,
                 use_escape_onset_only_xy=USE_ESCAPE_ONSET_ONLY_XY,
@@ -110,64 +106,46 @@ def plot_multisensory_trajectory_comparison(
             traj_x, traj_y, *_rest = result
             if traj_x is None or len(traj_x) < 2:
                 continue
-
             traj_x = np.asarray(traj_x, dtype=float)
             traj_y = np.asarray(traj_y, dtype=float)
-
-            # Determine original side and mirror as needed
             ss = _get_unified_side(grp)
             if mirror_to_neg:
-                # Baselines → all to −x.  Right-side trials need x-flip.
                 if ss == "right":
                     traj_x = -traj_x
-            else:
-                # Multisensory → all to +x.  Left-side trials need x-flip.
-                if ss == "left":
-                    traj_x = -traj_x
-
+            elif ss == "left":
+                traj_x = -traj_x
             ax.plot(traj_x, traj_y, color=color, alpha=alpha, lw=lw)
             count += 1
         return count
 
-    n_bv = _plot_dataset(df_bv, bv_color, mirror_to_neg=False)
-    n_bw = _plot_dataset(df_bw, bw_color, mirror_to_neg=False, _wind_offset=wind_offset_deg)
-    n_ms = _plot_dataset(df_ms, ms_color, mirror_to_neg=True)
-
+    counts = {
+        label: _plot_dataset(datasets[label][0], datasets[label][1], datasets[label][2], datasets[label][3])
+        for label in present
+    }
     draw_standardized_grid(ax, max_radius=200.0, step=20.0)
 
-    # ── Half-region tinted backgrounds (zorder=0 so trajectories draw on top) ──
-    from matplotlib.patches import FancyBboxPatch
-    import matplotlib.colors as mcolors
+    if "bv" in present or "bw" in present:
+        ax.axvspan(-200, 0, color="0.85", alpha=0.15, zorder=0)
+        ax.text(-100, 195, "Baseline", ha="center", va="top",
+                fontsize=9, fontweight="bold", color="0.35")
+    if "ms" in present:
+        ax.axvspan(0, 200, color=ms_color, alpha=0.08, zorder=0)
+        ax.text(100, 195, "Multisensory", ha="center", va="top",
+                fontsize=9, fontweight="bold", color="0.35")
+    if len(present) == 1:
+        label = present[0]
+        ax.set_title(f"{datasets[label][4]} (n={counts[label]})",
+                     fontsize=9, fontweight="bold")
 
-    # Baseline half (left, x < 0): light grey tint
-    ax.axvspan(-200, 0, color="0.85", alpha=0.15, zorder=0)
-    # Multisensory half (right, x > 0): light green tint
-    ax.axvspan(0, 200, color=ms_color, alpha=0.08, zorder=0)
-
-    # ── Section labels inside the tinted halves (top corner) ──
-    ax.text(
-        -100, 195, "Baseline",
-        ha="center", va="top",
-        fontsize=9, fontweight="bold", color="0.35",
-    )
-    ax.text(
-        100, 195, "Multisensory",
-        ha="center", va="top",
-        fontsize=9, fontweight="bold", color=ms_color,
-    )
-
-    # ── Legend outside axes (below) ──
     from matplotlib.lines import Line2D
     handles = [
-        Line2D([0], [0], color=bv_color, lw=1.5, label=f"Baseline Visual (n={n_bv})"),
-        Line2D([0], [0], color=bw_color, lw=1.5, label=f"Baseline Wind (n={n_bw})"),
-        Line2D([0], [0], color=ms_color, lw=1.5, label=f"Multisensory (n={n_ms})"),
+        Line2D([0], [0], color=datasets[label][1], lw=1.5,
+               label=f"{datasets[label][4]} (n={counts[label]})")
+        for label in present
     ]
-    ax.legend(
-        handles=handles, loc="upper center",
-        bbox_to_anchor=(0.5, -0.02), ncol=3, fontsize=7, framealpha=0.8,
-    )
-
+    if len(handles) > 1:
+        ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.02),
+                  ncol=len(handles), fontsize=7, framealpha=0.8)
     fig.tight_layout(pad=1.5)
     return fig
 

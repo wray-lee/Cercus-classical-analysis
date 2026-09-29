@@ -1,8 +1,8 @@
 """Cercus Framework — Multisensory Trajectory Comparison
 =====================================================
-Loads three data directories (baseline-visual, baseline-wind, multisensory),
-runs the full pipeline on each, and produces one figure with baselines
-mirrored to −x and multisensory to +x.
+Loads whichever of baseline-visual, baseline-wind, and multisensory datasets
+are provided and plots their trajectories on a full grid, with only the
+corresponding mirrored half shaded and labeled.
 
 Usage:
     python plot_multisensory_trajectories.py --bv path/bv --bw path/bw --ms path/ms --output fig.svg
@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from functools import partial
 from multiprocessing import Pool
 
 import matplotlib.pyplot as plt
@@ -36,9 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Cercus Multisensory Trajectory Comparison",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--bv", required=True, help="Baseline-visual data directory")
-    p.add_argument("--bw", required=True, help="Baseline-wind data directory")
-    p.add_argument("--ms", required=True, help="Multisensory data directory")
+    p.add_argument("--bv", help="Baseline-visual data directory")
+    p.add_argument("--bw", help="Baseline-wind data directory")
+    p.add_argument("--ms", help="Multisensory data directory")
     p.add_argument("--output", required=True, help="Path to save the output figure")
     p.add_argument("--escape-only", action="store_true", help="Plot only Escape trials")
     return p
@@ -78,23 +77,33 @@ def _load_dir(data_dir: Path, escape_only: bool = False) -> pd.DataFrame:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
-    bv_dir, bw_dir, ms_dir = Path(args.bv), Path(args.bw), Path(args.ms)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    supplied = {
+        label: Path(raw)
+        for label, raw in (("bv", args.bv), ("bw", args.bw), ("ms", args.ms))
+        if raw is not None
+    }
+    if not supplied:
+        parser.error("Provide at least one of --bv, --bw, or --ms")
+
+    for label, data_dir in supplied.items():
+        if not data_dir.is_dir():
+            parser.error(f"--{label} is not a directory: {data_dir}")
+
+    # Sequential outer load (inner per-subject pool handles parallelism).
+    log.info("Loading %d datasets...", len(supplied))
+    datasets = {
+        label: _load_dir(data_dir, escape_only=args.escape_only)
+        for label, data_dir in supplied.items()
+    }
+
+    empty = pd.DataFrame()
+    fig = plot_multisensory_trajectory_comparison(
+        datasets.get("bv", empty), datasets.get("bw", empty), datasets.get("ms", empty),
+        present=tuple(supplied),
+    )
     save_path = Path(args.output)
-    escape_only = args.escape_only
-
-    for label, d in [("bv", bv_dir), ("bw", bw_dir), ("ms", ms_dir)]:
-        if not d.is_dir():
-            raise FileNotFoundError(f"--{label} does not exist: {d}")
-
-    # Sequential outer load (inner per-subject pool handles parallelism)
-    log.info("Loading 3 datasets...")
-    df_bv = _load_dir(bv_dir, escape_only=escape_only)
-    df_bw = _load_dir(bw_dir, escape_only=escape_only)
-    df_ms = _load_dir(ms_dir, escape_only=escape_only)
-
-    fig = plot_multisensory_trajectory_comparison(df_bv, df_bw, df_ms)
-
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, bbox_inches="tight")
     plt.close(fig)
