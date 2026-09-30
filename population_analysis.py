@@ -125,6 +125,41 @@ def _render_and_save(job_tuple) -> str:
         return ""
 
 
+def _window_from_times(values: np.ndarray, step: float) -> tuple[float, float]:
+    """Return an outward-rounded window that contains every finite time."""
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return (-step, step)
+
+    lo = np.floor(finite.min() / step) * step
+    hi = np.ceil(finite.max() / step) * step
+    # ponytail: one extra bin guards np.arange's floating-point endpoint drift.
+    return float(lo), float(hi + step)
+
+
+def _full_trial_heatmap_windows(
+    df: pd.DataFrame,
+    t_bin_s: float,
+    dt_ms: float,
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
+    """Build TTC/onset windows from the observed full-trial time span."""
+    t_rel_ms = df["t_rel"].to_numpy(dtype=float)
+    onset_ms = (
+        df["interval_onset_ms"].to_numpy(dtype=float)
+        if "interval_onset_ms" in df.columns
+        else np.full(len(df), np.nan)
+    )
+    aligned_onset_ms = np.where(
+        np.isfinite(onset_ms), t_rel_ms - onset_ms, t_rel_ms
+    )
+    return (
+        _window_from_times(t_rel_ms / 1000.0, t_bin_s),
+        _window_from_times(aligned_onset_ms / 1000.0, t_bin_s),
+        _window_from_times(aligned_onset_ms, dt_ms),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Main Pipeline
 # ══════════════════════════════════════════════════════════════════════
@@ -264,15 +299,13 @@ def main(argv: list[str] | None = None) -> None:
     heatmap_dir.mkdir(parents=True, exist_ok=True)
     full_trial_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Prepare full-trial config ──
-    geom_cfg = get_geometry()
-    hm_cfg = getattr(geom_cfg, "heatmap", None)
-    ft_cfg = getattr(hm_cfg, "full_trial", None) if hm_cfg else None
-    ft_t_window_ttc = tuple(float(x) for x in getattr(ft_cfg, "t_window_ttc", [-3.5, 1.5])) if ft_cfg else (-3.5, 1.5)
-    ft_t_window_onset = tuple(float(x) for x in getattr(ft_cfg, "t_window_onset", [-3.5, 1.5])) if ft_cfg else (-3.5, 1.5)
-    ft_t_window_density = tuple(float(x) for x in getattr(ft_cfg, "t_window_density", [-3500.0, 1500.0])) if ft_cfg else (-3500.0, 1500.0)
-    ft_t_bin_s = float(getattr(ft_cfg, "t_bin_s", 0.005)) if ft_cfg else 0.005
-    ft_dt_ms = float(getattr(ft_cfg, "dt_ms", 2.0)) if ft_cfg else 2.0
+    # ── Full-trial windows follow the observed timestamps, not a fixed cutoff ──
+    ft_cfg = get_geometry().heatmap.full_trial
+    ft_t_bin_s = float(ft_cfg.t_bin_s)
+    ft_dt_ms = float(ft_cfg.dt_ms)
+    ft_t_window_ttc, ft_t_window_onset, ft_t_window_density = (
+        _full_trial_heatmap_windows(all_data, ft_t_bin_s, ft_dt_ms)
+    )
 
     # ── Build plot job list: (func, output_path, args, kwargs) ──
     plot_jobs = [
