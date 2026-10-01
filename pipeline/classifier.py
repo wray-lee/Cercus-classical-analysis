@@ -19,13 +19,16 @@ import numpy as np
 import pandas as pd
 
 from .constants import (
+    ESCAPE_VMAX_THRESHOLD,
     PREESCAPE_BUFFER_MS,
     PREWALK_THRESHOLD,
     PREWALK_WINDOW_MS,
     USE_PRE_ESCAPE,
 )
 from .kinematics import compute_escape_interval, compute_escape_latency
+from cercus.config import get_thresholds
 from cercus.core.kinematics.distance import compute_reaction_and_distance
+from cercus.core.kinematics.latency import measure_pause_response, measure_stopping
 
 log = logging.getLogger(__name__)
 
@@ -33,35 +36,20 @@ log = logging.getLogger(__name__)
 def classify_trial(
     trial: pd.DataFrame,
     use_angular_onset_refinement: bool | None = None,
-) -> dict[str, str | float]:
+) -> dict[str, str | float | bool]:
+    """Measure burst/escape interval, then route NoResponse → PreEscape → PreWalk → Escape.
+
+    Wind PreWalk's compatibility RT measures stopping; escape latency is
+    exported separately. Neither short-RT QC nor missing stillness changes
+    the response class or the escape-distance integration interval.
     """
-    Ternary classification with **orthogonal** physical measurement.
-
-    Priority order (orthogonal routing):
-
-    1. **No-burst intercept** — no valid escape burst detected (``v_max`` ≤ 50
-       or ``latency_ms`` is NaN).  Returns ``NoResponse`` with measured ``v_max``
-       but ``latency_ms`` forced to NaN.  This is the *absolute veto*: regardless
-       of pre-stimulus baseline speed, failing to reach 50 mm/s in [0, 250 ms]
-       is always NoResponse.
-
-    2. **PreWalk intercept** — a valid burst exists **and** pre-stimulus
-       spontaneous activity exceeds ``PREWALK_THRESHOLD`` in the 1-s window
-       before stimulus onset.
-
-    3. **Escape** — a valid burst exists **and** baseline speed at t=0 is
-       quiescent (< ``ESCAPE_START_THRESHOLD``).
-
-    4. **Fallback** — NoResponse (e.g. burst exists but baseline ≥ 10 mm/s
-       and no pre-walk activity).
-
-    Returns
-    -------
-    dict with keys: ``response_type``, ``v_max``, ``latency_ms``, ``escape_interval_ms``,
-    ``interval_onset_ms``, ``interval_offset_ms``
-    """
+    pause = {
+        "pause_stopping_time_ms": np.nan, "pause_to_escape_time_ms": np.nan,
+        "pause_reaction_time_ms": np.nan, "pause_status": "not_applicable",
+        "pause_escape_status": "not_applicable", "pause_baseline_status": "not_applicable",
+    }
     if trial.empty:
-        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, "reaction_time_ms": np.nan, "distance_mm": np.nan, "distance_500ms_mm": np.nan}
+        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, "reaction_time_ms": np.nan, "escape_reaction_time_ms": np.nan, "stillness_reaction_time_ms": np.nan, "stillness_status": "invalid_data", "stillness_presence": "unobserved", "stop_to_escape_interval_ms": np.nan, "stillness_baseline_status": "unobserved", "stillness_window_start_ms": np.nan, "short_rt": False, "distance_mm": np.nan, "distance_500ms_mm": np.nan, **pause}
 
     speed_vals = trial["speed"].values
     t_vals = trial["t_rel"].values
@@ -78,6 +66,12 @@ def classify_trial(
 
     # ── Extract trial type for baseline_visual special handling ──
     _trial_type = trial["type"].iloc[0] if "type" in trial.columns else None
+    is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
+    is_multimodal = is_wind and "looming" in str(_trial_type).lower()
+    rt_cfg = get_thresholds().reaction_time
+    # Calibration changes latency reference only, not the hardware-anchored
+    # burst/classification windows. Zero delay means arrival is uncalibrated.
+    rt_anchor = onset + float(rt_cfg.wind_arrival_delay_ms) if is_wind else onset
 
     # ── 1. Physical measurement (always runs, never vetoed) ──
     result = compute_escape_latency(
@@ -91,7 +85,7 @@ def classify_trial(
     # latency_ms is refined earlier by the angular-velocity onset.
     latency_coarse_ms: float = result.get("latency_coarse_ms", latency_ms)  # type: ignore[assignment]
 
-    has_burst: bool = not np.isnan(latency_ms)
+    has_burst: bool = bool(np.isfinite(v_max) and v_max > ESCAPE_VMAX_THRESHOLD)
 
     # ── Escape interval: 10 mm/s onset → 10 mm/s offset ──
     interval_result = compute_escape_interval(
@@ -107,8 +101,29 @@ def classify_trial(
     # 刺激锚定反应时与行程：wind trial 锚在 target_ttc，其余锚在 t_rel=0。
     rt_dist = compute_reaction_and_distance(
         t_vals, speed_vals, interval_onset_ms, interval_offset_ms,
-        anchor_ms=onset,
+        anchor_ms=rt_anchor,
     )
+    escape_rt = rt_dist["reaction_time_ms"]
+    rt_dist.update(
+        escape_reaction_time_ms=escape_rt,
+        stillness_reaction_time_ms=np.nan,
+        stillness_status="not_applicable",
+        stillness_presence="not_applicable",
+        stop_to_escape_interval_ms=np.nan,
+        stillness_baseline_status="not_applicable",
+        stillness_window_start_ms=np.nan,
+        short_rt=bool(is_wind and 0.0 <= escape_rt < float(rt_cfg.short_escape_ms)),
+    )
+
+    if is_wind:
+        if "speed_raw" in trial and "t_acquisition_rel" in trial:
+            pause = measure_pause_response(
+                trial["t_acquisition_rel"].to_numpy(float),
+                trial["speed_raw"].to_numpy(float), rt_anchor, str(_trial_type),
+            )
+        else:
+            pause.update(pause_status="missing_acquisition_clock", pause_baseline_status="unobserved")
+    rt_dist.update(pause)
 
     # ── 2. Priority 1 — No-burst absolute veto ──
     if not has_burst:
@@ -121,8 +136,6 @@ def classify_trial(
     # 风前起跑 = 纯视觉触发的逃逸，优先于 PreWalk 单独成类。
     # 必须多模态（looming+wind）且 target_ttc 存在才有"风前"参照；纯 wind 范式
     # target_ttc 缺失（onset 退化为 0），刺激前自发奔跑不是视觉逃逸，不得成类。
-    is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
-    is_multimodal = is_wind and "looming" in str(_trial_type).lower()
     if (
         USE_PRE_ESCAPE
         and is_multimodal
@@ -131,6 +144,12 @@ def classify_trial(
         and interval_onset_ms < onset - PREESCAPE_BUFFER_MS
     ):
         return {"response_type": "PreEscape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
+
+    # A negative PreEscape value is a lead time, not a wind reaction.
+    # For post-wind responses, reject an onset before calibrated arrival.
+    if is_wind and escape_rt < 0.0:
+        rt_dist["reaction_time_ms"] = np.nan
+        rt_dist["escape_reaction_time_ms"] = np.nan
 
     # ── 4. PreWalk detection — paradigm-aware anchor ──
     # Wind trials: anchor at wind onset (onset = target_ttc_ms).  The 1-s
@@ -154,6 +173,44 @@ def classify_trial(
                 pre_max = float(np.nanmax(pre_slice))
                 frac_above = float(np.mean(pre_slice > PREWALK_THRESHOLD))
                 if pre_max > PREWALK_THRESHOLD and frac_above > 0.15:
+                    if is_wind:
+                        # Historical PreWalk activity does not establish that
+                        # the animal was still moving when wind arrived.
+                        stopping = {"onset_ms": np.nan, "status": "missing_acquisition_clock", "baseline_status": "unobserved", "presence": "unobserved"}
+                        acquisition_onset = np.nan
+                        if "speed_raw" in trial and "t_acquisition_rel" in trial:
+                            acquisition_t = trial["t_acquisition_rel"].to_numpy(float)
+                            if np.isfinite(interval_onset_ms):
+                                match = np.flatnonzero(np.isclose(t_vals, interval_onset_ms, rtol=0, atol=1e-8))
+                                if len(match):
+                                    acquisition_onset = float(acquisition_t[match[0]])
+                            # Never compare a host-clock escape endpoint with a
+                            # source-clock stopping endpoint without mapping it.
+                            if not np.isfinite(interval_onset_ms) or np.isfinite(acquisition_onset):
+                                stopping = measure_stopping(
+                                    acquisition_t, trial["speed_raw"].to_numpy(float),
+                                    acquisition_onset, rt_anchor,
+                                )
+                            else:
+                                stopping["status"] = "invalid_acquisition_clock"
+                        stillness_rt = float(stopping["onset_ms"]) - rt_anchor
+                        rt_dist["stillness_reaction_time_ms"] = stillness_rt
+                        rt_dist["stillness_status"] = stopping["status"]
+                        rt_dist["stillness_presence"] = stopping["presence"]
+                        stop_ms = float(stopping["onset_ms"])
+                        if np.isfinite(stop_ms) and np.isfinite(acquisition_onset):
+                            stop_matches = np.flatnonzero(acquisition_t == stop_ms)
+                            if len(stop_matches):
+                                stop_index = int(stop_matches[0])
+                                # Keep the actual host-mapped escape row, not an
+                                # earlier row sharing a corrupted source timestamp.
+                                clock_segment = acquisition_t[stop_index:int(match[0]) + 1]
+                                if (len(clock_segment) >= 2 and np.all(np.isfinite(clock_segment))
+                                        and np.all(np.diff(clock_segment) > 0)):
+                                    rt_dist["stop_to_escape_interval_ms"] = acquisition_onset - stop_ms
+                        rt_dist["stillness_baseline_status"] = stopping["baseline_status"]
+                        rt_dist["stillness_window_start_ms"] = stillness_rt - float(get_thresholds().stillness.speed_window_ms)
+                        rt_dist["reaction_time_ms"] = stillness_rt
                     return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
 
     # ── 5. Escape — burst detected, no pre-walk activity ──
@@ -164,6 +221,7 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add ``response_type``, ``v_max``, ``latency_ms``, ``escape_interval_ms``,
     ``interval_onset_ms``, ``interval_offset_ms``, ``reaction_time_ms``,
+    ``escape_reaction_time_ms``, ``stillness_reaction_time_ms``, ``short_rt``,
     ``distance_mm``, and ``distance_500ms_mm`` columns to a preprocessed DataFrame.
     """
     classify_map: dict = {}
@@ -173,8 +231,20 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     interval_onset_map: dict = {}
     interval_offset_map: dict = {}
     rt_map: dict = {}
+    escape_rt_map: dict = {}
+    stillness_rt_map: dict = {}
+    stillness_status_map: dict = {}
+    stillness_presence_map: dict = {}
+    stop_to_escape_map: dict = {}
+    stillness_baseline_map: dict = {}
+    stillness_window_map: dict = {}
+    short_rt_map: dict = {}
     dist_map: dict = {}
     dist500_map: dict = {}
+    pause_maps = {col: {} for col in (
+        "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms",
+        "pause_status", "pause_escape_status", "pause_baseline_status",
+    )}
 
     for tid, grp in df.groupby("global_trial_id"):
         result = classify_trial(grp)
@@ -185,8 +255,18 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
         interval_onset_map[tid] = result["interval_onset_ms"]
         interval_offset_map[tid] = result["interval_offset_ms"]
         rt_map[tid] = result["reaction_time_ms"]
+        escape_rt_map[tid] = result["escape_reaction_time_ms"]
+        stillness_rt_map[tid] = result["stillness_reaction_time_ms"]
+        stillness_status_map[tid] = result["stillness_status"]
+        stillness_presence_map[tid] = result["stillness_presence"]
+        stop_to_escape_map[tid] = result["stop_to_escape_interval_ms"]
+        stillness_baseline_map[tid] = result["stillness_baseline_status"]
+        stillness_window_map[tid] = result["stillness_window_start_ms"]
+        short_rt_map[tid] = result["short_rt"]
         dist_map[tid] = result["distance_mm"]
         dist500_map[tid] = result["distance_500ms_mm"]
+        for col, values in pause_maps.items():
+            values[tid] = result[col]
 
     df = df.copy()
     df["response_type"] = df["global_trial_id"].map(classify_map)
@@ -196,8 +276,18 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     df["interval_onset_ms"] = df["global_trial_id"].map(interval_onset_map)
     df["interval_offset_ms"] = df["global_trial_id"].map(interval_offset_map)
     df["reaction_time_ms"] = df["global_trial_id"].map(rt_map)
+    df["escape_reaction_time_ms"] = df["global_trial_id"].map(escape_rt_map)
+    df["stillness_reaction_time_ms"] = df["global_trial_id"].map(stillness_rt_map)
+    df["stillness_status"] = df["global_trial_id"].map(stillness_status_map)
+    df["stillness_presence"] = df["global_trial_id"].map(stillness_presence_map)
+    df["stop_to_escape_interval_ms"] = df["global_trial_id"].map(stop_to_escape_map)
+    df["stillness_baseline_status"] = df["global_trial_id"].map(stillness_baseline_map)
+    df["stillness_window_start_ms"] = df["global_trial_id"].map(stillness_window_map)
+    df["short_rt"] = df["global_trial_id"].map(short_rt_map).fillna(False).astype(bool)
     df["distance_mm"] = df["global_trial_id"].map(dist_map)
     df["distance_500ms_mm"] = df["global_trial_id"].map(dist500_map)
+    for col, values in pause_maps.items():
+        df[col] = df["global_trial_id"].map(values)
 
     n_escape = sum(1 for v in classify_map.values() if v == "Escape")
     n_preescape = sum(1 for v in classify_map.values() if v == "PreEscape")

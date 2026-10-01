@@ -20,7 +20,16 @@ prewalk:
 
 # ── Baseline & Buffer Settings ──
 baseline:
-  quiet_mm_s: 3.0          # mm/s — threshold for true quiescent baseline
+  quiet_mm_s: 10.0         # mm/s — stopping: observed downward crossing below this speed (2023 moving-cricket criterion)
+
+stillness:
+  speed_window_ms: 20.0      # ms — causal displacement average; ~4 optical counts at 10 mm/s, not a latency floor
+  max_frame_gap_factor: 3.0  # × median acquisition interval — reject unobserved motion
+  displacement_quantum_mm: 0.04712389  # mm/axis count — local resolution margin, not a validated error bound
+
+reaction_time:
+  short_escape_ms: 50.0    # ms — QC flag only; never clamp measured latency
+  wind_arrival_delay_ms: 0.0  # ms — measured delay from stim_state to airflow at animal; 0 = uncalibrated
 
 post_stim:
   buffer_ms: 50.0          # ms — post-stimulus tail buffer

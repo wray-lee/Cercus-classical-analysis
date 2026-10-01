@@ -42,7 +42,7 @@ def summarize_subjects(df: pd.DataFrame) -> pd.DataFrame:
         df.groupby(["paradigm", "subject_id", "global_trial_index"])
         .agg(
             response_type=("response_type", "first"),
-            rt=("reaction_time_ms", "first"),
+            rt=("escape_reaction_time_ms" if "escape_reaction_time_ms" in df else "reaction_time_ms", "first"),
             dist=("distance_mm", "first"),
         )
         .reset_index()
@@ -71,7 +71,7 @@ def summarize_subjects_by_class(df: pd.DataFrame) -> pd.DataFrame:
         df.groupby(["paradigm", "subject_id", "global_trial_index"])
         .agg(
             response_type=("response_type", "first"),
-            rt=("reaction_time_ms", "first"),
+            rt=("escape_reaction_time_ms" if "escape_reaction_time_ms" in df else "reaction_time_ms", "first"),
             dist=("distance_mm", "first"),
         )
         .reset_index()
@@ -163,7 +163,7 @@ def plot_paradigm_rt_dist(
     panel_notes: list[list[str]] = []
     for ax, (col, ylab), tag in zip(
         axes,
-        (("rt_med", "Reaction time (ms)"), ("dist_med", "Escape-interval distance (mm)")),
+        (("rt_med", "Escape onset vs stimulus (ms)"), ("dist_med", "Escape-interval distance (mm)")),
         panel_tags,
     ):
         # 面板标签：set_title 左对齐到轴框上方，自动避让 y 轴标签（不再重叠）
@@ -300,7 +300,7 @@ def plot_paradigm_dumbbell(
 
     panels = (
         ("response_rate", "Escape probability", "P(Escape+PreEscape)"),
-        ("rt_mean", "Reaction time", "stimulus-anchored RT (ms)"),
+        ("rt_mean", "Escape onset vs stimulus", "Onset offset (ms)"),
         ("dist_mean", "Escape distance", "distance (mm)"),
     )
 

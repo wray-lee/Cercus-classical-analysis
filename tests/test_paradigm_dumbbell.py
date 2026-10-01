@@ -87,6 +87,17 @@ def test_rt_dist_by_class():
     plt.close(fig)
 
 
+def test_cross_paradigm_rt_uses_escape_not_stopping_latency():
+    from cercus.visualization.paradigm import summarize_subjects_by_class
+
+    df = _synthetic_by_class()
+    df["escape_reaction_time_ms"] = 120.0
+    df["stillness_reaction_time_ms"] = 30.0
+    df.loc[df["response_type"] == "PreWalk", "reaction_time_ms"] = 30.0
+    assert (summarize_subjects_by_class(df)["rt_med"] == 120.0).all()
+    assert (summarize_subjects(df)["rt_mean"] == 120.0).all()
+
+
 def test_rt_dist_ticks_and_offsets():
     from cercus.visualization.paradigm import (
         plot_paradigm_rt_dist, _compute_zero_anchored_ticks, _compute_distance_ticks,

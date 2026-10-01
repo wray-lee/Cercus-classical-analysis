@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from cercus.config import get_thresholds
 from cercus.constants.thresholds import (
     ANGULAR_ONSET_EPS_DEG,
     ANGULAR_ONSET_WINDOW_MS,
@@ -77,12 +78,15 @@ def compute_escape_latency(
     """Pure geometric burst-feature extraction — no baseline veto.
 
     1. Measure ``v_max`` in the burst window:
-       - For baseline_visual: search the entire stimulus period ``[onset, +∞)``
+       - For baseline_visual: search the stimulus period ``t_rel <= 0``
        - For others: ``[onset, onset + ESCAPE_WINDOW_MS]``
-    2. If ``v_max > ESCAPE_VMAX_THRESHOLD``: locate the first frame exceeding
-       50 mm/s, then search **backwards** through the full time series for the
-       last frame below 10 mm/s.
-    3. Otherwise return ``latency_ms = NaN``.
+    2. Locate the first frame exceeding ``ESCAPE_VMAX_THRESHOLD``, then
+       search backwards for the last frame at or below ``ESCAPE_START_THRESHOLD``
+       (with a relative floating-point tolerance, not a biological margin).
+       Pure-wind responses require an observed fresh onset at or after wind;
+       skip ongoing movement and seek a later qualifying burst after low speed.
+       Multimodal pre-wind onsets remain available for PreEscape.
+    3. Without a qualifying burst / observable onset, return ``latency_ms = NaN``.
 
     Optional angular refinement: when ``escape.use_angular_onset_refinement``
     is enabled (default False) and *angular_velocity* / *dz* are supplied, the
@@ -93,12 +97,16 @@ def compute_escape_latency(
     """
     onset = 0.0 if stim_onset_t_rel is None else stim_onset_t_rel
     _is_baseline_visual = (trial_type is not None and "baseline_visual" in str(trial_type))
+    _is_wind = trial_type is not None and "wind" in str(trial_type).lower()
+    _is_multimodal = _is_wind and "looming" in str(trial_type).lower()
     _refine = USE_ANGULAR_ONSET_REFINEMENT if use_angular_onset_refinement is None else use_angular_onset_refinement
 
     def _finalize(i_coarse: int, latency_ms: float, v_max: float) -> dict[str, float]:
         if _refine and angular_velocity is not None and dz is not None and len(t_rel) >= 2:
             fps = 1000.0 / float(np.median(np.diff(t_rel)))
             i_ang = get_angular_onset_idx(angular_velocity, dz, i_coarse, fps)
+            if _is_wind and t_rel[i_coarse] >= onset:
+                i_ang = max(i_ang, int(np.searchsorted(t_rel, onset)))
             latency_ms = float(t_rel[min(i_ang, i_coarse)])
         return {
             "v_max": v_max,
@@ -124,7 +132,7 @@ def compute_escape_latency(
         peak_idx = burst_indices[peak_local]
 
         search_back = speed[:peak_idx + 1]
-        below_back = search_back < ESCAPE_START_THRESHOLD
+        below_back = search_back <= ESCAPE_START_THRESHOLD * (1.0 + 1e-9)
         if np.any(below_back):
             last_below_idx = int(np.where(below_back)[0][-1])
             return _finalize(last_below_idx + 1, float(t_rel[last_below_idx + 1]), v_max)
@@ -149,13 +157,299 @@ def compute_escape_latency(
     first_exceed_local = int(np.argmax(burst_speed > ESCAPE_VMAX_THRESHOLD))
     first_exceed_global = burst_indices[first_exceed_local]
 
-    search_speed = speed[:first_exceed_global + 1]
-    below_mask = search_speed < ESCAPE_START_THRESHOLD
+    search_start = 0
+    if _is_wind and not _is_multimodal:
+        # Include the adjacent pre-wind frame only to observe a transition
+        # at the first post-wind sample; never reuse an earlier movement onset.
+        search_start = max(0, int(burst_indices[0]) - 1)
+        qualifying = burst_indices[burst_speed > ESCAPE_VMAX_THRESHOLD]
+        for candidate in qualifying:
+            run = speed[search_start:int(candidate)]
+            below = np.flatnonzero(
+                np.isfinite(run)
+                & (run <= ESCAPE_START_THRESHOLD * (1.0 + 1e-9))
+            )
+            if not len(below):
+                continue
+            last_below_idx = search_start + int(below[-1])
+            # Missing speed cannot establish the transition into a fresh burst.
+            if not np.all(np.isfinite(speed[last_below_idx:int(candidate) + 1])):
+                continue
+            i_onset = last_below_idx + 1
+            return _finalize(i_onset, float(t_rel[i_onset]), v_max)
+        return {"v_max": v_max, "latency_ms": np.nan, "latency_coarse_ms": np.nan}
+
+    search_speed = speed[search_start:first_exceed_global + 1]
+    below_mask = search_speed <= ESCAPE_START_THRESHOLD * (1.0 + 1e-9)
 
     if np.any(below_mask):
-        last_below_idx = int(np.where(below_mask)[0][-1])
+        last_below_idx = search_start + int(np.where(below_mask)[0][-1])
         return _finalize(last_below_idx + 1, float(t_rel[last_below_idx + 1]), v_max)
     return _finalize(0, float(t_rel[0]), v_max)
+
+
+def _causal_displacement_speed(t: np.ndarray, v: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """Trailing displacement average on ordered acquisition intervals."""
+    cfg = get_thresholds().stillness
+    width = float(cfg.speed_window_ms)
+    dt = np.diff(t)
+    max_gap = float(np.median(dt)) * float(cfg.max_frame_gap_factor)
+    valid = np.isfinite(v[1:]) & (v[1:] >= 0) & (dt <= max_gap)
+    distance = np.r_[0.0, np.cumsum(np.where(valid, v[1:] * dt / 1000.0, 0.0))]
+    averaged = (distance - np.interp(t - width, t, distance)) * 1000.0 / width
+    averaged[t - width < t[0]] = np.nan
+    for i in np.flatnonzero(~valid) + 1:
+        averaged[(t > t[i - 1]) & (t - width < t[i])] = np.nan
+    return averaged, valid, max_gap
+
+
+def measure_pause_response(
+    t_rel: np.ndarray,
+    speed: np.ndarray,
+    wind_onset_ms: float,
+    trial_type: str = "baseline_wind",
+) -> dict[str, float | str]:
+    """Source-clock T1/T2 with an earlier and a stop-relative later period.
+
+    Both endpoints use the same causal displacement average, never centered
+    speed or a fixed lag correction. Strict moving history (> threshold) is
+    separate from locally observable transitions after intermittent walking.
+    Response classes and distance intervals are deliberately not returned.
+    """
+    result: dict[str, float | str] = {
+        "pause_stopping_time_ms": np.nan, "pause_to_escape_time_ms": np.nan,
+        "pause_reaction_time_ms": np.nan, "pause_status": "invalid_data",
+        "pause_escape_status": "not_applicable", "pause_baseline_status": "unobserved",
+    }
+    t, v = np.asarray(t_rel, dtype=float), np.asarray(speed, dtype=float)
+    cfg = get_thresholds()
+    if (t.ndim != 1 or v.ndim != 1 or len(t) < 2 or len(t) != len(v)
+            or not np.isfinite(wind_onset_ms)
+            or not np.isfinite(float(cfg.stillness.speed_window_ms))
+            or float(cfg.stillness.speed_window_ms) <= 0):
+        return result
+    bad = np.flatnonzero(~np.isfinite(t) | np.r_[False, np.diff(t) <= 0])
+    truncated = bool(len(bad))
+    if truncated:
+        t, v = t[:bad[0]], v[:bad[0]]
+    if len(t) < 2 or t[-1] < wind_onset_ms:
+        return result
+    averaged, valid, max_gap = _causal_displacement_speed(t, v)
+    first = compute_escape_latency(
+        t, averaged, stim_onset_t_rel=wind_onset_ms, trial_type=trial_type,
+        use_angular_onset_refinement=False,
+    )
+    cap = float(first["latency_ms"])
+    earlier_end = wind_onset_ms + float(cfg.escape.window_ms)
+    at_reference = averaged[t <= wind_onset_ms]
+    if (
+        not np.isfinite(cap)
+        or (
+            cap < wind_onset_ms
+            and cap == t[0]
+            and not (
+                len(at_reference)
+                and at_reference[-1] > ESCAPE_VMAX_THRESHOLD
+            )
+        )
+    ):
+        # Multimodal onset fallback can return the first sample even though no
+        # pre-wind onset was observed. Keep only a burst still ongoing at wind.
+        cap = earlier_end
+    early_bursts = np.flatnonzero(
+        (t >= wind_onset_ms) & (t <= earlier_end)
+        & (averaged > ESCAPE_VMAX_THRESHOLD)
+    )
+    if len(early_bursts):
+        # Even an unresolved ongoing burst cannot have its deceleration
+        # relabelled as the pre-escape pause before a later burst.
+        cap = min(cap, float(t[early_bursts[0]]))
+    stopping = measure_stopping(t, v, cap, wind_onset_ms)
+    result["pause_status"] = stopping["status"]
+    result["pause_baseline_status"] = stopping["baseline_status"]
+    if stopping["baseline_status"] != "unobserved":
+        history = (t >= wind_onset_ms - float(cfg.prewalk.window_ms)) & (t <= wind_onset_ms)
+        result["pause_baseline_status"] = (
+            "continuous_moving"
+            if np.all(averaged[history] > float(cfg.baseline.quiet_mm_s) * (1.0 + 1e-9))
+            else "intermittent_moving"
+        )
+    if stopping["status"] != "observed":
+        search_end = min(earlier_end, cap)
+        covered = t[t <= search_end]
+        if stopping["status"] == "no_preescape_stop" and (
+            (truncated and t[-1] < search_end)
+            or not len(covered)
+            or search_end - covered[-1] > max_gap
+        ):
+            result["pause_status"] = "invalid_data"
+        return result
+    stop = float(stopping["onset_ms"])
+    result["pause_stopping_time_ms"] = stop - wind_onset_ms
+    result["pause_escape_status"] = "invalid_data"
+    end = stop + float(cfg.escape.window_ms)
+    # A gap after stopping invalidates the later search; never backtrack across
+    # it to fabricate an onset. Corruption after a confirmed burst is harmless.
+    candidates = np.flatnonzero((t >= stop) & (t <= end))
+    burst = candidates[averaged[candidates] > ESCAPE_VMAX_THRESHOLD]
+    last = int(burst[0]) if len(burst) else int(candidates[-1])
+    start = int(np.flatnonzero(t == stop)[0])
+    if not np.all(np.isfinite(averaged[start:last + 1])) or not np.all(valid[start:last]):
+        return result
+    later = compute_escape_latency(
+        t[:last + 1], averaged[:last + 1], stim_onset_t_rel=stop,
+        trial_type="baseline_wind", use_angular_onset_refinement=False,
+    )
+    escape = float(later["latency_ms"])
+    if np.isfinite(escape) and escape > stop:
+        result.update(
+            pause_to_escape_time_ms=escape - stop,
+            pause_reaction_time_ms=escape - wind_onset_ms,
+            pause_escape_status="observed",
+        )
+    elif not truncated and t[-1] >= end and end - t[candidates[-1]] <= max_gap:
+        result["pause_escape_status"] = "no_escape"
+    return result
+
+
+def measure_stopping(
+    t_rel: np.ndarray,
+    speed: np.ndarray,
+    movement_onset_ms: float,
+    wind_onset_ms: float,
+) -> dict[str, float | str]:
+    """Measure a stopping event, not prove its cause or airflow-arrival latency.
+
+    Use acquisition-clock intervals and a causal displacement average. Require
+    resolved motion at the reference; record the continuous 1-s moving cohort
+    separately rather than erase observable stops after intermittent walking.
+    Optical count-scale dips are unresolved unless the same excursion becomes
+    clearly sub-threshold. Never re-arm on a rebound or move the first crossing
+    to its confirmation time. The endpoint retains averaging lag and is not
+    the corrected instant of a physiological reaction.
+    """
+    result: dict[str, float | str] = {
+        "onset_ms": np.nan, "status": "invalid_data",
+        "baseline_status": "unobserved", "presence": "unobserved",
+    }
+    t = np.asarray(t_rel, dtype=float)
+    v = np.asarray(speed, dtype=float)
+    if (t.ndim != 1 or v.ndim != 1 or len(t) < 2 or len(v) != len(t)
+            or not np.isfinite(wind_onset_ms)):
+        return result
+    cfg = get_thresholds()
+    threshold = float(cfg.baseline.quiet_mm_s)
+    width = float(cfg.stillness.speed_window_ms)
+    baseline = float(cfg.prewalk.window_ms)
+    quantum = float(cfg.stillness.displacement_quantum_mm)
+    if not np.all(np.isfinite([threshold, width, baseline, quantum])) or width <= 0 or baseline <= 0 or quantum < 0:
+        return result
+    # One diagonal count over the averaging window is a resolution margin,
+    # not a calibrated uncertainty bound on the animal's instantaneous speed.
+    margin = np.sqrt(2.0) * quantum * 1000.0 / width
+    end = wind_onset_ms + float(cfg.escape.window_ms)
+    if np.isfinite(movement_onset_ms):
+        end = min(end, movement_onset_ms)
+    # Keep the complete pre-wind eligibility history even when escape onset is
+    # earlier than wind.  The post-wind search then reports either
+    # ``escape_first`` or ``no_preescape_stop`` rather than missing baseline.
+    history_end = max(wind_onset_ms, end)
+    mask = (t >= wind_onset_ms - baseline - width) & (t <= history_end)
+    indices = np.flatnonzero(mask)
+    if not len(indices):
+        return result
+    start = max(0, int(indices[0]) - 1)
+    stop = int(indices[-1]) + 1
+    t, v = t[start:stop], v[start:stop]
+    # np.interp requires ordered source time. Keep only the valid prefix:
+    # later corruption cannot erase an event already confirmed before it.
+    bad_time = np.flatnonzero(~np.isfinite(t) | np.r_[False, np.diff(t) <= 0])
+    truncated = bool(len(bad_time))
+    if truncated:
+        t, v = t[:bad_time[0]], v[:bad_time[0]]
+    if len(t) < 2 or (truncated and t[-1] < wind_onset_ms):
+        return result
+    averaged, valid, max_gap = _causal_displacement_speed(t, v)
+
+    # State presence is independent of observing a moving-to-stopped transition.
+    # An already quiet animal can have low-speed observations but no stopping RT.
+    state_mask = (t - width >= wind_onset_ms) & (t <= end)
+    if np.isfinite(movement_onset_ms):
+        state_mask &= t < movement_onset_ms
+    state_speed = averaged[state_mask]
+    state_times = t[state_mask]
+    state_intervals = (t[1:] > wind_onset_ms) & (t[:-1] < end)
+    if np.any(np.isfinite(state_speed) & (state_speed < threshold)):
+        result["presence"] = "low_speed"
+    elif (len(state_speed) and np.all(np.isfinite(state_speed))
+          and np.all(valid[state_intervals])
+          and t[0] <= wind_onset_ms
+          and state_times[0] - wind_onset_ms - width <= max_gap
+          and end - state_times[-1] <= max_gap
+          and not truncated):
+        result["presence"] = "no_low_speed"
+
+    pre = (t >= wind_onset_ms - baseline) & (t <= wind_onset_ms)
+    if not pre.any() or t[0] > wind_onset_ms - baseline - width:
+        result["status"] = "insufficient_baseline"
+        return result
+    if not np.all(np.isfinite(averaged[pre])):
+        return result
+    result["baseline_status"] = (
+        "continuous_moving" if np.all(averaged[pre] >= threshold)
+        else "intermittent_moving"
+    )
+    at_wind = int(np.flatnonzero(pre)[-1])
+    if wind_onset_ms - t[at_wind] > max_gap:
+        return result
+    if averaged[at_wind] < threshold - margin:
+        result["status"] = "not_moving_at_wind"
+        return result
+    if averaged[at_wind] <= threshold + margin:
+        result["status"] = "threshold_unresolved"
+        return result
+    post = np.flatnonzero(t > wind_onset_ms)
+    if np.isfinite(movement_onset_ms) and movement_onset_ms <= wind_onset_ms:
+        # A known escape onset at or before the reference leaves no eligible
+        # post-reference interval in which stopping could precede escape.
+        result["status"] = "escape_first"
+        return result
+    crossing = np.nan
+    for i in post:
+        if not np.isfinite(averaged[i]):
+            return result
+        if np.isfinite(movement_onset_ms) and t[i] >= movement_onset_ms:
+            break
+        if np.isfinite(crossing):
+            if averaged[i] >= threshold:
+                result["status"] = "threshold_unresolved"
+                return result
+        elif averaged[i] >= threshold:
+            continue
+        else:
+            # First crossing only. Never replace a boundary event or an
+            # unresolved count-scale excursion with a later re-stop.
+            if t[i] - width < wind_onset_ms:
+                result["status"] = "wind_boundary"
+                return result
+            crossing = float(t[i])
+        if averaged[i] < threshold - margin:
+            result.update(onset_ms=crossing, status="observed")
+            return result
+    if truncated:
+        return result
+    result["status"] = "threshold_unresolved" if np.isfinite(crossing) else "no_preescape_stop"
+    return result
+
+
+def find_stillness_onset(
+    t_rel: np.ndarray,
+    speed: np.ndarray,
+    movement_onset_ms: float,
+    wind_onset_ms: float,
+) -> float:
+    """Return only the stopping endpoint; use ``measure_stopping`` for status/cohort."""
+    return float(measure_stopping(t_rel, speed, movement_onset_ms, wind_onset_ms)["onset_ms"])
 
 
 def refine_offset_by_angular_velocity(

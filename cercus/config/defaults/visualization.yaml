@@ -12,6 +12,7 @@ bar_label_style: "inline"
 
 # Shared y-axis limit across population reaction_distance_panel.svg datasets (mm).
 reaction_distance_max_mm: 500
+reaction_distance_figsize: [9.5, 4.2]  # three panels: escape RT, distance, paired T1/T2
 # ── Vmax Threshold Plot ──
 # show the fixed start/vmax reference lines on the population vmax plots
 draw_fixed_thresholds: true

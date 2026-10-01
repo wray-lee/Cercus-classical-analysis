@@ -273,6 +273,8 @@ class TestBehaviorPlots:
 
     def test_prewalk_stillness(self, sample_df):
         fig = plot_prewalk_stillness(sample_df)
+        # Legacy wind rows lack acquisition data; absence cannot be inferred.
+        assert [bar.get_height() for bar in fig.axes[0].patches] == pytest.approx([0.0, 0.0, 1.0])
         _assert_regression(fig, "prewalk_stillness")
 
 

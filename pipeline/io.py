@@ -284,6 +284,20 @@ def export_summary_metrics(
         "interval_onset_ms": ("interval_onset_ms", "first"),
         "interval_offset_ms": ("interval_offset_ms", "first"),
         "reaction_time_ms": ("reaction_time_ms", "first"),
+        "escape_reaction_time_ms": ("escape_reaction_time_ms", "first"),
+        "stillness_reaction_time_ms": ("stillness_reaction_time_ms", "first"),
+        "stillness_status": ("stillness_status", "first"),
+        "stillness_presence": ("stillness_presence", "first"),
+        "stop_to_escape_interval_ms": ("stop_to_escape_interval_ms", "first"),
+        "pause_stopping_time_ms": ("pause_stopping_time_ms", "first"),
+        "pause_to_escape_time_ms": ("pause_to_escape_time_ms", "first"),
+        "pause_reaction_time_ms": ("pause_reaction_time_ms", "first"),
+        "pause_status": ("pause_status", "first"),
+        "pause_escape_status": ("pause_escape_status", "first"),
+        "pause_baseline_status": ("pause_baseline_status", "first"),
+        "stillness_baseline_status": ("stillness_baseline_status", "first"),
+        "stillness_window_start_ms": ("stillness_window_start_ms", "first"),
+        "short_rt": ("short_rt", "first"),
         "distance_mm": ("distance_mm", "first"),
         "distance_500ms_mm": ("distance_500ms_mm", "first"),
     }
@@ -293,7 +307,7 @@ def export_summary_metrics(
 
     trial_agg = df.groupby(groupby).agg(**agg_spec).reset_index()
 
-    float_cols = ["latency_ms", "v_max", "escape_interval_ms", "interval_onset_ms", "interval_offset_ms", "reaction_time_ms", "distance_mm", "distance_500ms_mm", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"]
+    float_cols = ["latency_ms", "v_max", "escape_interval_ms", "interval_onset_ms", "interval_offset_ms", "reaction_time_ms", "escape_reaction_time_ms", "stillness_reaction_time_ms", "stop_to_escape_interval_ms", "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms", "stillness_window_start_ms", "distance_mm", "distance_500ms_mm", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"]
     for col in float_cols:
         if col in trial_agg.columns:
             trial_agg[col] = pd.to_numeric(trial_agg[col], errors="coerce")

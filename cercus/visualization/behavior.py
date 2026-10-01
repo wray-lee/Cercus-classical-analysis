@@ -24,7 +24,7 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
     PREWALK_WINDOW_MS,
 )
-from cercus.config import get_visualization
+from cercus.config import get_thresholds, get_visualization
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
 log = logging.getLogger(__name__)
@@ -415,204 +415,171 @@ def plot_prewalk_stillness(
     stillness_threshold: float = ESCAPE_START_THRESHOLD,
     bar_label_style: str | None = None,
 ) -> plt.Figure:
-    """Proportion of PreWalk trials with stillness before escape onset."""
-    trial_level = (
-        df.groupby(["subject_id", "global_trial_index"])
-        .agg(
-            response_type=("response_type", "first"),
-            interval_onset_ms=("interval_onset_ms", "first"),
-        )
-        .reset_index()
-    )
-    prewalk_trials = trial_level[
-        trial_level["response_type"] == "PreWalk"
-    ].copy()
+    """Plot observed low-speed state separately from resolvable stopping RT.
+
+    Wind ``PreWalk`` trials use ``stillness_presence`` from the source-clock
+    measurement. A low-speed state is not itself a resolvable stopping RT;
+    missing acquisition data remains explicitly unobserved.
+    """
+    agg_spec = {
+        "response_type": ("response_type", "first"),
+        "interval_onset_ms": ("interval_onset_ms", "first"),
+    }
+    for col in ("stillness_presence", "stillness_reaction_time_ms"):
+        if col in df:
+            agg_spec[col] = (col, "first")
+    trial_level = df.groupby(["subject_id", "global_trial_index"]).agg(**agg_spec).reset_index()
+    prewalk_trials = trial_level[trial_level["response_type"] == "PreWalk"].copy()
 
     if prewalk_trials.empty:
         fig, ax = plt.subplots(figsize=figsize)
-        ax.text(
-            0.5,
-            0.5,
-            "No PreWalk trials",
-            ha="center",
-            va="center",
-            transform=ax.transAxes,
-            fontsize=10,
-            color="0.5",
-        )
+        ax.text(0.5, 0.5, "No PreWalk trials", ha="center", va="center", transform=ax.transAxes, fontsize=10, color="0.5")
         return fig
 
-    has_stillness: dict[tuple, bool] = {}
-    prewalk_keys = set(
-        zip(prewalk_trials["subject_id"], prewalk_trials["global_trial_index"])
-    )
-
-    for (subj, tidx), grp in df.groupby(
-        ["subject_id", "global_trial_index"]
-    ):
+    # Legacy rows lack the field; classify them through the same production path.
+    presence: dict[tuple, str] = {}
+    prewalk_keys = set(zip(prewalk_trials["subject_id"], prewalk_trials["global_trial_index"]))
+    for (subj, tidx), grp in df.groupby(["subject_id", "global_trial_index"]):
         if (subj, tidx) not in prewalk_keys:
+            continue
+        trial_type = str(grp["type"].iloc[0]).lower() if "type" in grp else ""
+        if "wind" in trial_type:
+            if "stillness_presence" in grp:
+                state = grp["stillness_presence"].iloc[0]
+            else:
+                from pipeline.classifier import classify_trial
+                state = classify_trial(grp)["stillness_presence"]
+            presence[(subj, tidx)] = (
+                str(state) if state in {"low_speed", "no_low_speed"} else "unobserved"
+            )
             continue
         onset_ms = grp["interval_onset_ms"].iloc[0]
         if pd.isna(onset_ms):
+            presence[(subj, tidx)] = "unobserved"
             continue
-        window_mask = (
-            grp["t_rel"] >= onset_ms - PREWALK_WINDOW_MS
-        ) & (grp["t_rel"] < onset_ms)
-        window_speed = grp.loc[window_mask, "speed"].dropna()
-        has_stillness[(subj, tidx)] = bool(
-            (window_speed < stillness_threshold).any()
+        window = grp.loc[
+            (grp["t_rel"] >= onset_ms - PREWALK_WINDOW_MS)
+            & (grp["t_rel"] < onset_ms),
+            "speed",
+        ].dropna()
+        presence[(subj, tidx)] = (
+            "low_speed" if (window < stillness_threshold).any()
+            else "no_low_speed" if len(window) else "unobserved"
         )
 
-    prewalk_trials["has_stillness"] = prewalk_trials.apply(
-        lambda r: has_stillness.get(
-            (r["subject_id"], r["global_trial_index"]), False
-        ),
-        axis=1,
-    )
-
-    n_with = prewalk_trials["has_stillness"].sum()
-    n_without = len(prewalk_trials) - n_with
+    prewalk_trials["stillness_presence"] = [
+        presence.get((row.subject_id, row.global_trial_index), "unobserved")
+        for row in prewalk_trials.itertuples()
+    ]
+    categories = ["Low-speed state", "No low-speed state", "Unobserved"]
+    states = ["low_speed", "no_low_speed", "unobserved"]
+    counts = [int(prewalk_trials["stillness_presence"].eq(state).sum()) for state in states]
     n_total = len(prewalk_trials)
-    prop_with = n_with / n_total if n_total > 0 else 0.0
-
-    subject_props = (
-        prewalk_trials.groupby("subject_id")["has_stillness"]
-        .mean()
-        .reset_index()
-        .rename(columns={"has_stillness": "prop_stillness"})
-    )
+    values = [count / n_total for count in counts]
+    colors = [COLOR_WITH_STILLNESS, COLOR_NO_STILLNESS, COLOR_NO_RESPONSE]
 
     fig, ax = plt.subplots(figsize=figsize)
-    categories = ["With Stillness", "Without Stillness"]
-    values = [prop_with, 1.0 - prop_with]
-    bar_colors = [COLOR_WITH_STILLNESS, COLOR_NO_STILLNESS]
-
-    bars = ax.bar(
-        categories, values, color=bar_colors, width=0.55, edgecolor="none", alpha=0.85
+    bars = ax.bar(categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85)
+    subject_probs = (
+        prewalk_trials.groupby("subject_id")["stillness_presence"]
+        .value_counts(normalize=True).unstack(fill_value=0.0)
+        .reindex(columns=states, fill_value=0.0)
     )
-
     rng = np.random.default_rng(42)
-    jitter_width = 0.15
-    for i, col in enumerate(["prop_stillness"]):
-        subj_vals = subject_props[col].values
-        jitter = rng.uniform(-jitter_width, jitter_width, size=len(subj_vals))
+    for i, (state, color) in enumerate(zip(states, colors)):
+        subj_vals = subject_probs[state].values
         ax.scatter(
-            np.full(len(subj_vals), i) + jitter,
-            subj_vals,
-            s=20,
-            c=bar_colors[i],
-            alpha=0.35,
-            edgecolors="white",
-            linewidths=0.5,
-            zorder=5,
+            i + rng.uniform(-0.15, 0.15, len(subj_vals)), subj_vals,
+            s=20, c=color, alpha=0.35, edgecolors="white", linewidths=0.5, zorder=5,
         )
-    subj_without = 1.0 - subject_props["prop_stillness"].values
-    jitter2 = rng.uniform(-jitter_width, jitter_width, size=len(subj_without))
-    ax.scatter(
-        np.full(len(subj_without), 1) + jitter2,
-        subj_without,
-        s=20,
-        c=bar_colors[1],
-        alpha=0.35,
-        edgecolors="white",
-        linewidths=0.5,
-        zorder=5,
-    )
-
     _style = bar_label_style if bar_label_style is not None else BAR_LABEL_STYLE.value
+    for bar, value, count in zip(bars, values, counts):
+        if value <= 0.02:
+            continue
+        label = f"{value:.1%}\n({count})"
+        if _style == "axis":
+            ax.text(0.02, value, label, ha="left", va="center", fontsize=7, color="black", fontweight="bold", zorder=10)
+        else:
+            ax.text(bar.get_x() + bar.get_width() / 2, 0.03, label, ha="center", va="bottom", fontsize=7, color="black", fontweight="bold", zorder=10, path_effects=[path_effects.withStroke(linewidth=2.0, foreground="white")])
 
-    for bar, val, n in zip(bars, values, [n_with, n_without]):
-        if val > 0.02:
-            if _style == "axis":
-                ax.plot(
-                    [0, bar.get_x() + bar.get_width() / 2],
-                    [val, val],
-                    "k--",
-                    lw=0.5,
-                    alpha=0.4,
-                    zorder=1,
-                )
-                ax.text(
-                    0.02,
-                    val,
-                    f"{val:.1%} ({n})",
-                    ha="left",
-                    va="center",
-                    fontsize=7,
-                    color="black",
-                    fontweight="bold",
-                    zorder=10,
-                )
-            else:
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    0.03,
-                    f"{val:.1%}\n({n})",
-                    ha="center",
-                    va="bottom",
-                    fontsize=7,
-                    color="black",
-                    fontweight="bold",
-                    zorder=10,
-                    path_effects=[
-                        path_effects.withStroke(
-                            linewidth=2.0, foreground="white"
-                        )
-                    ],
-                )
-
+    rt_values = prewalk_trials.get("stillness_reaction_time_ms", pd.Series(dtype=float))
+    n_rt = int(np.isfinite(pd.to_numeric(rt_values, errors="coerce")).sum())
     n_subjects = prewalk_trials["subject_id"].nunique()
-    ax.set_ylabel("Proportion of PreWalk Trials")
+    ax.set_ylabel("Proportion of PreWalk trials")
     ax.set_ylim(0, 1.05)
-    ax.set_title("PreWalk: Stillness Before Escape Onset", fontweight="bold")
+    ax.set_title("PreWalk: Low-speed state and stopping RT", fontweight="bold")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-
     fig.tight_layout(pad=1.0)
-    fig.text(
-        1.02,
-        0.5,
-        f"{n_total} PreWalk trials\n({n_subjects} subjects)",
-        transform=ax.transAxes,
-        ha="left",
-        va="center",
-        fontsize=7,
-        color="0.4",
-    )
+    fig.text(1.02, 0.5, f"{n_total} PreWalk trials\n({n_subjects} subjects)\nRT observed: {n_rt}/{n_total}", transform=ax.transAxes, ha="left", va="center", fontsize=7, color="0.4")
     return fig
 
 
 def plot_reaction_distance_panel(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (6.5, 3.5),
+    figsize: tuple[float, float] | None = None,
+    *,
+    pause_cohort: str = "strict_moving",
 ) -> plt.Figure | None:
-    """Reaction time and escape distance distributions by response class.
+    """Compare escape latency, distance, and paired stopping/escape endpoints.
 
-    左：刺激锚定 RT；右：逃逸窗内行程。箱体为 trial 级分布，散点为 per-subject
-    中位数（伪重复对策）；Mann-Whitney 以 subject 级中位数为单位（n=动物数）。
-    Returns None when the required columns are absent (no figure to save).
+    Causal T1/T2 defaults to the strict moving-history proxy across wind
+    response classes. ``all_local`` retains intermittent transitions as an
+    explicitly diagnostic view. Legacy tables retain their PreWalk fallback.
     """
-    if "reaction_time_ms" not in df.columns or "distance_mm" not in df.columns:
-        log.warning("reaction_time_ms/distance_mm missing — skipping panel.")
+    if pause_cohort not in {"strict_moving", "all_local"}:
+        raise ValueError("pause_cohort must be 'strict_moving' or 'all_local'")
+    rt_col = (
+        "escape_reaction_time_ms"
+        if "escape_reaction_time_ms" in df.columns
+        else "reaction_time_ms"
+    )
+    if rt_col not in df.columns or "distance_mm" not in df.columns:
+        log.warning("%s/distance_mm missing — skipping panel.", rt_col)
         return None
 
     classes = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
+    agg_spec = {
+        "response_type": ("response_type", "first"),
+        "rt": (rt_col, "first"),
+        "dist": ("distance_mm", "first"),
+    }
+    causal_pair = {"pause_stopping_time_ms", "pause_to_escape_time_ms"}.issubset(df.columns)
+    t1_col = "pause_stopping_time_ms" if causal_pair else "stillness_reaction_time_ms"
+    t2_col = "pause_to_escape_time_ms" if causal_pair else "stop_to_escape_interval_ms"
+    for key, col in (("t1", t1_col), ("t2", t2_col),
+                     ("pause_rt", "pause_reaction_time_ms"), ("pause_status", "pause_status"),
+                     ("baseline", "pause_baseline_status")):
+        if col in df.columns:
+            agg_spec[key] = (col, "first")
+    if "type" in df.columns:
+        agg_spec["type"] = ("type", "first")
     trial = (
         df.groupby(["subject_id", "global_trial_id"])
-        .agg(
-            response_type=("response_type", "first"),
-            rt=("reaction_time_ms", "first"),
-            dist=("distance_mm", "first"),
-        )
+        .agg(**agg_spec)
         .reset_index()
     )
-    # subject 级：每动物每类取中位数 → boxplot 与 scatter 的单位（n = 动物数，非 trial 数）
+    for col in ("t1", "t2"):
+        if col not in trial.columns:
+            trial[col] = np.nan
+    if "pause_rt" in trial and "pause_status" in trial and "type" in trial:
+        paused = (
+            trial["response_type"].eq("PreWalk")
+            & trial["type"].astype(str).str.contains("wind", case=False, na=False)
+            & trial["pause_status"].eq("observed")
+        )
+        # Do not replace an unresolved causal endpoint with the centered one.
+        trial.loc[paused, "rt"] = trial.loc[paused, "pause_rt"]
+    # Subject summaries use complete trial pairs; faint lines retain each
+    # actual trial pair rather than join two independent subject medians.
     subj_med = trial.groupby(["subject_id", "response_type"])[["rt", "dist"]].median()
 
-    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    fig, axes = plt.subplots(
+        1, 3, figsize=figsize or tuple(get_visualization().reaction_distance_figsize),
+    )
     rng = np.random.default_rng(42)
     for ax, col, title, xlabel in (
-        (axes[0], "rt", "Reaction time", "RT vs stimulus (ms)"),
+        (axes[0], "rt", "Stimulus-to-escape latency", "Escape onset vs stimulus (ms)"),
         (axes[1], "dist", "Escape distance", "Distance (mm)"),
     ):
         pairs = [
@@ -676,6 +643,131 @@ def plot_reaction_distance_panel(
             ax.set_yticks([t for t in ticks if y_min <= t <= y_max])
             ax.grid(axis="y", color="#E5E7EB", lw=0.5, alpha=0.6)
 
+    rt_coverage = [
+        f"{response}: {int(np.isfinite(group['rt']).sum())}/{len(group)}"
+        for response, group in trial.groupby("response_type", sort=False)
+        if response in classes
+    ]
+    axes[0].text(0.5, -0.23, "RT observed — " + "; ".join(rt_coverage),
+                 transform=axes[0].transAxes, ha="center", va="top",
+                 fontsize=6, color="0.35")
+
+    # ── T1/T2 cohort is independent of the legacy response class ──
+    t_ax = axes[2]
+    strict = causal_pair and pause_cohort == "strict_moving"
+    pair_title = (
+        "Strict moving: T1 / T2" if strict else
+        "Local transitions: T1 / T2" if causal_pair else
+        "Wind PreWalk: T1 / T2 (legacy)"
+    )
+    t_ax.set_title(pair_title, fontweight="bold", fontsize=8)
+    t_ax.set_ylabel("Latency (ms)", fontsize=7)
+    t_ax.spines["top"].set_visible(False)
+    t_ax.spines["right"].set_visible(False)
+    t_ax.tick_params(labelsize=6)
+    has_type = "type" in trial.columns
+    if has_type:
+        type_text = trial["type"].astype(str).str.lower()
+        wind = type_text.str.contains("wind", na=False)
+        source = wind if causal_pair else wind & trial["response_type"].eq("PreWalk")
+        moving = trial.get("baseline", pd.Series(index=trial.index, dtype=str)).eq("continuous_moving")
+        selected = source & moving if strict else source
+        paired = trial.loc[selected].copy()
+        coverage = []
+        for name, mask in (("Pure", ~type_text.str.contains("looming", na=False)),
+                           ("Multimodal", type_text.str.contains("looming", na=False))):
+            group = trial.loc[source & mask]
+            if group.empty:
+                continue
+            eligible = trial.loc[selected & mask]
+            complete = np.isfinite(eligible["t1"]) & np.isfinite(eligible["t2"])
+            if strict:
+                coverage.append(f"{name}: moving {len(eligible)}/{len(group)}; paired {int(complete.sum())}/{len(eligible)}")
+            else:
+                cohort_n = int((source & mask & moving).sum())
+                coverage.append(f"{name}: paired {int(complete.sum())}/{len(group)}; moving-history {cohort_n}")
+        paired = paired[np.isfinite(paired["t1"]) & np.isfinite(paired["t2"])]
+    else:
+        paired = trial.iloc[0:0].copy()
+        coverage = []
+    if not paired.empty:
+        type_text = paired["type"].astype(str).str.lower()
+        paired["cohort"] = np.where(
+            type_text.str.contains("looming", na=False),
+            "Multimodal wind", "Pure wind",
+        )
+        subject_pairs = (
+            paired.groupby(["subject_id", "cohort"])[["t1", "t2"]]
+            .median().reset_index()
+        )
+        cohort_order = ["Pure wind", "Multimodal wind"]
+        cohort_color = {"Pure wind": COLOR_PREWALK, "Multimodal wind": COLOR_ESCAPE}
+        positions = {"Pure wind": (0, 1), "Multimodal wind": (3, 4)}
+        box_values = []
+        box_labels = []
+        box_colors = []
+        box_positions = []
+        for cohort in cohort_order:
+            values = subject_pairs.loc[subject_pairs["cohort"].eq(cohort)]
+            if values.empty:
+                continue
+            x1, x2 = positions[cohort]
+            for x, col, label in ((x1, "t1", "T1"), (x2, "t2", "T2")):
+                vals = values[col].dropna().to_numpy(float)
+                if len(vals):
+                    box_values.append(vals)
+                    box_positions.append(x)
+                    box_labels.append(f"{cohort.replace(' wind', '')}\n{label}")
+                    box_colors.append(cohort_color[cohort])
+            for row in paired.loc[paired["cohort"].eq(cohort)].itertuples(index=False):
+                t_ax.plot(
+                    [x1, x2], [row.t1, row.t2],
+                    marker="o", markersize=2.5, markeredgewidth=0.3,
+                    markeredgecolor="white", color=cohort_color[cohort],
+                    alpha=0.3, lw=0.6, zorder=2,
+                )
+        if box_values:
+            bp = t_ax.boxplot(
+                box_values, positions=box_positions, widths=0.55,
+                patch_artist=True, medianprops=dict(color="black", lw=1.1),
+                whiskerprops=dict(color="0.2", lw=0.8),
+                capprops=dict(color="0.2", lw=0.8),
+                flierprops=dict(markersize=2, alpha=0.4),
+            )
+            for patch, color in zip(bp["boxes"], box_colors):
+                patch.set_facecolor(mcolors.to_rgba(color, 0.30))
+                patch.set_edgecolor(color)
+                patch.set_linewidth(1.0)
+            for x, vals, color in zip(box_positions, box_values, box_colors):
+                t_ax.scatter(
+                    np.full(len(vals), x) + rng.uniform(-0.16, 0.16, len(vals)),
+                    vals, s=9, c=color, edgecolors="black", linewidths=0.3,
+                    alpha=0.85, zorder=5,
+                )
+            t_ax.set_xticks(box_positions)
+            t_ax.set_xticklabels(box_labels)
+            t_ax.set_xlim(min(box_positions) - 0.5, max(box_positions) + 0.5)
+            t_ax.grid(axis="y", color="#E5E7EB", lw=0.5, alpha=0.6)
+            n_subjects = paired["subject_id"].nunique()
+            n_trials = len(paired)
+            t_ax.text(0.5, -0.21, f"paired: {n_trials} trials / {n_subjects} subjects",
+                      transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
+                      color="0.35")
+            t_ax.text(0.5, -0.28 - 0.07 * max(1, len(coverage)),
+                      "Boxes/dots: subject medians; lines: trial pairs",
+                      transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
+                      color="0.35")
+        else:
+            t_ax.text(0.5, 0.5, "no paired strict-moving endpoints" if strict else "no paired endpoints", transform=t_ax.transAxes,
+                      ha="center", va="center", fontsize=8, color="0.5")
+    else:
+        t_ax.text(0.5, 0.5, "no paired strict-moving endpoints" if strict else "no paired wind PreWalk endpoints", transform=t_ax.transAxes,
+                  ha="center", va="center", fontsize=8, color="0.5")
+    t_ax.axhline(0, color="0.5", ls="--", lw=0.7)
+    if coverage:
+        t_ax.text(0.5, -0.27, "\n".join(coverage), transform=t_ax.transAxes,
+                  ha="center", va="top", fontsize=6, color="0.35")
+
     # Escape vs PreEscape 机制分离检验（subject 级中位数，避免 trial 级伪重复）
     from scipy.stats import mannwhitneyu
     foot = []
@@ -701,5 +793,24 @@ def plot_reaction_distance_panel(
             ha="center", fontsize=6, color="0.3",
         )
 
-    fig.tight_layout(pad=1.0, rect=(0, 0.03, 1, 1))
+    if causal_pair:
+        cfg = get_thresholds()
+        cohort_note = (
+            f"T1/T2: prior {float(cfg.prewalk.window_ms) / 1000:g} s strictly "
+            f">{float(cfg.baseline.quiet_mm_s):g} mm/s, all wind classes (operational moving proxy)."
+            if strict else "T1/T2: all local transitions, including intermittent movers (diagnostic, not paper cohort)."
+        )
+        note = (
+            cohort_note + "\n"
+            "Observed Wind PreWalk pauses use causal RTm-like = T1 + T2; other RTs retain centered-speed endpoints.\n"
+            "PreEscape is a pre-wind lead. No fixed delay correction; not physiological RT."
+        )
+    else:
+        note = (
+            "Stimulus-to-escape endpoint; T1 = stimulus-to-stop, T2 = stop-to-escape (legacy centered escape endpoint)."
+            if "escape_reaction_time_ms" in df
+            else "Legacy reaction_time_ms shown; endpoint definitions depend on the source table."
+        )
+    fig.text(0.5, 0.035, note, ha="center", fontsize=6, color="0.3")
+    fig.tight_layout(pad=1.0, rect=(0, 0.17, 1, 1))
     return fig

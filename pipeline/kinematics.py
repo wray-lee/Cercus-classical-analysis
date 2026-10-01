@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 
+from cercus.config import get_thresholds
+
 from .constants import (
     DETAILS_KEYS,
     RADIUS_MM,
@@ -28,6 +30,11 @@ from cercus.core.kinematics.latency import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _binary_stimulus_mask(stim_state: pd.Series) -> pd.Series:
+    """Select valid binary valve-active rows without rewriting telemetry."""
+    return pd.to_numeric(stim_state, errors="coerce").eq(1.0)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -65,6 +72,7 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
         df["x"] = 0.0
         df["y"] = 0.0
         df["speed"] = np.nan
+        df["speed_raw"] = np.nan
         return df
 
     df["t_rel"] = (df["sys_time"] - t_zero_sys) * 1000.0
@@ -123,6 +131,32 @@ def _integrate_trial(grp: pd.DataFrame, t_zero_sys: float) -> pd.DataFrame:
         speed[-half_win:] = np.nan
 
     df["speed"] = speed
+
+    # Optical deltas belong to acquisition intervals, not serial receive chunks.
+    # ard_time is firmware millis(); sys_time may repeat or alternate 4/8 ms.
+    acquisition = (
+        pd.to_numeric(df["ard_time"], errors="coerce").to_numpy(float)
+        if "ard_time" in df else np.full(n, np.nan)
+    )
+    frame_dt = np.diff(acquisition, prepend=np.nan) / 1000.0
+    positive_dt = frame_dt[np.isfinite(frame_dt) & (frame_dt > 0)]
+    max_gap = (
+        np.median(positive_dt) * float(get_thresholds().stillness.max_frame_gap_factor)
+        if len(positive_dt) else np.nan
+    )
+    raw_speed = np.full(n, np.nan)
+    valid_frame = np.isfinite(frame_dt) & (frame_dt > 0) & (frame_dt <= max_gap)
+    raw_speed[valid_frame] = np.hypot(dx_body[valid_frame], dy_body[valid_frame]) / frame_dt[valid_frame]
+    raw_speed[:2] = np.nan  # the first two displacement frames were reset above
+    df["speed_raw"] = raw_speed
+    df["t_acquisition_rel"] = np.nan
+    if "stim_state" in df:
+        # Firmware emits a binary valve flag; malformed spikes are telemetry,
+        # not stimulus onset.
+        active = np.flatnonzero(_binary_stimulus_mask(df["stim_state"]).to_numpy())
+        if len(active) and np.isfinite(acquisition[active[0]]):
+            i_wind = int(active[0])
+            df["t_acquisition_rel"] = df["t_rel"].iloc[i_wind] + acquisition - acquisition[i_wind]
 
     # ── Angular velocity (rad/s) from dz ──
     # Sign convention: positive = rightward turn, negative = leftward turn.
@@ -227,7 +261,9 @@ def preprocess(
                 trial_kin[col] = meta_row[col].iloc[0]
 
         # ── Determine t_zero_sys ──
-        wind_active = trial_kin[trial_kin["stim_state"] > 0]
+        # Firmware emits a binary valve flag. Ignore malformed spikes rather than
+        # letting an out-of-range value redefine the wind reference.
+        wind_active = trial_kin[_binary_stimulus_mask(trial_kin["stim_state"])]
         has_wind = not wind_active.empty
 
         # Fetch trial metadata for multimodal detection.
@@ -256,7 +292,7 @@ def preprocess(
         # `target_ttc_ms` is the signed wind-vs-TTC offset (negative = wind before TTC).
         # Setting t_zero_sys = wind_onset - target_ttc_ms/1000 places:
         #   t_rel = 0               → TTC moment
-        #   t_rel = -target_ttc_ms  → wind hardware onset (stim_state > 0)
+        #   t_rel = -target_ttc_ms  → wind hardware onset (stim_state == 1)
         # Examples: target_ttc_ms = -373 → wind at ~-373 ms;
         #           target_ttc_ms =    0 → wind at ~0 ms;
         #           target_ttc_ms = +200 → wind at ~+200 ms.
