@@ -146,102 +146,68 @@ reload_config()
 
 ## Standardized Classification Criteria
 
-For each trial, let `v(t)` denote walking speed, `V_b` the burst threshold, `t_w` the wind onset, and `t_e` the measured escape onset. For every standard wind-containing trial, define the post-stimulus response interval
+Cercus classifies cricket behavioral responses into four mutually exclusive categories: **NoResponse**, **PreEscape**, **PreWalk**, and **Escape**. The pipeline uses a strict priority cascade to avoid ambiguous or overlapping labels:
 
-```text
-W = [t_w, t_w + 250 ms]
+$$\text{NoResponse} \longrightarrow \text{PreEscape} \longrightarrow \text{PreWalk} \longrightarrow \text{Escape}$$
+
+```
+                          ┌── [No qualifying burst] ──────────────────────────► NoResponse
+                          │
+[Response-window burst?]  ├── [Burst qualified ∧ onset < stimulus arrival] ───► PreEscape
+                          │
+                          ├── [Burst qualified ∧ active walking before wind] ──► PreWalk
+                          │
+                          └── [Remaining qualified trials] ────────────────────► Escape
 ```
 
-where `t_w = target_ttc_ms`. For other non-`baseline_visual` trials, `t_w` is replaced by the trial's stimulus reference (`t_rel = 0`). A valid burst exists iff
+### 1. Burst Qualification Window
 
-```text
-max(v(t) : t ∈ W) > V_b
-```
+For any trial, let $v(t)$ denote walking speed, $V_b$ the burst threshold, and $t_w$ the airflow stimulus onset.
+- **Airflow-containing trials**: The response interval is evaluated within $W = [t_w, t_w + 250\text{ ms}]$. A burst qualifies if $\max_{t \in W} v(t) > V_b$.
+- **Visual-only baseline trials (`baseline_visual`)**: Evaluated from trial onset up to theoretical collision ($t \le \text{TTC}$).
+- **Default thresholds**: The package default is $V_b = 98\text{ mm/s}$ (configurable via YAML; research configurations typically use $50\text{ mm/s}$).
+- **Absolute veto**: If no speed sample in the window exceeds $V_b$, the trial is classified as **NoResponse**. Prior locomotion cannot override this veto.
 
-with `V_b = 98 mm/s` by package default and `V_b = 50 mm/s` under the current root `config.yaml`. If no valid burst exists, the response is `NoResponse`; no pre-stimulus condition can override this veto.
+### 2. PreEscape (Pre-Wind Escape)
 
-### Wind moving-history criterion
+When enabled (`classification.use_preescape: true`), wind trials with a qualifying burst are evaluated for early movement onset:
+- **Burst anchor**: The burst peak must remain within the post-stimulus window $[t_w, t_w + 250\text{ ms}]$.
+- **Onset search**: Escape onset ($t_e$) is located by searching backward from the qualifying burst peak to the last speed sample $\le 10\text{ mm/s}$; the immediately following sample marks $t_e$.
+- **Criterion**: If the backward search crosses before airflow arrival ($t_e < t_w - \text{buffer}$, with buffer default $0\text{ ms}$), the trial is classified as **PreEscape**.
+- **Significance**: In multimodal paradigms, these represent genuine escapes triggered early by the looming visual stimulus rather than the wind. In pure-wind trials, they reflect spontaneous acceleration.
 
-The paper defines the moving state as speed **above 10 mm/s for more than 1 s**. For wind trials, the implementation uses a causal source-clock **active-at-stimulus operational proxy**: it computes the 20-ms displacement-average speed from `speed_raw` over the complete preceding `thresholds.prewalk.window_ms` (normally 1000 ms) ending at and including the airflow reference `t_a` (equal to `t_w` at zero arrival delay). A trial is moving-eligible when
+### 3. PreWalk (Pre-Stimulus Locomotion)
 
-```text
-pause_moving_eligible = complete_history
-                      ∧ occupancy ≥ thresholds.prewalk.min_moving_fraction
-                      ∧ reference_averaged_speed > quiet threshold
-```
+For airflow trials, PreWalk identifies crickets already moving when the stimulus arrives:
+- **1-Second History**: Evaluates the 1000 ms immediately preceding airflow arrival on the hardware acquisition clock (`ard_time`).
+- **Locomotor Eligibility (`pause_moving_eligible`)**:
+  1. The 1-second record must be complete and uncorrupted.
+  2. Over this window, the duration-weighted occupancy of causal 20-ms displacement-averaged speeds above $10\text{ mm/s}$ must meet `prewalk.min_moving_fraction` (default 15%).
+  3. The causal averaged speed at the stimulus reference itself must exceed $10\text{ mm/s}$.
+- Trials meeting these conditions (and not flagged as PreEscape) are classified as **PreWalk**.
 
-Occupancy is duration-weighted: each causal averaged observation is held forward to the next acquisition sample, using last-observation carry-forward at the boundaries — the last observation at or before the left boundary is carried forward into the window, and no later first observation is extrapolated backward. Both boundaries are clipped to the exact 1-s window, counting only observations strictly above the YAML quiet threshold (normally 10 mm/s). Equality with the threshold is not moving. The default `thresholds.prewalk.min_moving_fraction` is `0.15`, an inherited broad-activity cutoff, **not** a value fit to sample counts; the comparison is roundoff-safe. Incomplete, invalid, gapped, or missing history yields `pause_moving_eligible = false` with `pause_moving_fraction = NaN`; missing history is not evidence of stationary behavior. The diagnostic label is still exported as `pause_baseline_status`: `continuous_moving` (all observations above), `intermittent_moving` (some but not all), `stationary` (none), or `unobserved`; `continuous_moving` is the strict sensitivity flag rather than the default gate. `pause_moving_fraction` reports the occupancy. These are operational labels on the observed averaged trace, not an exact reproduction of the paper's preprocessing, its sustained >1 s moving condition, or proof of uninterrupted physiological locomotion.
+*Visual-only baseline note*: Evaluates the legacy window from 1000 ms to 50 ms prior to escape onset ($>15\%$ active frames).
 
-A wind trial with a qualifying burst is classified as `PreWalk` when it is not `PreEscape` and `pause_moving_eligible` is true. A single point above 10 mm/s does not establish membership, but an intermittent history qualifies when its averaged occupancy and reference speed clear the gates. The strict `continuous_moving` subset remains available for sensitivity analyses; an intermittent history is an operational-proxy member, not the paper's moving condition. The stopping transition (`pause_status`) is independent of moving eligibility, so an eligible mover remains `PreWalk` even when no stopping endpoint can be resolved. The optical count-resolution margin applies to local stopping only, not as an extra eligibility threshold. This main moving cohort is an active-at-stimulus operational proxy, not the paper's moving condition or its 88.75% pause incidence.
+### 4. Reaction Time (RT) Measurements
 
-The non-wind legacy rule is `P(a) = mean(v(t) > 10 mm/s | a − 1000 ms ≤ t < a − 50 ms)` using valid speed frames, with `a = t_e` and `P(a) > 0.15`. This rule remains separate because those trials do not have the same wind source-clock reference; it must not be described as the wind paper moving cohort.
+Cercus cleanly decouples **escape movement onset** from **stimulus-induced stopping**:
 
-For eligible multimodal (`looming+wind`) trials only, `PreEscape` requires a valid burst and
+- **Escape Latency (`escape_reaction_time_ms`)**:
+  Measured as $t_e - t_a$, where $t_a$ is the calibrated airflow reference.
+  - Positive values for post-stimulus `Escape`.
+  - Negative values for `PreEscape` (reflecting lead time prior to stimulus arrival).
+- **Causal Stopping Latency T1 (`pause_stopping_time_ms`)**:
+  The latency from airflow arrival to when walking speed first drops below the $10\text{ mm/s}$ stillness threshold. Includes optical-count resolution margins (requiring $>13.33\text{ mm/s}$ at onset and confirming a drop below $<6.67\text{ mm/s}$) to guard against sensor quantization noise.
+- **Pause-to-Escape Interval T2 (`pause_to_escape_time_ms`)**:
+  The duration from the confirmed pause endpoint to the subsequent escape burst.
+- **Causal Composite RTm (`pause_reaction_time_ms`)**:
+  Defined as $\text{RTm} = \text{T1} + \text{T2}$. If either endpoint cannot be resolved unambiguously, RTm is preserved as `NaN`. We never impute missing causal values with centered or synthetic estimates.
 
-```text
-t_e < t_w − preescape_buffer_ms
-```
+### 5. Population Summaries & Cohort Consistency
 
-The current buffer is `0 ms`. `PreEscape` is disabled when `thresholds.classification.use_preescape` is false. `Escape` is the residual class:
-
-```text
-valid_burst ∧ ¬PreEscape ∧ ¬PreWalk
-```
-
-The implemented priority is therefore:
-
-```text
-NoResponse → PreEscape → PreWalk → Escape
-```
-
-`baseline_visual` is the only exception. Its response domain is `t ≤ TTC` rather than the standard 250-ms post-stimulus interval. A valid burst is defined by `max(v(t) : t ≤ TTC) > V_b`; its pre-movement check uses the legacy anchor `a = t_e`. `PreEscape` is undefined for this paradigm, so the effective routing is `NoResponse → PreWalk → Escape`.
-
-On the standard path, escape interval onset is obtained by locating the first sample above `V_b` in the response window and searching backward for the last sample below `10 mm/s`; the following sample is `t_e`. The interval offset is the first subsequent sample below `10 mm/s`. For `baseline_visual`, the interval instead brackets the maximum-speed peak up to TTC using the nearest below-threshold samples before and after that peak. Thus, a separate early movement that ends below `10 mm/s` before a later post-wind burst may be visible in a full-trial heatmap without determining `t_e` or satisfying the implemented `PreEscape` condition.
-
-The 250-ms duration and speed thresholds are configurable; the expressions above use the current timing setting. Missing response-window observations are routed to `NoResponse` by the implementation, but are not evidence of immobility. Missing or incomplete wind history is `unobserved`, not `stationary` or moving-eligible `PreWalk`.
-
-For Wind trials, the qualifying burst is searched only in the configured 250-ms window after Wind onset. Escape onset is then measured by backward search to the last speed at or below the start threshold; this backward search may extend before Wind onset. Thus an onset before Wind is classified as `PreEscape`, while an onset after Wind supplies Wind RT. An ongoing burst with no observable low-speed-to-burst transition retains its burst-based response class but has missing onset/RT metrics.
-
-### Wind reaction-time measurements
-
-Let `t_a = t_w + thresholds.reaction_time.wind_arrival_delay_ms` denote the calibrated airflow reference. The default delay is `0 ms` (hardware-trigger reference, **not** independently measured airflow arrival). Moving-history eligibility and latency measurements use `t_a`; burst detection and PreEscape classification retain the hardware reference `t_w`.
-
-```text
-escape_reaction_time_ms   = escape movement onset − t_a
-stillness_reaction_time_ms = stopping threshold crossing − t_a  (local wind diagnostic; T1-like)
-stop_to_escape_interval_ms = acquisition-clock escape onset − stopping crossing  (T2-like)
-```
-
-The paper's T2 (87.16 ± 65.31 ms) is **stopping-to-response time**, not stopping latency. `stop_to_escape_interval_ms` requires both endpoints on `t_acquisition_rel` and finite, increasing source timestamps between them; otherwise it is `NaN`. It measures the endpoint interval, not verified uninterrupted immobility. Do not compute it by subtracting the host-clock `escape_reaction_time_ms` from source-clock stopping latency.
-
-`stillness_presence` reports an observed causal averaged low-speed state separately: `low_speed`, `no_low_speed`, or `unobserved` on the diagnostic wind path. Its observation window uses wholly post-reference speed support and ends before known escape onset or at the 250-ms limit. A valid below-threshold observation establishes presence; absence requires valid window coverage. An animal already quiet at wind can have `low_speed` without a stopping RT. `prewalk_stillness.svg` displays these categories within the strict PreWalk class and annotates RT coverage separately; `NaN` RT is **not** absence of stillness. Intermittent-trial endpoints remain in the summary CSV and the explicitly labeled local-transition view, not in this strict-PreWalk plot.
-
-The paper's [Figure 1D](https://pmc.ncbi.nlm.nih.gov/articles/PMC10405261/#fig1) gives **88.75% pause incidence at 1.00 m/s** among trials stimulated in its moving state (>10 mm/s for >1 s), including pauses without subsequent escape. This denominator is not our escape-selected PreWalk class, even after its moving-eligibility gate is unified: our cohort is an active-at-stimulus occupancy proxy, not the paper's sustained >1 s condition. Mixed multisensory trials, locally moving trials, and finite stopping-RT counts must not be pooled as that paper probability.
-
-Wind PreWalk's compatibility `reaction_time_ms` is **stopping latency**, not escape latency; other wind responses use escape latency. The stopping threshold (`thresholds.baseline.quiet_mm_s`, default `10 mm/s`) and 250-ms earlier period follow [Motor state changes escape behavior of crickets (2023)](https://doi.org/10.1016/j.isci.2023.107345). Wind classification and both stopping measurements now share the same moving-history helper described above, so they no longer use separate ≥ and > threshold rules. `stillness_baseline_status` mirrors `pause_baseline_status` on the residual wind path; the latter is available even for `NoResponse` and `PreEscape`. Moving eligibility does not guarantee a measurable stop. Local stopping additionally requires motion at the reference resolved above the count-resolution margin below. Earlier interruptions, remote missing speed/gaps, or a short recording do not erase an otherwise measurable local stop; an `unobserved` history still excludes it from moving-cohort inference, while an intermittent but eligible history retains it as a diagnostic endpoint. Local reference support and all intervals through stopping confirmation must remain valid; corrupt source timestamps are never bridged. Count quantization can break genuinely continuous near-threshold walking; the paper does not specify how its “more than 1 s” rule handled averaging or intermittent counts. These labels are not validated paper-cohort membership.
-
-`speed_raw` uses displacement divided by **firmware acquisition-time differences** (`ard_time`, milliseconds), not `sys_time` serial-receive differences. `t_acquisition_rel` places the first active stimulus row at the same wind coordinate as `t_rel` while retaining source-clock intervals. Host chunking can assign one timestamp to several sensor rows; host intervals are not sensor integration durations. Missing acquisition timestamps are not silently replaced with the centered `speed` signal.
-
-Stopping detection uses a **causal displacement average** over `thresholds.stillness.speed_window_ms` (default `20 ms`). The configured primary-axis displacement quantum is about `0.047 mm`, observed in the audited calibrated recordings and consistent with the sibling recorder's local `calibration_cfg.json` coefficient (`0.04712389037013054 mm/count`). It is rig-specific host calibration, not sensor-native CPI or a datasheet constant; calibration provenance and the exact recorder/firmware versions used for all recordings remain unverified. Other rigs must supply their own `displacement_quantum_mm`; taking the smallest positive increment is not a safe calibration because the recorder matrix can mix rotational counts into tiny planar increments. With this scale, near `10 mm/s` a 5-ms interval contains roughly one count, whereas 20 ms contains roughly four. A single zero-count row therefore cannot establish instantaneous stillness. The first averaged-speed sample below threshold is the stopping endpoint only if the same below-threshold excursion reaches below `threshold − sqrt(2) × displacement_quantum_mm × 1000 / speed_window_ms` before rebound, escape onset, or the search-window end. This local diagonal-count margin is a resolution safeguard, **not a validated speed error bound**. At the defaults the margin is approximately `3.33 mm/s`: reference speed must be `>13.33 mm/s`, and the same excursion must reach `<6.67 mm/s` to confirm its first `<10 mm/s` crossing. These eligibility gates are stricter than the paper's threshold alone. Reference speeds within the margin on either side of the threshold are `threshold_unresolved`; `not_moving_at_wind` requires speed below `threshold − margin`. Post-reference dips that do not resolve are also `threshold_unresolved` and cannot be replaced by a later crossing. There is no separate 30-ms dwell or 50-ms reaction-time floor. Its averaging interval must be wholly post-reference, so the earliest eligible endpoint is one full averaging window after the reference; absence of shorter endpoints is not evidence of a biological minimum. A first stop whose window straddles wind is unresolved, not replaced by a later crossing. Finite, ordered acquisition data with gaps no larger than `thresholds.stillness.max_frame_gap_factor × median source interval` are required for the local reference support and through event confirmation, independently of the complete 1-s cohort history. Both stopping entry points compute causal speed/history from the same valid acquisition prefix and gap scale. Missing speed or gaps in remote history can leave a local event observable; invalid timestamps truncate the prefix rather than being bridged. Missing data after an already observed stop do not erase it.
-
-Stopping can be measured with unresolved escape onset. When escape onset is observed, its row is mapped onto the acquisition clock; stopping must **strictly precede** it. Missing or ineligible measurements yield `NaN` and a `stillness_status` reason without changing response classes. `observed` means the defined event was measurable, **not** that airflow caused it. The measurement status is distinct from `stillness_baseline_status`, which records whether the preceding valid 1-s speed history was continuously above threshold; `intermittent_moving` and `unobserved` trials may have a local observed endpoint but have not established eligibility under the paper's moving-state definition. Other measurement statuses include `not_moving_at_wind`, `threshold_unresolved`, `insufficient_baseline`, `wind_boundary`, `invalid_data`, `missing_acquisition_clock`, `invalid_acquisition_clock`, `escape_first`, `no_preescape_stop`, and `not_applicable`.
-
-
-The stopping endpoint is the timestamp of an **averaged-speed threshold crossing**, not an exact physiological reaction instant. Causal averaging adds speed-dependent detection lag; the 20-ms support is neither a confidence interval nor a validated bound on the true reaction time. No fixed filter-delay subtraction is applied. With arrival delay `0`, the value is stimulus-flag-relative, not independently calibrated airflow-arrival-relative. Causality and a hard biological minimum cannot be recovered from these kinematics alone.
-
-Movement onset, distance integration, and visual-only timing remain unchanged. `distance_mm` and `distance_500ms_mm` still start at escape **movement** onset. `escape_reaction_time_ms` still uses the existing centered trajectory-speed measurement; its short values require a separate onset-method and hardware-timing audit. `short_rt` flags only nonnegative escape latency below `thresholds.reaction_time.short_escape_ms` (default `50 ms`), without clamping or discarding it. PreEscape negatives are pre-wind leads, not negative reactions.
-
-This is **not an exact reproduction** of the paper's preprocessing or complete T1/T2/RTm analysis. The causal averaging is a local count-resolution safeguard. Increased or decreased valid sample count is not evidence of improved biological reaction time.
-
-#### Separate pause-response measurement
-
-All airflow-containing trials additionally receive `pause_stopping_time_ms` (T1-like), `pause_to_escape_time_ms` (T2-like), and `pause_reaction_time_ms` (RTm-like = T1 + T2). Both endpoints use the **same causal displacement-average speed on the acquisition clock**. The first pause must occur within 250 ms of the airflow reference and before a qualifying escape; the follow-up burst is sought within 250 ms **after the stopping endpoint**, not only after stimulus onset. The burst and onset thresholds reuse the configured escape criteria (currently 50 and 10 mm/s). No new filter is attributed to the paper, whose retrieved methods do not specify its velocity filtering.
-
-`pause_status` reports stopping eligibility, `pause_escape_status` reports `observed`, `no_escape`, `invalid_data`, or `not_applicable`, and `pause_baseline_status` records the shared moving-history proxy alongside the exported `pause_moving_fraction` and `pause_moving_eligible` flag. `continuous_moving` requires every causal-speed observation over a complete configured 1-s history, including the reference, to be **strictly >10 mm/s** (roundoff-safe); it is the strict sensitivity subset, not the default eligibility gate. A complete history with some but not all observations above threshold is `intermittent_moving`; one with none above threshold is `stationary`; missing or incomplete history is `unobserved`. A local observed transition remains exported in an ineligible or unobserved-history trial but is not promoted to a moving-cohort result. A stop without a resolved subsequent escape retains T1 but has missing T2/RTm; incomplete follow-up is `invalid_data`, not absence of escape. These fields run before the no-burst/classification gates, so a stop-relative later escape may be observed even when the response class is `NoResponse`. Final wind PreWalk labels supply the primary RT/cohort selection; `pause_moving_eligible` remains the classifier's membership input, not a second downstream selection rule; stopping status does not define membership. Distance integration and raw escape timing remain unchanged. Both stopping pipelines use raw acquisition intervals, but their escape caps differ: `stillness_*` ends before the mapped centered-speed escape onset, whereas `pause_*` ends before the causal onset or earlier burst. Their stopping statuses can therefore differ; `no_preescape_stop` means no accepted stop before that pipeline's cap, not no low-speed state anywhere in the trial. They are neither a continuous-immobility duration nor an exact physiological RT. No fixed 20-ms correction, biological floor, or literature-mean fitting is applied.
-
-`population/reaction_distance_panel.svg` has three panels: class-selected response timing, escape distance, and **paired final Wind PreWalk T1/T2**. Population and cross-paradigm summaries share one endpoint selector driven by the classifier's final `response_type`. Wind PreWalk uses causal `pause_reaction_time_ms`, keeping unresolved endpoints `NaN` without centered/stopping fallback; it is never reselected using history, `pause_moving_eligible`, or endpoint availability. Escape retains its descriptive centered escape timing (not a validated paper RT), PreEscape its pre-wind lead, and NoResponse supplies no primary RT. Nonwind/legacy tables retain their existing timing basis. Class trial N comes from the classifier; RT observed/missing counts and complete T1/T2-pair coverage are reported separately. Missing endpoints remain in the class cohort and are not zeros or evidence of absent stopping. The default `pause_cohort="prewalk"` uses final wind PreWalk labels, so PreEscape and NoResponse cannot enter through a movement flag. Explicit `pause_cohort="moving_eligible"` and `pause_cohort="all_local"` are cross-class diagnostic views; `pause_cohort="strict_moving"` is a cross-class continuous-moving sensitivity view. Legacy tables without causal fields retain an explicitly labeled PreWalk fallback. Pure wind and multimodal pairs stay separate; boxes/dots show one median per subject from complete trial pairs, while faint lines with coincident endpoint markers join each actual trial pair. Coverage/legend text stays outside the data rectangle. Paired coverage is not pause incidence; low-speed levels in already-stopped animals are not stopping transitions. The population job remains inside the existing worker-controlled `multiprocessing.Pool`; no separate serial rendering pipeline was added. Figure size is YAML-backed (`visualization.reaction_distance_figsize`).
-
-In trial-stacked heatmaps, the hardware wind reference is shown using `colors.yaml: wind_mark`: a full-height line in TTC-aligned panels and one tick per row in onset-aligned panels.
+- **Single Authority**: Population and cross-paradigm summaries strictly follow the final classifier labels (`response_type`).
+- **Trial Integrity**: Missing reaction-time endpoints do not alter cohort sizes; trials with unresolved RT remain in their respective response class, and counts are reported alongside coverage statistics.
+- **Distance Integration**: Escape distance (`distance_mm`) is integrated from the actual movement onset ($t_e$), not the stopping point.
 
 ## Trajectory Configuration (`config.yaml`)
 

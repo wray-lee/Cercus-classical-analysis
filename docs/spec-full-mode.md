@@ -1,48 +1,49 @@
-# Spec: `full` 模式 — 跨范式个体-组均值连线图（laboratory dumbbell convention）
+# 规范说明：`full` 跨范式分析与组均值哑铃图 (Cross-Paradigm Mode)
 
-## Problem Statement
-实验室传统要求呈现"个体均值点 → 组均值黑方块 + 连线"图（cf. Frontiers fphys.2023.1153913 Fig 2）。
-本实验有 9 个范式（5 个有数据：bv/bw/-373 30°/-308 36°/-261 42°；+200/-119 80°/-225 48°/0 180° 暂空），
-范式间为 between-subject（动物不跨范式复用，已验证 subject id 无重叠）→ 跨范式折线不存在，
-只能画"范式内个体点连范式均值"。现有 `population` 命令输入=单范式目录，无范式维度，承载不了此图。
+> **状态**: 已实施交付 · **分支**: cli · **上下文关联**: [README.md](../README.md)
 
-## Solution
-新 Typer 子命令 `cercus.cli.app full --input <父目录> --output <目录>`：
-- 每个非空子目录 = 一个范式组（组名=目录名；排除 `_EXCLUDED_DIR_NAMES` + 无 kinematics CSV 的目录并 log warning 跳过）。
-- 范式级多进程（Pool，与 population 同套路，不新建线程池）跑 io→preprocess→label_trials，
-  拼表加 `paradigm` 列 → `full_summary.csv` + `full_meta.json`（含全局阈值与方法名）。
-- **全局 V_max 自适应阈值**：所有范式 v_max 池化后跑一次 KDE valley → log-GMM → fallback 链
-  （复用 population 的三个 `_compute_*` 函数，提取为可导入 helper），仅用于 `is_valid_escape` 标签；
-  分类器本身走 config 固定阈值（98 mm/s），天然跨范式一致。
-- 新图 `plot_paradigm_dumbbell(df, figsize)` → `paradigm_dumbbell.svg`，3 panel：
-  1. **响应概率**：每动物 = (Escape+PreEscape)/全部 trial（trial 级，config 阈值口径）
-  2. **RT**：每动物 = reaction_time_ms 均值（仅逃逸 trial）
-  3. **distance**：每动物 = distance_mm 均值（仅逃逸 trial）
-  画法规式（复刻 Fig 2）：x=范式（按 target_ttc_ms 数值升序：bv(视觉-only 最左)→bw→-373→-308→-261→…→+200），
-  点=单动物均值（类别色不区分——每范式一色即可，用 NPG 前向色阶按范式序），
-  竖线 point→black square（范式均值±SD 误差棒），n=动物数标在刻度下。
-- 空/无数据范式：warning 跳过，图只画有数据的。
+---
 
-## User Stories
-- 作为作者，我跑 `full --input /mnt/d/data` 得到 9(→当前5)范式并排的三 panel 连线图 + 全量 CSV，
-  直接满足实验室呈现传统与论文主图需求。
-- 作为审稿人，我看到检验/均值单位是动物（点=动物），无伪重复。
+## 1. 业务背景与问题分析
 
-## Implementation Decisions
-- `cercus/full/` 不建——放 `cercus/cli/app.py` 新 command + 新模块 `cercus/analysis/full.py`（数据侧）
-  + `cercus/visualization/paradigm.py`（绘图侧）。垂直切片：io/分类/绘图三层复用现有 seam。
-- population 的三个 adaptive-threshold 函数提取到 `cercus/analysis/vmax_threshold.py`，
-  population_analysis.py 改为导入（单一事实源，避免复制粘贴分叉）。
-- 范式排序：从目录名解析首整数（`-373 30°`→-373；`bv`/`bw`→无 wind→排最左，bv<bw 或按 n 大小，用目录名字典序兜底）。
-  用 `re.search(r'[-+]?\d+', name)`。
-- dumbbell 点线样式复用现有常量池（RESPONSE_COLORS 不适用——范式不是行为类；用 NPG_PALETTE 循环）。
+在蟋蟀逃逸行为实验中，通常包含多个平行的实验范式（如纯视觉 `bv`、纯风 `bw` 以及多个不同时间差的多模态刺激组 `-373 30°`、`-308 36°` 等）。不同范式之间属于**组间设计 (Between-Subject Design)**，即不同范式由完全独立的蟋蟀个体完成测试。
 
-## Testing
-- 单测 `tests/test_full_analysis.py`：synthetic 双范式 df → `aggregate_paradigm_table` 输出行数/列/n 正确；
-  空范式被跳过并 warning。
-- 绘图 smoke：dumbbell 对 synthetic 出图不抛异常、3 axes、每范式点数=动物数。
-- 真实数据端到端：full --input '/mnt/d/data' 跑通（当前 5 个有数据范式）。
+针对多组行为学对照，实验室标准作图惯例需要在一张全景图表中直观呈现：
+1. **个体均值散点**：每个点代表一只动物在当前范式下的平均行为表现。
+2. **范式组均值与误差棒**：黑色方块代表该范式全体被试的均值 $\pm\text{SD}$。
+3. **竖向指引线**：个体点垂直连接到对应的组均值方块，直观展现组内离散度（参考 Frontiers in Physiology, 2023, Fig 2）。
 
-## Out of Scope
-- 方向/极坐标跨范式图（已有 per-paradigm polar）；统计检验 p 值标注（先出图，检验按审稿意见加）；
-  MCMC 跨范式；per-paradigm 那 15 张图（那是 population 的活）。
+以往的 `population` 命令仅针对单个范式目录进行批处理，无法直接跨范式横向汇总与出图。为此，框架引入了全新的 `full` 模式。
+
+---
+
+## 2. 解决方案设计
+
+新增命令行入口：
+```bash
+python -m cercus.cli.app full --input <paradigms_parent_dir> --output <results_dir> [--workers N]
+```
+
+### 2.1 数据聚合与跨范式处理
+- **自动发现与排序**：
+  递归扫描父目录下的所有非空子目录，自动排除无效临时文件夹。范式按刺激时序自动排序：纯视觉（`bv`）排在最左侧，随后为纯风（`bw`），其余多模态范式依据物理时间差（`target_ttc_ms`）按升序依次排列。
+- **全局池化自适应爆发阈值**：
+  将所有范式的最大速度（$V_{max}$）样本全部池化后统一拟合一次自适应阈值，确保各实验组的逃逸有效性判定（`is_valid_escape`）建立在全局一致的物理基准之上。
+- **输出统一汇总表**：
+  导出试次级汇总数据 `full_summary.csv` 与元数据清单 `full_meta.json`。
+
+### 2.2 跨范式哑铃图 (`paradigm_dumbbell.svg`)
+生成由 3 个水平排列的子面板组成的出版级矢量图：
+1. **响应概率 (Escape Probability)**：每只动物 (Escape + PreEscape) 占总试次的比例。
+2. **反应时间 (Reaction Time)**：仅针对逃逸试次，统计动物个体平均 RT。
+3. **逃逸位移 (Escape Distance)**：仅针对逃逸试次，统计动物个体平均位移。
+
+横坐标各刻度下方明确标注该范式包含的独立动物样本数（如 $n=12$），确保实验统计单位清晰，杜绝试次级伪重复（Pseudoreplication）。
+
+---
+
+## 3. 工程与架构原则
+
+- **复用既有组件**：数据加载、运动学预处理与分类逻辑完全复用现有 pipeline，不重复编写底层逻辑。
+- **多进程并发调度**：跨范式处理依托 `multiprocessing.Pool`，实现多范式并行提速。
+- **稳健跳过机制**：若某范式子目录为空或缺少配对 CSV，记录 warning 日志并安全跳过，不阻断主流程。

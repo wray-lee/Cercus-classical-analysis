@@ -1,32 +1,34 @@
-# Decision: defer PreEscape subdivision
+# 架构决策：暂缓实施 PreEscape 细分方案 (Architecture Decision)
 
-## Status
+> **状态**: 暂缓 (Deferred) · **生效日期**: 2026-09-29 · **影响范围**: 分类器路由与行为队列
 
-Deferred on 2026-09-29. This decision supersedes proposals to split PreEscape or add auxiliary PreEscape/PreWalk subtype flags. It does not authorize changes to the classifier.
+---
 
-## Research question and rationale
+## 1. 提案背景与研究动机
 
-The multisensory-integration analysis is anchored to **wind onset**. Relative to that reference, subdividing PreEscape into responses preceded by walking versus responses without preceding walking adds little value to the current research question.
+此前曾有讨论提出：是否应该对 PreEscape（提前起跑）类别进一步细分，例如拆分为“静止后提前起跑”与“运动中提前起跑”，或者引入辅助的二级标签。
 
-A measured escape onset after wind arrival does not establish an airflow-only trigger. Visual processing may already be underway, and airflow may contribute to rapid multisensory integration. The present onset-timing classification cannot disentangle those causal contributions and must not be presented as doing so.
+经深入论证，当前多感觉整合研究的核心锚点在于**气流刺激到达时刻 (Wind Onset)**。相对于这一物理基准，过早将 PreEscape 拆分为更加复杂的子类别并不会为当前的科研核心问题带来实质收益，反而会分散群体样本量，增加解释负担。
 
-## Decision
+---
 
-- Retain the four primary categories: NoResponse, PreEscape, PreWalk, and Escape.
-- Do not introduce PreEscape-PreWalk or PreEscape-Escape subcategories, auxiliary subtype fields, or corresponding plots and statistical groups.
-- Preserve the current wind-anchored burst qualification: a speed above the configured burst threshold must occur within 250 ms after wind arrival.
-- Preserve onset measurement by backward search from the selected post-wind burst to the preceding low-speed boundary.
-- For eligible looming + wind trials with PreEscape enabled, compare the measured interval onset directly with wind arrival. The current PreEscape buffer is zero: onset before wind qualifies; onset exactly at wind does not.
-- Preserve classification priority: NoResponse first, then PreEscape, then PreWalk, otherwise Escape.
-- The 50-ms exclusion at the end of the PreWalk assessment window is a separate criterion and remains unchanged.
-- Preserve the existing visual-baseline exception and all current classification outputs.
+## 2. 核心考量与结论
 
-## Known limitation retained
+1. **因果推断边界**：
+   即便测得的逃逸起跑点位于气流到达之后，在多模态实验中也不能草率断言该逃逸是由气流“完全独立诱发”，因为先前的视觉神经加工已经在进行中；反之亦然。基于时间窗口的运动学打标无法且不应试图过度解读更底层的复杂神经生理因果。
+2. **保持四元架构精简**：
+   维持经典的四主类别：`NoResponse`、`PreEscape`、`PreWalk`、`Escape`。
+3. **不做过多衍生子类**：
+   不引入 PreEscape-PreWalk 或 PreEscape-Escape 等嵌套二级分类，避免在下游统计与出图中引入过多小样本亚群。
 
-An independent earlier movement may subside below 10 mm/s before a later post-wind burst. In that case the later burst can supply the measured escape onset; the earlier movement remains visible in a full-trial heatmap without automatically making the trial PreEscape. Heatmap sorting does not change this behavior.
+---
 
-Searching the entire trial for the earliest burst or independently classifying all movement episodes is not part of this decision. These alternatives are deferred along with PreEscape subdivision.
+## 3. 已知边界保留
 
-## Revisit only if
+在个别试次中，动物在风刺激很久之前曾有过自发走动，随后在刺激前早已回归静止（速度降至 10 mm/s 以下），之后在风刺激到来后再次爆发逃跑。在此类试次中，算法定位到的依然是风刺激后爆发所对应的起跑点，而不会将早期的自发运动误判为 PreEscape。这一机制符合当前生物学实验设计意图，作为已知特性予以保留。
 
-A future research question specifically concerns pre-wind locomotor state, independent movement episodes, or causal sensory contributions, and a prespecified analysis or experimental design makes those distinctions useful. No implementation work is currently scheduled.
+---
+
+## 4. 后续启封条件
+
+仅在未来科研课题专门聚焦于“刺激前自发微运动对早期逃逸启动的调控机制”，且具备预先设计的独立统计模型或实验对照时，方可重新评估子类别的细分。当前分析管线暂不作变更。
