@@ -4,7 +4,7 @@ Cercus Framework — Ternary State Classifier
 Receives physical features from ``kinematics.py`` and routes each trial into
 response categories: **Escape**, **PreEscape**, **PreWalk**, or **NoResponse**
 (PreEscape is switch-controlled — ``classification.use_preescape``, default
-true — and only applies to multimodal wind trials).
+true — and applies to wind trials whose measured onset precedes wind).
 
 Classification is orthogonal to measurement — this module never re-derives
 geometric features; it only reads ``v_max`` / ``latency_ms`` and applies
@@ -47,6 +47,7 @@ def classify_trial(
         "pause_stopping_time_ms": np.nan, "pause_to_escape_time_ms": np.nan,
         "pause_reaction_time_ms": np.nan, "pause_status": "not_applicable",
         "pause_escape_status": "not_applicable", "pause_baseline_status": "not_applicable",
+        "pause_moving_fraction": np.nan, "pause_moving_eligible": False,
     }
     if trial.empty:
         return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, "reaction_time_ms": np.nan, "escape_reaction_time_ms": np.nan, "stillness_reaction_time_ms": np.nan, "stillness_status": "invalid_data", "stillness_presence": "unobserved", "stop_to_escape_interval_ms": np.nan, "stillness_baseline_status": "unobserved", "stillness_window_start_ms": np.nan, "short_rt": False, "distance_mm": np.nan, "distance_500ms_mm": np.nan, **pause}
@@ -67,7 +68,6 @@ def classify_trial(
     # ── Extract trial type for baseline_visual special handling ──
     _trial_type = trial["type"].iloc[0] if "type" in trial.columns else None
     is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
-    is_multimodal = is_wind and "looming" in str(_trial_type).lower()
     rt_cfg = get_thresholds().reaction_time
     # Calibration changes the moving-history and latency reference; burst and
     # PreEscape windows stay hardware-anchored. Zero delay is not measured arrival.
@@ -133,17 +133,14 @@ def classify_trial(
     if not has_burst:
         return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, **rt_dist}
 
-    # ── 3. PreEscape detection (multisensory only, switch-controlled) ──
-    # Burst started before the wind arrived (minus buffer) → pure-vision escape
-    # that masks the multisensory response.  Routed ahead of PreWalk so the
-    # wind-anchored prewalk window can no longer mislabel it.
-    # 风前起跑 = 纯视觉触发的逃逸，优先于 PreWalk 单独成类。
-    # 必须多模态（looming+wind）且 target_ttc 存在才有"风前"参照；纯 wind 范式
-    # target_ttc 缺失（onset 退化为 0），刺激前自发奔跑不是视觉逃逸，不得成类。
+    # ── 3. PreEscape detection (any wind paradigm) ──
+    # Burst started before wind arrived → an escape already underway before
+    # the wind reference.  Keep it out of PreWalk so a pre-wind onset cannot
+    # be mistaken for a missing post-wind RT.
+    # 风前起跑 = 风到达前已经开始逃逸，优先于 PreWalk 单独成类。
     if (
         USE_PRE_ESCAPE
-        and is_multimodal
-        and stim_onset is not None
+        and is_wind
         and pd.notna(interval_onset_ms)
         and interval_onset_ms < onset - PREESCAPE_BUFFER_MS
     ):
@@ -155,10 +152,10 @@ def classify_trial(
         rt_dist["reaction_time_ms"] = np.nan
         rt_dist["escape_reaction_time_ms"] = np.nan
 
-    # ── 4. PreWalk detection — wind uses the same complete moving history as RT ──
+    # ── 4. PreWalk detection — wind shares active-at-reference eligibility with RT ──
     prewalk = False
     if is_wind:
-        prewalk = pause["pause_baseline_status"] == "continuous_moving"
+        prewalk = bool(pause["pause_moving_eligible"])
         rt_dist["stillness_baseline_status"] = pause["pause_baseline_status"]
         if has_acquisition:
             acquisition_t = trial["t_acquisition_rel"].to_numpy(float)
@@ -244,6 +241,7 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     pause_maps = {col: {} for col in (
         "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms",
         "pause_status", "pause_escape_status", "pause_baseline_status",
+        "pause_moving_fraction", "pause_moving_eligible",
     )}
 
     for tid, grp in df.groupby("global_trial_id"):

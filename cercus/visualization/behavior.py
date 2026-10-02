@@ -520,16 +520,19 @@ def plot_reaction_distance_panel(
     df: pd.DataFrame,
     figsize: tuple[float, float] | None = None,
     *,
-    pause_cohort: str = "strict_moving",
+    pause_cohort: str = "prewalk",
 ) -> plt.Figure | None:
-    """Compare escape latency, distance, and paired stopping/escape endpoints.
+    """Compare class-selected timing, distance, and paired stopping/escape.
 
-    Causal T1/T2 defaults to the strict moving-history proxy across wind
-    response classes. ``all_local`` retains intermittent transitions as an
-    explicitly diagnostic view. Legacy tables retain their PreWalk fallback.
+    The default T1/T2 cohort comes directly from final wind PreWalk labels;
+    endpoint availability is coverage, not a second membership criterion.
+    Explicit ``moving_eligible``, ``strict_moving`` and ``all_local`` views
+    retain cross-class history/local-transition diagnostics separately.
     """
-    if pause_cohort not in {"strict_moving", "all_local"}:
-        raise ValueError("pause_cohort must be 'strict_moving' or 'all_local'")
+    if pause_cohort not in {"prewalk", "moving_eligible", "strict_moving", "all_local"}:
+        raise ValueError(
+            "pause_cohort must be 'prewalk', 'moving_eligible', 'strict_moving' or 'all_local'"
+        )
     rt_col = (
         "escape_reaction_time_ms"
         if "escape_reaction_time_ms" in df.columns
@@ -557,7 +560,7 @@ def plot_reaction_distance_panel(
     )
     rng = np.random.default_rng(42)
     for ax, col, title, xlabel in (
-        (axes[0], "rt", "State-selected response timing", "Selected timing endpoint vs reference (ms)"),
+        (axes[0], "rt", "Class-selected response timing", "Selected timing endpoint vs reference (ms)"),
         (axes[1], "dist", "Escape distance", "Distance (mm)"),
     ):
         pairs = [
@@ -622,21 +625,41 @@ def plot_reaction_distance_panel(
             ax.grid(axis="y", color="#E5E7EB", lw=0.5, alpha=0.6)
 
     rt_coverage = [
-        f"{response}: {int(np.isfinite(group['rt']).sum())}/{len(group)}"
+        f"{response}: N={len(group)}; RT observed={int(np.isfinite(group['rt']).sum())}; "
+        f"missing={int((~np.isfinite(group['rt'])).sum())}"
         for response, group in trial.groupby("response_type", sort=False)
         if response in classes
     ]
-    axes[0].text(0.5, -0.23, "RT observed — " + "; ".join(rt_coverage),
+    axes[0].text(0.5, -0.23, "\n".join(rt_coverage),
                  transform=axes[0].transAxes, ha="center", va="top",
                  fontsize=6, color="0.35")
+    axes[0].text(
+        0.5, -0.31,
+        "\n".join(
+            f"RT observed — {response}: "
+            f"{int(np.isfinite(group['rt']).sum())}/{len(group)}"
+            for response, group in trial.groupby("response_type", sort=False)
+            if response in classes
+        ),
+        transform=axes[0].transAxes, ha="center", va="top",
+        fontsize=6, color="0.35",
+    )
 
-    # ── T1/T2 cohort is independent of the legacy response class ──
+    # ── Default T1/T2 cohort comes from final classifier labels ──
     t_ax = axes[2]
+    classified = pause_cohort == "prewalk" or not causal_pair
     strict = causal_pair and pause_cohort == "strict_moving"
+    moving = causal_pair and pause_cohort == "moving_eligible"
+    strict_mask = trial["baseline"].eq("continuous_moving")
+    moving_mask = (
+        trial["pause_moving_eligible"].eq(True).fillna(False)
+        if "pause_moving_eligible" in trial else strict_mask
+    )
     pair_title = (
-        "Strict moving: T1 / T2" if strict else
-        "Local transitions: T1 / T2" if causal_pair else
-        "Wind PreWalk: T1 / T2 (legacy)"
+        "Wind PreWalk: T1 / T2" + (" (legacy)" if not causal_pair else "") if classified else
+        "Eligible history: T1 / T2 (diagnostic)" if moving else
+        "Strict moving: T1 / T2 (sensitivity)" if strict else
+        "Local transitions: T1 / T2 (diagnostic)"
     )
     t_ax.set_title(pair_title, fontweight="bold", fontsize=8)
     t_ax.set_ylabel("Latency (ms)", fontsize=7)
@@ -647,23 +670,36 @@ def plot_reaction_distance_panel(
     if has_type:
         type_text = trial["type"].astype(str).str.lower()
         wind = type_text.str.contains("wind", na=False)
-        source = wind if causal_pair else wind & trial["response_type"].eq("PreWalk")
-        moving = trial.get("baseline", pd.Series(index=trial.index, dtype=str)).eq("continuous_moving")
-        selected = source & moving if strict else source
+        source = wind & trial["response_type"].eq("PreWalk") if classified else wind
+        selected = source & (moving_mask if moving else strict_mask) if (moving or strict) else source
         paired = trial.loc[selected].copy()
         coverage = []
+        endpoint_coverage = []
         for name, mask in (("Pure", ~type_text.str.contains("looming", na=False)),
                            ("Multimodal", type_text.str.contains("looming", na=False))):
             group = trial.loc[source & mask]
             if group.empty:
                 continue
-            eligible = trial.loc[selected & mask]
-            complete = np.isfinite(eligible["t1"]) & np.isfinite(eligible["t2"])
-            if strict:
-                coverage.append(f"{name}: moving {len(eligible)}/{len(group)}; paired {int(complete.sum())}/{len(eligible)}")
+            selected_group = trial.loc[selected & mask]
+            complete = np.isfinite(selected_group["t1"]) & np.isfinite(selected_group["t2"])
+            if classified:
+                coverage.append(f"{name}: PreWalk {len(group)}; paired {int(complete.sum())}/{len(group)}")
+            elif moving:
+                coverage.append(f"{name}: eligible {len(selected_group)}/{len(group)}; paired {int(complete.sum())}/{len(selected_group)}")
+            elif strict:
+                coverage.append(f"{name}: moving {len(selected_group)}/{len(group)}; paired {int(complete.sum())}/{len(selected_group)}")
             else:
-                cohort_n = int((source & mask & moving).sum())
+                cohort_n = int((source & mask & strict_mask).sum())
                 coverage.append(f"{name}: paired {int(complete.sum())}/{len(group)}; moving-history {cohort_n}")
+            endpoint_coverage.append(
+                f"{name}: paired {int(complete.sum())}/{len(group)}; missing={int((~complete).sum())}\n"
+                f"  T1 observed={int(np.isfinite(selected_group['t1']).sum())}; "
+                f"missing={len(selected_group) - int(np.isfinite(selected_group['t1']).sum())}\n"
+                f"  T2 observed={int(np.isfinite(selected_group['t2']).sum())}; "
+                f"missing={len(selected_group) - int(np.isfinite(selected_group['t2']).sum())}\n"
+                f"  RT observed={int(np.isfinite(selected_group['rt']).sum())}; "
+                f"missing={len(selected_group) - int(np.isfinite(selected_group['rt']).sum())}"
+            )
         paired = paired[np.isfinite(paired["t1"]) & np.isfinite(paired["t2"])]
     else:
         paired = trial.iloc[0:0].copy()
@@ -731,15 +767,20 @@ def plot_reaction_distance_panel(
             t_ax.text(0.5, -0.21, f"paired: {n_trials} trials / {n_subjects} subjects",
                       transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
                       color="0.35")
-            t_ax.text(0.5, -0.28 - 0.07 * max(1, len(coverage)),
+            t_ax.text(0.5, -0.28 - 0.07 * max(1, sum(s.count("\n") + 1 for s in coverage)),
                       "Boxes/dots: subject medians; lines: trial pairs",
                       transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
                       color="0.35")
+            if endpoint_coverage:
+                t_ax.text(0.5, -0.34 - 0.07 * max(1, sum(s.count("\n") + 1 for s in coverage)),
+                          "\n".join(endpoint_coverage),
+                          transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
+                          color="0.35")
         else:
-            t_ax.text(0.5, 0.5, "no paired strict-moving endpoints" if strict else "no paired endpoints", transform=t_ax.transAxes,
+            t_ax.text(0.5, 0.5, "no paired eligible endpoints" if (moving or strict) else "no paired endpoints", transform=t_ax.transAxes,
                       ha="center", va="center", fontsize=8, color="0.5")
     else:
-        t_ax.text(0.5, 0.5, "no paired strict-moving endpoints" if strict else "no paired wind PreWalk endpoints", transform=t_ax.transAxes,
+        t_ax.text(0.5, 0.5, "no paired eligible endpoints" if (moving or strict) else "no paired wind PreWalk endpoints" if classified else "no paired local endpoints", transform=t_ax.transAxes,
                   ha="center", va="center", fontsize=8, color="0.5")
     t_ax.axhline(0, color="0.5", ls="--", lw=0.7)
     if coverage:
@@ -773,15 +814,24 @@ def plot_reaction_distance_panel(
 
     if causal_pair:
         cfg = get_thresholds()
+        quiet = float(cfg.baseline.quiet_mm_s)
+        window_s = float(cfg.prewalk.window_ms) / 1000.0
+        frac = float(cfg.prewalk.min_moving_fraction)
         cohort_note = (
-            f"T1/T2: prior {float(cfg.prewalk.window_ms) / 1000:g} s strictly "
-            f">{float(cfg.baseline.quiet_mm_s):g} mm/s, all wind classes (operational moving proxy)."
-            if strict else "T1/T2: all local transitions, including intermittent movers (diagnostic, not paper cohort)."
+            "T1/T2 primary: final classifier Wind PreWalk trials; missing endpoints remain in the cohort."
+            if classified else
+            f"T1/T2 diagnostic: all-class eligible history (prior {window_s:g} s occupancy >={frac:.0%}, "
+            f"reference speed >{quiet:g} mm/s; not the primary PreWalk cohort)."
+            if moving else
+            f"T1/T2 sensitivity: prior {window_s:g} s strictly >{quiet:g} mm/s, continuous movers only."
+            if strict else
+            "T1/T2 diagnostic: all local transitions, including intermittent movers (not the paper cohort)."
         )
         note = (
             cohort_note + "\n"
-            "RT selector: continuous wind uses causal T1 + T2; unresolved causal RT stays missing.\n"
-            "intermittent/unobserved wind excluded; stationary/nonwind timing is descriptive.\n"
+            "RT selector: final Wind PreWalk uses causal T1 + T2; no second history or endpoint-availability cohort filter.\n"
+            "Class trial N is separate from RT observed/missing and paired T1/T2 coverage; Escape/nonwind timing is descriptive.\n"
+            "Causal RTm is T1 + T2 (stimulus-to-escape), not either stopping endpoint alone.\n"
             "PreEscape is a pre-wind lead. No fixed delay correction; not physiological RT."
         )
     else:

@@ -295,6 +295,8 @@ def export_summary_metrics(
         "pause_status": ("pause_status", "first"),
         "pause_escape_status": ("pause_escape_status", "first"),
         "pause_baseline_status": ("pause_baseline_status", "first"),
+        "pause_moving_fraction": ("pause_moving_fraction", "first"),
+        "pause_moving_eligible": ("pause_moving_eligible", "first"),
         "stillness_baseline_status": ("stillness_baseline_status", "first"),
         "stillness_window_start_ms": ("stillness_window_start_ms", "first"),
         "short_rt": ("short_rt", "first"),
@@ -319,6 +321,10 @@ def export_summary_metrics(
     trial_agg = trial_agg.sort_values(sort_cols).reset_index(drop=True)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Retain occupancy precision: rounding 0.149 to 0.15 hides ineligibility.
+    trial_agg["pause_moving_fraction"] = trial_agg["pause_moving_fraction"].map(
+        lambda value: f"{value:.12g}" if pd.notna(value) else ""
+    )
     trial_agg.to_csv(output_path, index=False, float_format="%.2f")
     log.info("Summary metrics exported: %d trials → %s", len(trial_agg), output_path)
     return output_path

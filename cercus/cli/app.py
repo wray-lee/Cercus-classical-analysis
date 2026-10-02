@@ -166,6 +166,7 @@ def full(
         "stillness_status", "stillness_presence", "stop_to_escape_interval_ms",
         "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms",
         "pause_status", "pause_escape_status", "pause_baseline_status",
+        "pause_moving_fraction", "pause_moving_eligible",
         "stillness_baseline_status", "stillness_window_start_ms", "short_rt", "distance_mm", "distance_500ms_mm", "is_valid_escape",
     ]
     trial = (

@@ -32,12 +32,15 @@ def test_summarize_subjects_semantics():
     subj = summarize_subjects(_synthetic())
     assert list(subj.columns) == [
         "paradigm", "subject_id", "n_trials", "response_rate", "rt_mean", "dist_mean",
+        "rt_observed", "rt_trials", "rt_missing",
     ]
     bv = subj[subj["paradigm"] == "bv"]
     # 每动物 20 trial；响应率∈(0,1]；RT 均值仅在逃逸 trial 上 → 有限
     assert (bv["n_trials"] == 20).all()
     assert bv["response_rate"].between(0, 1).all()
     assert bv["rt_mean"].notna().all()
+    assert (subj["rt_observed"] + subj["rt_missing"]).eq(subj["rt_trials"]).all()
+    assert subj["rt_missing"].eq(0).all()  # NoResponse is not a missing response endpoint.
     assert 0.2 < (subj[subj["paradigm"] == "bv"]["response_rate"].mean()) <= 1.0
     assert (subj[subj["paradigm"] == "-373 30°"]["response_rate"].mean()
             < subj[subj["paradigm"] == "bv"]["response_rate"].mean())
@@ -115,7 +118,7 @@ def test_cross_paradigm_rt_selects_state_specific_endpoints_without_imputation()
         "pause_reaction_time_ms": [120.0, np.nan] + [120.0] * 6,
         "distance_mm": [10.0] * 8,
     })
-    expected = pd.Series([120.0, np.nan, np.nan, np.nan, 90.0, -40.0, np.nan, 90.0],
+    expected = pd.Series([120.0, np.nan, 90.0, 90.0, 90.0, -40.0, np.nan, 90.0],
                          index=list("abcdefgh"), name="rt_mean")
     # Replicated frame rows must not add trials or borrow another endpoint.
     frames = pd.concat([df, df], ignore_index=True)
@@ -133,6 +136,113 @@ def test_cross_paradigm_rt_selects_state_specific_endpoints_without_imputation()
         summarize_subjects(legacy).set_index("subject_id")["rt_mean"],
         expected, check_names=False,
     )
+
+
+def test_shared_rt_selector_uses_final_class_without_missing_value_fallback():
+    from cercus.analysis.reaction_time import select_escape_latency
+
+    trials = pd.DataFrame({
+        "type": ["baseline_wind"] * 6 + ["looming_wind", "baseline_wind"],
+        "response_type": ["PreWalk"] * 6 + ["PreEscape", "NoResponse"],
+        "pause_baseline_status": ["intermittent_moving", "intermittent_moving",
+                                  "continuous_moving", "continuous_moving",
+                                  "continuous_moving", "stationary",
+                                  "intermittent_moving", "continuous_moving"],
+        "pause_moving_eligible": [True, False, np.nan, False, True, False, True, True],
+        "pause_reaction_time_ms": [120.0] * 4 + [np.nan, 120.0, 120.0, 120.0],
+        "escape_reaction_time_ms": [90.0] * 6 + [-40.0, 90.0],
+    })
+    expected = pd.Series([120.0, 120.0, 120.0, 120.0, np.nan, 120.0, -40.0, np.nan])
+    pd.testing.assert_series_equal(select_escape_latency(trials), expected, check_names=False)
+
+    no_baseline = trials.drop(columns="pause_baseline_status")
+    pd.testing.assert_series_equal(
+        select_escape_latency(no_baseline), expected, check_names=False,
+    )
+
+    no_causal = trials.drop(columns="pause_reaction_time_ms")
+    pd.testing.assert_series_equal(
+        select_escape_latency(no_causal), expected.mask(expected.eq(120.0)), check_names=False,
+    )
+
+
+def test_rt_cohort_is_final_classifier_class_not_history_or_pair_coverage():
+    from cercus.analysis.reaction_time import select_escape_latency
+    from cercus.visualization.paradigm import summarize_subjects_by_class
+    from cercus.visualization.behavior import plot_reaction_distance_panel
+
+    trials = pd.DataFrame({
+        "paradigm": ["bw"] * 6,
+        "subject_id": ["a"] * 6,
+        "global_trial_id": range(6), "global_trial_index": range(6),
+        "type": ["baseline_wind"] * 3 + ["looming_wind"] + ["baseline_wind"] * 2,
+        "response_type": ["PreWalk"] * 3 + ["PreEscape", "NoResponse", "Escape"],
+        "pause_moving_eligible": [True, False, True, True, True, False],
+        "pause_baseline_status": ["intermittent_moving"] * 6,
+        "pause_reaction_time_ms": [120.0, 140.0, np.nan, 160.0, 180.0, 200.0],
+        "pause_stopping_time_ms": [70.0, 80.0, np.nan, 90.0, 100.0, 110.0],
+        "pause_to_escape_time_ms": [50.0, 60.0, np.nan, 70.0, 80.0, 90.0],
+        "escape_reaction_time_ms": [90.0] * 3 + [-40.0, 90.0, 90.0],
+        "distance_mm": [10.0] * 6,
+    })
+    # Deliberately contradictory history metadata must not reclassify trials.
+    expected = pd.Series([120.0, 140.0, np.nan, -40.0, np.nan, 90.0])
+    pd.testing.assert_series_equal(select_escape_latency(trials), expected, check_names=False)
+    summary = summarize_subjects_by_class(pd.concat([trials, trials])).set_index("response_type")
+    assert summary.loc["PreWalk", "n"] == 3
+    assert summary.loc["PreWalk", "rt_observed"] == 2
+    assert summary.loc["PreWalk", "rt_missing"] == 1
+    assert summary.loc["PreWalk", "rt_med"] == 130.0
+    fig = plot_reaction_distance_panel(trials)
+    text = "\n".join(t.get_text() for t in fig.axes[2].texts)
+    assert "Pure: PreWalk 3; paired 2/3" in text
+    assert "Multimodal" not in text
+    assert "PreWalk" in fig.axes[2].get_title()
+    plt.close(fig)
+
+
+def test_partial_causal_schema_never_borrows_centered_rt():
+    from cercus.analysis.reaction_time import select_escape_latency
+
+    trials = pd.DataFrame({
+        "type": ["baseline_wind"], "response_type": ["PreWalk"],
+        "escape_reaction_time_ms": [90.0],
+        "pause_stopping_time_ms": [70.0], "pause_to_escape_time_ms": [50.0],
+    })
+    assert select_escape_latency(trials).isna().all()
+    legacy = trials.drop(columns=["pause_stopping_time_ms", "pause_to_escape_time_ms"])
+    assert select_escape_latency(legacy).iloc[0] == 90.0
+
+
+def test_plot_coverage_uses_classifier_trials_and_finite_observed_subjects():
+    from cercus.visualization.paradigm import plot_paradigm_rt_dist, summarize_subjects_by_class
+
+    trials = pd.DataFrame({
+        "paradigm": ["bw"] * 4, "subject_id": ["a", "b", "c", "d"],
+        "global_trial_index": [1] * 4,
+        "type": ["baseline_wind"] * 4,
+        "response_type": ["PreWalk"] * 3 + [None],
+        "pause_reaction_time_ms": [120.0, np.inf, np.nan, 100.0],
+        "escape_reaction_time_ms": [90.0] * 4,
+        "distance_mm": [10.0] * 4,
+    })
+    before = trials.copy(deep=True)
+    frames = pd.concat([trials, trials], ignore_index=True)
+    summary = summarize_subjects(frames)
+    assert summary.rt_trials.sum() == 3
+    assert summary.rt_observed.sum() == 1
+    assert summary.rt_missing.sum() == 2
+    by_class = summarize_subjects_by_class(frames)
+    assert by_class.n.sum() == 3
+    assert by_class.rt_observed.sum() == 1
+    assert by_class.rt_missing.sum() == 2
+    for plot, axis_index in ((plot_paradigm_rt_dist, 0), (plot_paradigm_dumbbell, 1)):
+        fig = plot(frames)
+        text = "\n".join(t.get_text() for t in fig.axes[axis_index].texts)
+        assert "N=3; observed=1; missing=2" in text
+        assert "subjects=1/3" in text
+        plt.close(fig)
+    pd.testing.assert_frame_equal(trials, before)
 
 
 def test_rt_dist_ticks_and_offsets():

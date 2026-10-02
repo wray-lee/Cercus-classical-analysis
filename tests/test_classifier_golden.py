@@ -259,14 +259,22 @@ def test_preescape_needs_wind_paradigm(monkeypatch):
     assert classify_trial(trial)["response_type"] != "PreEscape"
 
 
-def test_preescape_needs_looming_not_pure_wind():
-    """Pure-wind (baseline_wind) trials never become PreEscape: no looming →
-    无"风前视觉逃逸"语义，刺激前自发 burst 只能落 PreWalk/Escape/NoResponse。"""
-    trial = _trial_preescape()
-    trial = trial.copy()
-    trial["type"] = "baseline_wind"
-    trial["target_ttc_ms"] = np.nan  # 纯 wind 范式无 TTC（与 kinematics 一致）
-    assert classify_trial(trial)["response_type"] != "PreEscape"
+def _trial_pure_wind_preescape() -> pd.DataFrame:
+    """Pure Wind: onset precedes t=0, but the qualifying burst is post-wind."""
+    t = np.linspace(-1500, 500, 1200)
+    speed = np.full_like(t, 2.0)
+    ramp = (t >= -100) & (t < -50)
+    speed[ramp] = np.linspace(2.0, 120.0, ramp.sum())
+    speed[(t >= -50) & (t < 5)] = 120.0
+    speed[t >= 5] = 120.0 * np.exp(-(t[t >= 5] - 5.0) / 50.0)
+    return _make_trial(speed, t, trial_type="baseline_wind")
+
+
+def test_pure_wind_pre_wind_onset_is_preescape():
+    """Pure-Wind onset can predate t=0 when a post-wind burst qualifies."""
+    result = classify_trial(_trial_pure_wind_preescape())
+    assert result["response_type"] == "PreEscape"
+    assert result["escape_reaction_time_ms"] < 0.0
 
 
 def test_preescape_burst_veto_first():

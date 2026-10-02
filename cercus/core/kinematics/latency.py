@@ -83,9 +83,10 @@ def compute_escape_latency(
     2. Locate the first frame exceeding ``ESCAPE_VMAX_THRESHOLD``, then
        search backwards for the last frame at or below ``ESCAPE_START_THRESHOLD``
        (with a relative floating-point tolerance, not a biological margin).
-       Pure-wind responses require an observed fresh onset at or after wind;
-       skip ongoing movement and seek a later qualifying burst after low speed.
-       Multimodal pre-wind onsets remain available for PreEscape.
+       Wind trials use the same global onset search: an onset before wind is
+       retained for PreEscape, while an onset after wind supplies wind RT.
+       A pure-wind burst with no observable low-speed-to-burst transition
+       remains unresolved.
     3. Without a qualifying burst / observable onset, return ``latency_ms = NaN``.
 
     Optional angular refinement: when ``escape.use_angular_onset_refinement``
@@ -159,19 +160,20 @@ def compute_escape_latency(
 
     search_start = 0
     if _is_wind and not _is_multimodal:
-        # Include the adjacent pre-wind frame only to observe a transition
-        # at the first post-wind sample; never reuse an earlier movement onset.
-        search_start = max(0, int(burst_indices[0]) - 1)
+        # Pure-Wind trials still use the same global onset definition.  A
+        # pre-wind onset is a PreEscape; a post-wind onset becomes wind RT.
+        # Keep trying later burst candidates when an ongoing burst has no
+        # observable low-speed transition, but never invent an onset.
         qualifying = burst_indices[burst_speed > ESCAPE_VMAX_THRESHOLD]
         for candidate in qualifying:
-            run = speed[search_start:int(candidate)]
+            run = speed[:int(candidate)]
             below = np.flatnonzero(
                 np.isfinite(run)
                 & (run <= ESCAPE_START_THRESHOLD * (1.0 + 1e-9))
             )
             if not len(below):
                 continue
-            last_below_idx = search_start + int(below[-1])
+            last_below_idx = int(below[-1])
             # Missing speed cannot establish the transition into a fresh burst.
             if not np.all(np.isfinite(speed[last_below_idx:int(candidate) + 1])):
                 continue
@@ -203,19 +205,19 @@ def _causal_displacement_speed(t: np.ndarray, v: np.ndarray) -> tuple[np.ndarray
     return averaged, valid, max_gap
 
 
-def _movement_history_status(
+def _movement_history_metrics(
     t: np.ndarray,
     averaged: np.ndarray,
     reference_ms: float,
     baseline_ms: float,
     max_gap_ms: float,
-) -> str:
-    """Classify a complete causal history; stationary means no >threshold samples."""
+) -> tuple[str, float, float]:
+    """Classify complete history and return occupancy/reference speed metrics."""
     cfg = get_thresholds()
     width = float(cfg.stillness.speed_window_ms)
     threshold = float(cfg.baseline.quiet_mm_s)
     if not np.all(np.isfinite([width, threshold, baseline_ms, max_gap_ms])) or min(width, baseline_ms, max_gap_ms) <= 0:
-        return "unobserved"
+        return "unobserved", np.nan, np.nan
     start_ms = reference_ms - baseline_ms
     history = np.flatnonzero((t >= start_ms) & (t <= reference_ms))
     if (
@@ -225,13 +227,39 @@ def _movement_history_status(
         or reference_ms - t[history[-1]] > max_gap_ms
         or not np.all(np.isfinite(averaged[history]))
     ):
-        return "unobserved"
+        return "unobserved", np.nan, np.nan
+
     above = averaged[history] > threshold * (1.0 + 1e-9)
     if np.all(above):
-        return "continuous_moving"
-    if np.any(above):
-        return "intermittent_moving"
-    return "stationary"
+        status = "continuous_moving"
+    elif np.any(above):
+        status = "intermittent_moving"
+    else:
+        status = "stationary"
+
+    # Hold the last causal observation forward, clipping both window boundaries.
+    first = int(np.searchsorted(t, start_ms, side="right") - 1)
+    last = int(history[-1]) + 1
+    boundaries = np.r_[start_ms, t[first + 1:last], reference_ms]
+    durations = np.diff(boundaries)
+    speeds = averaged[first:last]
+    if first < 0 or start_ms - t[first] > max_gap_ms or not np.all(np.isfinite(speeds)):
+        return status, np.nan, float(averaged[history[-1]])
+    fraction = float(np.sum(durations * (speeds > threshold * (1.0 + 1e-9))) / baseline_ms)
+    return status, fraction, float(averaged[history[-1]])
+
+
+def _movement_history_status(
+    t: np.ndarray,
+    averaged: np.ndarray,
+    reference_ms: float,
+    baseline_ms: float,
+    max_gap_ms: float,
+) -> str:
+    """Classify a complete causal history; stationary means no >threshold samples."""
+    return _movement_history_metrics(
+        t, averaged, reference_ms, baseline_ms, max_gap_ms,
+    )[0]
 
 
 def measure_pause_response(
@@ -239,18 +267,19 @@ def measure_pause_response(
     speed: np.ndarray,
     wind_onset_ms: float,
     trial_type: str = "baseline_wind",
-) -> dict[str, float | str]:
+) -> dict[str, float | str | bool]:
     """Source-clock T1/T2 with an earlier and a stop-relative later period.
 
     Both endpoints use the same causal displacement average, never centered
-    speed or a fixed lag correction. Strict moving history (> threshold) is
+    speed or a fixed lag correction. Moving eligibility and strict history are
     separate from locally observable transitions after intermittent walking.
     Response classes and distance intervals are deliberately not returned.
     """
-    result: dict[str, float | str] = {
+    result: dict[str, float | str | bool] = {
         "pause_stopping_time_ms": np.nan, "pause_to_escape_time_ms": np.nan,
         "pause_reaction_time_ms": np.nan, "pause_status": "invalid_data",
         "pause_escape_status": "not_applicable", "pause_baseline_status": "unobserved",
+        "pause_moving_fraction": np.nan, "pause_moving_eligible": False,
     }
     t, v = np.asarray(t_rel, dtype=float), np.asarray(speed, dtype=float)
     cfg = get_thresholds()
@@ -295,10 +324,19 @@ def measure_pause_response(
         # Even an unresolved ongoing burst cannot have its deceleration
         # relabelled as the pre-escape pause before a later burst.
         cap = min(cap, float(t[early_bursts[0]]))
-    status = _movement_history_status(
+    status, fraction, reference_speed = _movement_history_metrics(
         t, averaged, wind_onset_ms, float(cfg.prewalk.window_ms), max_gap,
     )
-    result["pause_baseline_status"] = status
+    minimum = float(cfg.prewalk.min_moving_fraction)
+    result.update(
+        pause_baseline_status=status,
+        pause_moving_fraction=fraction,
+        pause_moving_eligible=bool(
+            np.isfinite(minimum) and 0.0 <= minimum <= 1.0
+            and np.isfinite(fraction) and fraction >= minimum * (1.0 - 1e-9)
+            and reference_speed > float(cfg.baseline.quiet_mm_s) * (1.0 + 1e-9)
+        ),
+    )
     stopping = measure_stopping(t, v, cap, wind_onset_ms)
     result["pause_status"] = stopping["status"]
     if stopping["status"] != "observed":

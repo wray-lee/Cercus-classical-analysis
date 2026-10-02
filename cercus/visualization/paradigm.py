@@ -29,12 +29,12 @@ from cercus.analysis.reaction_time import select_escape_latency
 
 log = logging.getLogger(__name__)
 
-# Burst 行程独立保留；RT 使用共享的状态/endpoint 选择器，缺失不回填。
+# Burst 行程独立保留；RT 按分类器的最终类别取 endpoint，缺失不回填。
 
 
 def _latency_trials(df: pd.DataFrame) -> pd.DataFrame:
     trials = df.drop_duplicates(["paradigm", "subject_id", "global_trial_index"]).copy()
-    trials["rt"] = select_escape_latency(trials)
+    trials["rt"] = select_escape_latency(trials).where(trials["response_type"].isin(_BURST_CLASSES))
     trials["dist"] = trials["distance_mm"]
     return trials
 
@@ -42,41 +42,48 @@ def _latency_trials(df: pd.DataFrame) -> pd.DataFrame:
 def summarize_subjects(df: pd.DataFrame) -> pd.DataFrame:
     """Trial-level full-mode frame → per-(paradigm, subject) summary.
 
-    Columns: paradigm, subject_id, n_trials, response_rate, rt_mean, dist_mean.
-    ``response_rate`` = (Escape+PreEscape)/all trials; RT/distance 均值仅在逃逸 trial 上。
+    Columns include classifier trial N and separate RT observed/missing counts.
+    ``response_rate`` = (Escape+PreEscape)/all trials; timing uses final classes.
     """
     trial = _latency_trials(df)
     trial["is_escape"] = trial["response_type"].isin(_ESCAPE_CLASSES)
+    trial["rt_trial"] = trial["response_type"].isin(_BURST_CLASSES)
     out = (
         trial.groupby(["paradigm", "subject_id"])
         .agg(
-            n_trials=("global_trial_index", "count"),
+            n_trials=("global_trial_index", "size"),
             response_rate=("is_escape", "mean"),
             rt_mean=("rt", "mean"),
             dist_mean=("dist", "mean"),
+            rt_observed=("rt", "count"),
+            rt_trials=("rt_trial", "sum"),
         )
         .reset_index()
     )
+    out["rt_missing"] = out["rt_trials"] - out["rt_observed"]
     return out
 
 
 def summarize_subjects_by_class(df: pd.DataFrame) -> pd.DataFrame:
     """Trial 级表 → per-(paradigm, subject, response_type) 的中位数汇总。
 
-    保留三类有 burst 的行为（Escape / PreEscape / PreWalk）；RT 按可观测状态
-    选择 endpoint，缺失不回填；行程不随 RT eligibility 改变。NoResponse 排除。
+    保留分类器最终三类有 burst 的行为（Escape / PreEscape / PreWalk）；
+    n 来自分类，rt_observed/rt_missing 单独报告，不据此重新筛选队列。
     """
     trial = _latency_trials(df)
     esc = trial[trial["response_type"].isin(_BURST_CLASSES)]
-    return (
+    out = (
         esc.groupby(["paradigm", "subject_id", "response_type"])
         .agg(
-            n=("global_trial_index", "count"),
+            n=("global_trial_index", "size"),
             rt_med=("rt", "median"),
             dist_med=("dist", "median"),
+            rt_observed=("rt", "count"),
         )
         .reset_index()
     )
+    out["rt_missing"] = out["n"] - out["rt_observed"]
+    return out
 
 
 def _compute_zero_anchored_ticks(
@@ -210,9 +217,23 @@ def plot_paradigm_rt_dist(
                 )
         ax.set_xticks(range(n_p))
         n_per = subj.groupby("paradigm")["subject_id"].nunique()
+        observed_per = subj.loc[subj[col].notna()].groupby("paradigm")["subject_id"].nunique()
         ax.set_xticklabels(
-            [f"{p}\n(n={int(n_per[p])})" for p in paradigms],
+            [f"{p}\nsubjects={int(observed_per.get(p, 0))}/{int(n_per[p])}" for p in paradigms],
             fontsize=6.5, rotation=0, ha="center",
+        )
+        coverage = subj.groupby("paradigm")[['n', 'rt_observed', 'rt_missing']].sum()
+        ax.text(
+            0.0, -0.24,
+            "RT coverage:\n" + "\n".join(
+                f"{p}: N={int(coverage.loc[p, 'n'])}; "
+                f"observed={int(coverage.loc[p, 'rt_observed'])}; "
+                f"missing={int(coverage.loc[p, 'rt_missing'])}; "
+                f"subjects={int(observed_per.get(p, 0))}/{int(n_per[p])}"
+                for p in paradigms
+            ),
+            transform=ax.transAxes, fontsize=5.5, color="0.3",
+            ha="left", va="top", linespacing=1.3,
         )
         ax.set_xlim(-0.5, n_p - 0.5)
         ax.set_ylabel(ylab, fontsize=8.0)
@@ -291,7 +312,7 @@ def plot_paradigm_dumbbell(
 
     panels = (
         ("response_rate", "Escape probability", "P(Escape+PreEscape)"),
-        ("rt_mean", "State-selected response timing", "Selected timing endpoint (ms)"),
+        ("rt_mean", "Class-selected response timing", "Selected timing endpoint (ms)"),
         ("dist_mean", "Escape distance", "distance (mm)"),
     )
 
@@ -316,12 +337,30 @@ def plot_paradigm_dumbbell(
                     zorder=2)
             ax.scatter([i], [mean], marker="s", s=34, c="black", zorder=5,
                        edgecolors="white", linewidths=0.6)
-        n_per = subj.groupby("paradigm")["subject_id"].nunique()
+        n_per = subj.loc[subj["rt_trials"] > 0].groupby("paradigm")["subject_id"].nunique() if col == "rt_mean" else subj.groupby("paradigm")["subject_id"].nunique()
+        observed_per = subj.loc[subj[col].notna()].groupby("paradigm")["subject_id"].nunique()
         ax.set_xticks(range(n_p))
         ax.set_xticklabels(
-            [f"{p}\n(n={int(n_per[p])})" for p in paradigms], fontsize=6.0, rotation=45,
-            ha="right",
+            [
+                f"{p}\nsubjects={int(observed_per.get(p, 0))}/{int(n_per[p])}"
+                for p in paradigms
+            ],
+            fontsize=6.0, rotation=45, ha="right",
         )
+        if col == "rt_mean":
+            coverage = subj.groupby("paradigm")[["rt_trials", "rt_observed", "rt_missing"]].sum()
+            ax.text(
+                0.0, -0.25,
+                "RT coverage:\n" + "\n".join(
+                    f"{p}: N={int(coverage.loc[p, 'rt_trials'])}; "
+                    f"observed={int(coverage.loc[p, 'rt_observed'])}; "
+                    f"missing={int(coverage.loc[p, 'rt_missing'])}; "
+                    f"subjects={int(observed_per.get(p, 0))}/{int(n_per[p])}"
+                    for p in paradigms
+                ),
+                transform=ax.transAxes, fontsize=5.5, color="0.3",
+                ha="left", va="top", linespacing=1.3,
+            )
         ax.set_xlim(-0.5, n_p - 0.5)
         ax.set_title(title, fontweight="bold", fontsize=8.5)
         ax.set_ylabel(ylab, fontsize=7.5)

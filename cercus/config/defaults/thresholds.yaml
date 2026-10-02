@@ -17,6 +17,7 @@ escape:
 prewalk:
   threshold: 10.0            # mm/s — pre-stimulus spontaneous activity
   window_ms: 1000.0        # ms — pre-stimulus validation window
+  min_moving_fraction: 0.15  # minimum time fraction > quiet threshold (>=); inherited activity cutoff, not paper criterion
 
 # ── Baseline & Buffer Settings ──
 baseline:

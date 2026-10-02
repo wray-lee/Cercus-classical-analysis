@@ -81,7 +81,7 @@ def test_wind_prewalk_rt_is_filtered_stop_endpoint_not_true_step(wind_ms):
 
 @pytest.mark.parametrize("wind_ms", [0.0, -373.0])
 @pytest.mark.parametrize("history", ["missing_speed", "gap", "short"])
-def test_unobserved_cohort_retains_local_endpoints_without_primary_rt(wind_ms, history):
+def test_unobserved_cohort_retains_classifier_escape_timing(wind_ms, history):
     from cercus.analysis.reaction_time import select_escape_latency
 
     trial = _wind_trial(wind_ms)
@@ -99,7 +99,7 @@ def test_unobserved_cohort_retains_local_endpoints_without_primary_rt(wind_ms, h
     assert result["pause_stopping_time_ms"] == result["stillness_reaction_time_ms"] == 70.0
     assert result["pause_to_escape_time_ms"] == result["stop_to_escape_interval_ms"] == 50.0
     assert result["pause_reaction_time_ms"] == result["escape_reaction_time_ms"] == 120.0
-    assert np.isnan(select_escape_latency(pd.DataFrame([{**result, "type": trial["type"].iloc[0]}])).iloc[0])
+    assert select_escape_latency(pd.DataFrame([{**result, "type": trial["type"].iloc[0]}])).iloc[0] == 120.0
 
 
 def test_wind_prewalk_skips_ongoing_burst_before_stillness():
@@ -430,6 +430,8 @@ def test_label_trials_exports_separate_latencies_and_qc():
     assert (labeled["stillness_presence"] == "low_speed").all()
     assert (labeled["stop_to_escape_interval_ms"] == 50.0).all()
     assert (labeled["stillness_baseline_status"] == "continuous_moving").all()
+    assert labeled["pause_moving_eligible"].all()
+    assert labeled["pause_moving_fraction"].eq(1.0).all()
     assert not labeled["short_rt"].any()
 
 
@@ -646,6 +648,9 @@ def test_summary_export_preserves_separate_latencies_and_bool_qc(tmp_path):
     assert row["stillness_presence"] == "low_speed"
     assert row["stop_to_escape_interval_ms"] == 80.0
     assert row["stillness_baseline_status"] == "continuous_moving"
+    assert row["pause_moving_eligible"]
+    assert row["pause_moving_fraction"] == 1.0
+    assert summary["pause_moving_eligible"].dtype == bool
     assert not row["short_rt"]
     assert summary["short_rt"].dtype == bool
 
@@ -899,7 +904,7 @@ def test_prestimulus_slow_level_is_not_a_pause_transition():
 
 @pytest.mark.parametrize("wind_ms", [0.0, -373.0])
 @pytest.mark.parametrize("history", ["continuous", "interrupted", "quiet_at_wind", "equal", "quiet_history", "invalid_history", "missing_clock", "short"])
-def test_wind_prewalk_uses_same_continuous_history_as_pause_rt(wind_ms, history):
+def test_wind_prewalk_uses_same_moving_eligibility_as_pause_rt(wind_ms, history):
     trial = _wind_trial(wind_ms=wind_ms)
     t = trial["t_acquisition_rel"] - wind_ms
     if history == "interrupted":
@@ -925,9 +930,17 @@ def test_wind_prewalk_uses_same_continuous_history_as_pause_rt(wind_ms, history)
     }
     assert result["pause_baseline_status"] == expected[history]
     assert result["stillness_baseline_status"] == expected[history]
-    moving = result["pause_baseline_status"] == "continuous_moving"
-    assert moving == (history == "continuous")
+    strict = result["pause_baseline_status"] == "continuous_moving"
+    assert strict == (history == "continuous")
+    moving = history in {"continuous", "interrupted", "equal"}
+    assert result["pause_moving_eligible"] == moving
     assert (result["response_type"] == "PreWalk") == moving
+    from cercus.analysis.reaction_time import select_escape_latency
+    selected = select_escape_latency(pd.DataFrame([{**result, "type": trial["type"].iloc[0]}])).iloc[0]
+    if moving:
+        assert selected == result["pause_reaction_time_ms"] == 120.0
+    else:
+        assert selected == result["escape_reaction_time_ms"] == 120.0
     assert result["escape_reaction_time_ms"] == 120.0
     assert np.isfinite(result["distance_mm"])
 
@@ -960,3 +973,72 @@ def test_preescape_retains_negative_lead_time_without_short_escape_flag():
     assert result["escape_reaction_time_ms"] == -10.0
     assert not result["short_rt"]
     assert np.isnan(result["stillness_reaction_time_ms"])
+
+
+@pytest.mark.parametrize("reference", [0.0, -3.0])
+def test_moving_fraction_uses_duration_and_causal_boundary_support(reference):
+    from cercus.core.kinematics.latency import _movement_history_metrics
+
+    t = np.arange(-1040.0, 21.0, 10.0)
+    averaged = np.full_like(t, 20.0)
+    averaged[(t >= -600.0) & (t < -400.0)] = 2.0
+    status, fraction, at_reference = _movement_history_metrics(t, averaged, reference, 1000.0, 30.0)
+    assert status == "intermittent_moving"
+    assert fraction == pytest.approx(0.8)
+    assert at_reference == 20.0
+    # The last observation BEFORE the left boundary covers its first 7 ms,
+    # not the first observation AFTER that boundary.
+    t = np.r_[-1040.0, -1020.0, -1003.0, -993.0, np.arange(-990.0, 21.0, 10.0)]
+    averaged = np.full_like(t, 20.0)
+    averaged[t == -1003.0] = 2.0
+    status, fraction, _ = _movement_history_metrics(t, averaged, 0.0, 1000.0, 30.0)
+    assert status == "continuous_moving"  # original observation-based strict status
+    assert fraction == pytest.approx(0.993)
+
+
+@pytest.mark.parametrize("minimum,eligible", [
+    (0.8, True), (np.nextafter(0.8, np.inf), True), (0.801, False),
+    (-0.1, False), (1.1, False), (np.nan, False),
+])
+def test_moving_fraction_cutoff_is_configurable_and_roundoff_safe(monkeypatch, minimum, eligible):
+    from cercus.config import get_thresholds
+
+    trial = _wind_trial()
+    # 210 ms raw dip gives 200 ms below threshold after causal averaging.
+    trial.loc[trial["t_rel"].between(-600.0, -400.0), "speed_raw"] = 2.0
+    monkeypatch.setitem(get_thresholds().prewalk._data, "min_moving_fraction", minimum)
+    result = classify_trial(trial)
+    assert result["pause_moving_fraction"] == pytest.approx(0.8)
+    assert result["pause_moving_eligible"] == eligible
+    assert (result["response_type"] == "PreWalk") == eligible
+    assert result["pause_stopping_time_ms"] == 70.0  # local measurement independent
+
+
+@pytest.mark.parametrize("speed,eligible", [(10.0, False), (10.0 + 1e-9, False), (12.0, True)])
+def test_moving_reference_threshold_does_not_borrow_stopping_resolution_margin(speed, eligible):
+    from cercus.analysis.reaction_time import select_escape_latency
+
+    trial = _wind_trial()
+    trial.loc[trial["t_rel"] <= 0.0, "speed_raw"] = speed
+    result = classify_trial(trial)
+    assert result["pause_moving_eligible"] == eligible
+    assert result["pause_status"] == "threshold_unresolved"
+    assert np.isnan(result["pause_reaction_time_ms"])
+    selected = select_escape_latency(pd.DataFrame([{**result, "type": "baseline_wind"}])).iloc[0]
+    if eligible:
+        assert np.isnan(selected)
+    else:
+        assert selected == 120.0
+
+
+def test_summary_export_keeps_fraction_precision_at_cutoff(tmp_path):
+    from pipeline.io import export_summary_metrics
+
+    labeled = label_trials(_wind_trial())
+    labeled["global_trial_index"] = 1
+    labeled["session_id"] = 1
+    labeled["pause_moving_fraction"] = 0.149
+    labeled["pause_moving_eligible"] = False
+    summary = pd.read_csv(export_summary_metrics(labeled, tmp_path / "fraction.csv"))
+    assert summary["pause_moving_fraction"].iloc[0] == 0.149
+    assert not summary["pause_moving_eligible"].iloc[0]
