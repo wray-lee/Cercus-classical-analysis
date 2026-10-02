@@ -69,8 +69,8 @@ def classify_trial(
     is_wind = _trial_type is not None and "wind" in str(_trial_type).lower()
     is_multimodal = is_wind and "looming" in str(_trial_type).lower()
     rt_cfg = get_thresholds().reaction_time
-    # Calibration changes latency reference only, not the hardware-anchored
-    # burst/classification windows. Zero delay means arrival is uncalibrated.
+    # Calibration changes the moving-history and latency reference; burst and
+    # PreEscape windows stay hardware-anchored. Zero delay is not measured arrival.
     rt_anchor = onset + float(rt_cfg.wind_arrival_delay_ms) if is_wind else onset
 
     # ── 1. Physical measurement (always runs, never vetoed) ──
@@ -116,7 +116,11 @@ def classify_trial(
     )
 
     if is_wind:
-        if "speed_raw" in trial and "t_acquisition_rel" in trial:
+        has_acquisition = (
+            "speed_raw" in trial and "t_acquisition_rel" in trial
+            and np.count_nonzero(np.isfinite(trial["t_acquisition_rel"].to_numpy(float))) >= 2
+        )
+        if has_acquisition:
             pause = measure_pause_response(
                 trial["t_acquisition_rel"].to_numpy(float),
                 trial["speed_raw"].to_numpy(float), rt_anchor, str(_trial_type),
@@ -151,69 +155,65 @@ def classify_trial(
         rt_dist["reaction_time_ms"] = np.nan
         rt_dist["escape_reaction_time_ms"] = np.nan
 
-    # ── 4. PreWalk detection — paradigm-aware anchor ──
-    # Wind trials: anchor at wind onset (onset = target_ttc_ms).  The 1-s
-    # window before wind captures prewalk during sham-looming waiting.
-    # Pure looming/visual: anchor at escape onset (interval_onset_ms or
-    # latency_ms).  The 1-s window before escape captures true pre-escape
-    # walking without wind-onset contamination.
+    # ── 4. PreWalk detection — wind uses the same complete moving history as RT ──
+    prewalk = False
     if is_wind:
-        anchor = onset
+        prewalk = pause["pause_baseline_status"] == "continuous_moving"
+        rt_dist["stillness_baseline_status"] = pause["pause_baseline_status"]
+        if has_acquisition:
+            acquisition_t = trial["t_acquisition_rel"].to_numpy(float)
+            stopping = {"onset_ms": np.nan, "status": "missing_acquisition_clock", "presence": "unobserved"}
+            acquisition_onset = np.nan
+            match = np.array([], dtype=int)
+            if np.isfinite(interval_onset_ms):
+                match = np.flatnonzero(np.isclose(t_vals, interval_onset_ms, rtol=0, atol=1e-8))
+                if len(match):
+                    acquisition_onset = float(acquisition_t[match[0]])
+            if not np.isfinite(interval_onset_ms) or np.isfinite(acquisition_onset):
+                stopping = measure_stopping(
+                    acquisition_t, trial["speed_raw"].to_numpy(float),
+                    acquisition_onset, rt_anchor,
+                )
+            elif np.isfinite(interval_onset_ms):
+                stopping["status"] = "invalid_acquisition_clock"
+            stillness_rt = float(stopping["onset_ms"]) - rt_anchor
+            rt_dist.update(
+                stillness_reaction_time_ms=stillness_rt,
+                stillness_status=stopping["status"],
+                stillness_presence=stopping["presence"],
+                stillness_window_start_ms=stillness_rt - float(get_thresholds().stillness.speed_window_ms),
+            )
+            stop_ms = float(stopping["onset_ms"])
+            if np.isfinite(stop_ms) and np.isfinite(acquisition_onset):
+                stop_matches = np.flatnonzero(acquisition_t == stop_ms)
+                if len(stop_matches):
+                    stop_index = int(stop_matches[0])
+                    clock_segment = acquisition_t[stop_index:int(match[0]) + 1]
+                    if (len(clock_segment) >= 2 and np.all(np.isfinite(clock_segment))
+                            and np.all(np.diff(clock_segment) > 0)):
+                        rt_dist["stop_to_escape_interval_ms"] = acquisition_onset - stop_ms
+        else:
+            rt_dist["stillness_status"] = "missing_acquisition_clock"
+            rt_dist["stillness_presence"] = "unobserved"
     else:
+        # Visual-only trials keep their escape-anchored activity rule. There is
+        # no source-clock stimulus baseline to claim the paper's wind cohort.
         anchor = interval_onset_ms if pd.notna(interval_onset_ms) else latency_ms
-
-    if pd.isna(anchor):
-        log.warning("classify_trial: no valid PreWalk anchor")
-    else:
-        pre_mask = (t_vals >= anchor - PREWALK_WINDOW_MS) & (t_vals < anchor - 50.0)
-        if np.any(pre_mask):
+        if pd.isna(anchor):
+            log.warning("classify_trial: no valid PreWalk anchor")
+        else:
+            pre_mask = (t_vals >= anchor - PREWALK_WINDOW_MS) & (t_vals < anchor - 50.0)
             pre_slice = speed_vals[pre_mask]
             pre_slice = pre_slice[~np.isnan(pre_slice)]
-            if len(pre_slice) > 0:
-                pre_max = float(np.nanmax(pre_slice))
-                frac_above = float(np.mean(pre_slice > PREWALK_THRESHOLD))
-                if pre_max > PREWALK_THRESHOLD and frac_above > 0.15:
-                    if is_wind:
-                        # Historical PreWalk activity does not establish that
-                        # the animal was still moving when wind arrived.
-                        stopping = {"onset_ms": np.nan, "status": "missing_acquisition_clock", "baseline_status": "unobserved", "presence": "unobserved"}
-                        acquisition_onset = np.nan
-                        if "speed_raw" in trial and "t_acquisition_rel" in trial:
-                            acquisition_t = trial["t_acquisition_rel"].to_numpy(float)
-                            if np.isfinite(interval_onset_ms):
-                                match = np.flatnonzero(np.isclose(t_vals, interval_onset_ms, rtol=0, atol=1e-8))
-                                if len(match):
-                                    acquisition_onset = float(acquisition_t[match[0]])
-                            # Never compare a host-clock escape endpoint with a
-                            # source-clock stopping endpoint without mapping it.
-                            if not np.isfinite(interval_onset_ms) or np.isfinite(acquisition_onset):
-                                stopping = measure_stopping(
-                                    acquisition_t, trial["speed_raw"].to_numpy(float),
-                                    acquisition_onset, rt_anchor,
-                                )
-                            else:
-                                stopping["status"] = "invalid_acquisition_clock"
-                        stillness_rt = float(stopping["onset_ms"]) - rt_anchor
-                        rt_dist["stillness_reaction_time_ms"] = stillness_rt
-                        rt_dist["stillness_status"] = stopping["status"]
-                        rt_dist["stillness_presence"] = stopping["presence"]
-                        stop_ms = float(stopping["onset_ms"])
-                        if np.isfinite(stop_ms) and np.isfinite(acquisition_onset):
-                            stop_matches = np.flatnonzero(acquisition_t == stop_ms)
-                            if len(stop_matches):
-                                stop_index = int(stop_matches[0])
-                                # Keep the actual host-mapped escape row, not an
-                                # earlier row sharing a corrupted source timestamp.
-                                clock_segment = acquisition_t[stop_index:int(match[0]) + 1]
-                                if (len(clock_segment) >= 2 and np.all(np.isfinite(clock_segment))
-                                        and np.all(np.diff(clock_segment) > 0)):
-                                    rt_dist["stop_to_escape_interval_ms"] = acquisition_onset - stop_ms
-                        rt_dist["stillness_baseline_status"] = stopping["baseline_status"]
-                        rt_dist["stillness_window_start_ms"] = stillness_rt - float(get_thresholds().stillness.speed_window_ms)
-                        rt_dist["reaction_time_ms"] = stillness_rt
-                    return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
+            if len(pre_slice):
+                prewalk = bool(np.nanmax(pre_slice) > PREWALK_THRESHOLD
+                               and np.mean(pre_slice > PREWALK_THRESHOLD) > 0.15)
+    if prewalk:
+        if is_wind:
+            rt_dist["reaction_time_ms"] = rt_dist["stillness_reaction_time_ms"]
+        return {"response_type": "PreWalk", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
 
-    # ── 5. Escape — burst detected, no pre-walk activity ──
+    # ── 5. Escape — residual burst class, not evidence of a stationary baseline ──
     return {"response_type": "Escape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
 
 

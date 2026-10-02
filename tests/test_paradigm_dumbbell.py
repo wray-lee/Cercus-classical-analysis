@@ -98,6 +98,43 @@ def test_cross_paradigm_rt_uses_escape_not_stopping_latency():
     assert (summarize_subjects(df)["rt_mean"] == 120.0).all()
 
 
+def test_cross_paradigm_rt_selects_state_specific_endpoints_without_imputation():
+    from cercus.visualization.paradigm import summarize_subjects_by_class
+
+    df = pd.DataFrame({
+        "paradigm": ["bw"] * 8,
+        "subject_id": list("abcdefgh"),
+        "global_trial_index": range(8),
+        "response_type": ["PreWalk", "PreWalk", "Escape", "Escape",
+                          "Escape", "PreEscape", "NoResponse", "Escape"],
+        "type": ["baseline_wind"] * 5 + ["looming_wind", "baseline_wind", "baseline_visual"],
+        "pause_baseline_status": ["continuous_moving", "continuous_moving",
+                                  "intermittent_moving", "unobserved", "stationary",
+                                  "continuous_moving", "continuous_moving", "not_applicable"],
+        "escape_reaction_time_ms": [90.0] * 5 + [-40.0, 90.0, 90.0],
+        "pause_reaction_time_ms": [120.0, np.nan] + [120.0] * 6,
+        "distance_mm": [10.0] * 8,
+    })
+    expected = pd.Series([120.0, np.nan, np.nan, np.nan, 90.0, -40.0, np.nan, 90.0],
+                         index=list("abcdefgh"), name="rt_mean")
+    # Replicated frame rows must not add trials or borrow another endpoint.
+    frames = pd.concat([df, df], ignore_index=True)
+    summary = summarize_subjects(frames).set_index("subject_id")
+    pd.testing.assert_series_equal(summary["rt_mean"], expected, check_names=False)
+    assert summary["n_trials"].eq(1).all()
+    assert summary["dist_mean"].eq(10.0).all()
+    by_class = summarize_subjects_by_class(frames).set_index("subject_id")
+    pd.testing.assert_series_equal(by_class["rt_med"], expected.drop("g"), check_names=False)
+
+    legacy = df.drop(columns=["type", "pause_baseline_status", "pause_reaction_time_ms"])
+    expected = df.set_index("subject_id")["escape_reaction_time_ms"].copy()
+    expected.loc["g"] = np.nan
+    pd.testing.assert_series_equal(
+        summarize_subjects(legacy).set_index("subject_id")["rt_mean"],
+        expected, check_names=False,
+    )
+
+
 def test_rt_dist_ticks_and_offsets():
     from cercus.visualization.paradigm import (
         plot_paradigm_rt_dist, _compute_zero_anchored_ticks, _compute_distance_ticks,
@@ -117,6 +154,7 @@ def test_rt_dist_ticks_and_offsets():
     fig = plot_paradigm_rt_dist(_synthetic_by_class())
     assert len(fig.axes) == 2
     rt_ax, dist_ax = fig.axes
+    assert rt_ax.get_ylabel() == "Selected timing endpoint vs reference (ms)"
     assert 0.0 in rt_ax.get_yticks()
     assert 0.0 in dist_ax.get_yticks()
     plt.close(fig)

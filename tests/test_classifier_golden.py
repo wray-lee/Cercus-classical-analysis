@@ -159,12 +159,11 @@ def _trial_no_response_with_wind() -> pd.DataFrame:
 
 
 def _trial_prewalk_low_walking() -> pd.DataFrame:
-    """PreWalk with low but detectable walking before stimulus."""
+    """Intermittent slow walking is not a strict wind moving-cohort PreWalk."""
     t = np.linspace(-1500, 500, 400)
     speed = np.zeros_like(t)
-    # Subtle walking
-    speed[:300] = np.random.default_rng(15).normal(0, 3, 300) + 8
-    speed[:300] = np.maximum(0, speed[:300])
+    # Intermittent activity: fails the >10 mm/s continuous 1-s criterion.
+    speed[:300] = np.maximum(0, np.random.default_rng(15).normal(0, 3, 300) + 8)
     burst = np.exp(-np.linspace(0, 2, 60)) * 120
     speed[300:360] = burst
     speed[300:] += np.random.default_rng(16).normal(0, 1, len(t) - 300)
@@ -186,7 +185,7 @@ _GOLDEN_EXPECTED = {
     "just_below_threshold": "NoResponse",
     "multimodal_wind_early": "NoResponse",  # burst at t≈-200ms outside shifted window [-373,-123]
     "no_response_with_wind": "NoResponse",
-    "prewalk_low_walking": "PreWalk",
+    "prewalk_low_walking": "Escape",  # missing source clock cannot establish strict PreWalk
 }
 
 
@@ -289,7 +288,7 @@ def test_preescape_burst_veto_first():
         (_trial_just_below_threshold, "NoResponse"),
         (_trial_multimodal_wind_early, "NoResponse"),
         (_trial_no_response_with_wind, "NoResponse"),
-        (_trial_prewalk_low_walking, "PreWalk"),
+        (_trial_prewalk_low_walking, "Escape"),
     ],
     ids=list(_GOLDEN_EXPECTED.keys()),
 )

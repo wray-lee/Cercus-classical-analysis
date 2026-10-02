@@ -20,6 +20,7 @@ def test_distance_axis_is_comparable_across_datasets():
             "distance_mm": [distance, distance + 1.0],
         })
         fig = plot_reaction_distance_panel(df)
+        assert fig.axes[0].get_ylabel() == "Selected timing endpoint vs reference (ms)"
         assert fig.axes[1].get_ylim() == (0.0, get_visualization().reaction_distance_max_mm)
         plt.close(fig)
 
@@ -64,6 +65,11 @@ def test_rt_and_t1_t2_prefer_same_causal_pair_without_imputation():
     assert [c.get_offsets()[0, 1] for c in fig.axes[2].collections] == [70.0, 50.0]
     assert "Pure: moving 1/2; paired 1/1" in [t.get_text() for t in fig.axes[2].texts]
     assert "RT observed — PreWalk: 1/2" in [t.get_text() for t in fig.axes[0].texts]
+    note = "\n".join(t.get_text() for t in fig.texts)
+    assert "continuous wind uses causal T1 + T2" in note
+    assert "unresolved causal RT stays missing" in note
+    assert "intermittent/unobserved wind excluded" in note
+    assert "stationary/nonwind timing is descriptive" in note
     plt.close(fig)
 
 

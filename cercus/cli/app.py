@@ -160,7 +160,7 @@ def full(
     output.mkdir(parents=True, exist_ok=True)
 
     trial_cols = [
-        "paradigm", "subject_id", "global_trial_index", "response_type",
+        "paradigm", "subject_id", "global_trial_index", "response_type", "type",
         "v_max", "latency_ms", "interval_onset_ms", "interval_offset_ms",
         "reaction_time_ms", "escape_reaction_time_ms", "stillness_reaction_time_ms",
         "stillness_status", "stillness_presence", "stop_to_escape_interval_ms",

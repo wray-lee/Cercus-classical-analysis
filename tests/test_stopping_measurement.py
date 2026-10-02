@@ -28,11 +28,56 @@ def test_genuine_short_stop_is_not_clamped_to_biological_prior():
     assert 30.0 <= stop < 50.0
 
 
-def test_short_history_is_reported_as_insufficient_baseline():
-    t = np.arange(-500.0, 101.0, 5.0)
+def test_missing_local_reference_support_is_reported_as_insufficient_baseline():
+    t = np.arange(-10.0, 101.0, 5.0)
     result = measure_stopping(t, np.full_like(t, 20.0), np.nan, 0.0)
+    assert result["baseline_status"] == "unobserved"
     assert np.isnan(result["onset_ms"])
     assert result["status"] == "insufficient_baseline"
+
+
+@pytest.mark.parametrize("history", ["missing_speed", "gap", "short"])
+def test_incomplete_remote_history_does_not_hide_local_stopping_event(history):
+    t = np.arange(-1100.0, 301.0, 5.0)
+    speed = np.where(t < 60.0, 20.0, 5.0)
+    if history == "missing_speed":
+        speed[t == -500.0] = np.nan
+    else:
+        keep = (t >= -500.0) if history == "short" else ((t < -550.0) | (t > -500.0))
+        t, speed = t[keep], speed[keep]
+    result = measure_stopping(t, speed, 120.0, 0.0)
+    assert result["baseline_status"] == "unobserved"
+    assert result["status"] == "observed"
+    assert result["onset_ms"] == 70.0
+
+
+@pytest.mark.parametrize("history", ["remote_bad_time", "variable_sampling", "ends_before_reference"])
+def test_pause_and_stopping_share_history_clock_validation(history):
+    from cercus.core.kinematics.latency import measure_pause_response
+
+    if history == "remote_bad_time":
+        t = np.arange(-1500.0, 301.0, 10.0)
+        t[10] = t[9]
+    elif history == "ends_before_reference":
+        t = np.arange(-1100.0, 0.0, 5.0)
+    else:
+        t = np.r_[np.arange(-2000.0, -1030.0, 2.0), np.arange(-1030.0, 301.0, 10.0)]
+    speed = np.where(t < 60.0, 20.0, 5.0)
+    pause = measure_pause_response(t, speed, 0.0)
+    stopping = measure_stopping(t, speed, 120.0, 0.0)
+    assert pause["pause_baseline_status"] == stopping["baseline_status"] == "unobserved"
+    assert pause["pause_status"] == stopping["status"] == "invalid_data"
+    assert np.isnan(stopping["onset_ms"])
+
+
+def test_missing_reference_speed_cannot_establish_stopping():
+    t = np.arange(-1100.0, 301.0, 5.0)
+    speed = np.where(t < 60.0, 20.0, 5.0)
+    speed[t == 0.0] = np.nan
+    result = measure_stopping(t, speed, 120.0, 0.0)
+    assert result["baseline_status"] == "unobserved"
+    assert result["status"] == "invalid_data"
+    assert np.isnan(result["onset_ms"])
 
 
 def test_escape_onset_at_or_before_wind_is_not_a_stopping_trial():
@@ -145,6 +190,16 @@ def test_bad_timestamp_before_confirmation_is_not_bridged(corrupt_ms, corruption
     result = measure_stopping(t, speed, 120.0, 0.0)
     assert result["status"] == "invalid_data"
     assert np.isnan(result["onset_ms"])
+
+
+def test_corruption_after_search_window_preserves_observed_state_absence():
+    t = np.arange(-1100.0, 301.0, 5.0)
+    speed = np.full_like(t, 20.0)
+    t[t == 280.0] = np.nan
+    result = measure_stopping(t, speed, 120.0, 0.0)
+    assert result["baseline_status"] == "continuous_moving"
+    assert result["status"] == "no_preescape_stop"
+    assert result["presence"] == "no_low_speed"
 
 
 def test_low_speed_presence_is_separate_from_stopping_endpoint():

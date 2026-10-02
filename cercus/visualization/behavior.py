@@ -24,6 +24,7 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
     PREWALK_WINDOW_MS,
 )
+from cercus.analysis.reaction_time import select_escape_latency
 from cercus.config import get_thresholds, get_visualization
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
@@ -539,37 +540,14 @@ def plot_reaction_distance_panel(
         return None
 
     classes = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
-    agg_spec = {
-        "response_type": ("response_type", "first"),
-        "rt": (rt_col, "first"),
-        "dist": ("distance_mm", "first"),
-    }
+    trial = df.drop_duplicates(["subject_id", "global_trial_id"]).copy()
+    trial["rt"] = select_escape_latency(trial)
+    trial["dist"] = trial["distance_mm"]
     causal_pair = {"pause_stopping_time_ms", "pause_to_escape_time_ms"}.issubset(df.columns)
     t1_col = "pause_stopping_time_ms" if causal_pair else "stillness_reaction_time_ms"
     t2_col = "pause_to_escape_time_ms" if causal_pair else "stop_to_escape_interval_ms"
-    for key, col in (("t1", t1_col), ("t2", t2_col),
-                     ("pause_rt", "pause_reaction_time_ms"), ("pause_status", "pause_status"),
-                     ("baseline", "pause_baseline_status")):
-        if col in df.columns:
-            agg_spec[key] = (col, "first")
-    if "type" in df.columns:
-        agg_spec["type"] = ("type", "first")
-    trial = (
-        df.groupby(["subject_id", "global_trial_id"])
-        .agg(**agg_spec)
-        .reset_index()
-    )
-    for col in ("t1", "t2"):
-        if col not in trial.columns:
-            trial[col] = np.nan
-    if "pause_rt" in trial and "pause_status" in trial and "type" in trial:
-        paused = (
-            trial["response_type"].eq("PreWalk")
-            & trial["type"].astype(str).str.contains("wind", case=False, na=False)
-            & trial["pause_status"].eq("observed")
-        )
-        # Do not replace an unresolved causal endpoint with the centered one.
-        trial.loc[paused, "rt"] = trial.loc[paused, "pause_rt"]
+    for key, col in (("t1", t1_col), ("t2", t2_col), ("baseline", "pause_baseline_status")):
+        trial[key] = trial[col] if col in trial else np.nan
     # Subject summaries use complete trial pairs; faint lines retain each
     # actual trial pair rather than join two independent subject medians.
     subj_med = trial.groupby(["subject_id", "response_type"])[["rt", "dist"]].median()
@@ -579,7 +557,7 @@ def plot_reaction_distance_panel(
     )
     rng = np.random.default_rng(42)
     for ax, col, title, xlabel in (
-        (axes[0], "rt", "Stimulus-to-escape latency", "Escape onset vs stimulus (ms)"),
+        (axes[0], "rt", "State-selected response timing", "Selected timing endpoint vs reference (ms)"),
         (axes[1], "dist", "Escape distance", "Distance (mm)"),
     ):
         pairs = [
@@ -802,12 +780,13 @@ def plot_reaction_distance_panel(
         )
         note = (
             cohort_note + "\n"
-            "Observed Wind PreWalk pauses use causal RTm-like = T1 + T2; other RTs retain centered-speed endpoints.\n"
+            "RT selector: continuous wind uses causal T1 + T2; unresolved causal RT stays missing.\n"
+            "intermittent/unobserved wind excluded; stationary/nonwind timing is descriptive.\n"
             "PreEscape is a pre-wind lead. No fixed delay correction; not physiological RT."
         )
     else:
         note = (
-            "Stimulus-to-escape endpoint; T1 = stimulus-to-stop, T2 = stop-to-escape (legacy centered escape endpoint)."
+            "State-selected response timing; T1 = stimulus-to-stop, T2 = stop-to-escape (legacy centered endpoint)."
             if "escape_reaction_time_ms" in df
             else "Legacy reaction_time_ms shown; endpoint definitions depend on the source table."
         )

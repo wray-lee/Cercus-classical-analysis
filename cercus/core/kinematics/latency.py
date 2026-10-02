@@ -203,6 +203,37 @@ def _causal_displacement_speed(t: np.ndarray, v: np.ndarray) -> tuple[np.ndarray
     return averaged, valid, max_gap
 
 
+def _movement_history_status(
+    t: np.ndarray,
+    averaged: np.ndarray,
+    reference_ms: float,
+    baseline_ms: float,
+    max_gap_ms: float,
+) -> str:
+    """Classify a complete causal history; stationary means no >threshold samples."""
+    cfg = get_thresholds()
+    width = float(cfg.stillness.speed_window_ms)
+    threshold = float(cfg.baseline.quiet_mm_s)
+    if not np.all(np.isfinite([width, threshold, baseline_ms, max_gap_ms])) or min(width, baseline_ms, max_gap_ms) <= 0:
+        return "unobserved"
+    start_ms = reference_ms - baseline_ms
+    history = np.flatnonzero((t >= start_ms) & (t <= reference_ms))
+    if (
+        not len(history)
+        or t[0] > start_ms - width
+        or t[history[0]] - start_ms > max_gap_ms
+        or reference_ms - t[history[-1]] > max_gap_ms
+        or not np.all(np.isfinite(averaged[history]))
+    ):
+        return "unobserved"
+    above = averaged[history] > threshold * (1.0 + 1e-9)
+    if np.all(above):
+        return "continuous_moving"
+    if np.any(above):
+        return "intermittent_moving"
+    return "stationary"
+
+
 def measure_pause_response(
     t_rel: np.ndarray,
     speed: np.ndarray,
@@ -264,16 +295,12 @@ def measure_pause_response(
         # Even an unresolved ongoing burst cannot have its deceleration
         # relabelled as the pre-escape pause before a later burst.
         cap = min(cap, float(t[early_bursts[0]]))
+    status = _movement_history_status(
+        t, averaged, wind_onset_ms, float(cfg.prewalk.window_ms), max_gap,
+    )
+    result["pause_baseline_status"] = status
     stopping = measure_stopping(t, v, cap, wind_onset_ms)
     result["pause_status"] = stopping["status"]
-    result["pause_baseline_status"] = stopping["baseline_status"]
-    if stopping["baseline_status"] != "unobserved":
-        history = (t >= wind_onset_ms - float(cfg.prewalk.window_ms)) & (t <= wind_onset_ms)
-        result["pause_baseline_status"] = (
-            "continuous_moving"
-            if np.all(averaged[history] > float(cfg.baseline.quiet_mm_s) * (1.0 + 1e-9))
-            else "intermittent_moving"
-        )
     if stopping["status"] != "observed":
         search_end = min(earlier_end, cap)
         covered = t[t <= search_end]
@@ -350,24 +377,15 @@ def measure_stopping(
     end = wind_onset_ms + float(cfg.escape.window_ms)
     if np.isfinite(movement_onset_ms):
         end = min(end, movement_onset_ms)
-    # Keep the complete pre-wind eligibility history even when escape onset is
-    # earlier than wind.  The post-wind search then reports either
-    # ``escape_first`` or ``no_preescape_stop`` rather than missing baseline.
-    history_end = max(wind_onset_ms, end)
-    mask = (t >= wind_onset_ms - baseline - width) & (t <= history_end)
-    indices = np.flatnonzero(mask)
-    if not len(indices):
-        return result
-    start = max(0, int(indices[0]) - 1)
-    stop = int(indices[-1]) + 1
-    t, v = t[start:stop], v[start:stop]
+    # Use the same source prefix and gap scale as pause-response history;
+    # only the event search is capped by escape/the post-wind window.
     # np.interp requires ordered source time. Keep only the valid prefix:
     # later corruption cannot erase an event already confirmed before it.
     bad_time = np.flatnonzero(~np.isfinite(t) | np.r_[False, np.diff(t) <= 0])
     truncated = bool(len(bad_time))
     if truncated:
         t, v = t[:bad_time[0]], v[:bad_time[0]]
-    if len(t) < 2 or (truncated and t[-1] < wind_onset_ms):
+    if len(t) < 2 or t[-1] < wind_onset_ms:
         return result
     averaged, valid, max_gap = _causal_displacement_speed(t, v)
 
@@ -386,21 +404,16 @@ def measure_stopping(
           and t[0] <= wind_onset_ms
           and state_times[0] - wind_onset_ms - width <= max_gap
           and end - state_times[-1] <= max_gap
-          and not truncated):
+          and (not truncated or t[-1] >= end)):
         result["presence"] = "no_low_speed"
 
-    pre = (t >= wind_onset_ms - baseline) & (t <= wind_onset_ms)
-    if not pre.any() or t[0] > wind_onset_ms - baseline - width:
+    result["baseline_status"] = _movement_history_status(t, averaged, wind_onset_ms, baseline, max_gap)
+    pre = np.flatnonzero(t <= wind_onset_ms)
+    if not len(pre) or t[pre[-1]] - width < t[0]:
         result["status"] = "insufficient_baseline"
         return result
-    if not np.all(np.isfinite(averaged[pre])):
-        return result
-    result["baseline_status"] = (
-        "continuous_moving" if np.all(averaged[pre] >= threshold)
-        else "intermittent_moving"
-    )
-    at_wind = int(np.flatnonzero(pre)[-1])
-    if wind_onset_ms - t[at_wind] > max_gap:
+    at_wind = int(pre[-1])
+    if wind_onset_ms - t[at_wind] > max_gap or not np.isfinite(averaged[at_wind]):
         return result
     if averaged[at_wind] < threshold - margin:
         result["status"] = "not_moving_at_wind"
@@ -408,7 +421,7 @@ def measure_stopping(
     if averaged[at_wind] <= threshold + margin:
         result["status"] = "threshold_unresolved"
         return result
-    post = np.flatnonzero(t > wind_onset_ms)
+    post = np.flatnonzero((t > wind_onset_ms) & (t <= end))
     if np.isfinite(movement_onset_ms) and movement_onset_ms <= wind_onset_ms:
         # A known escape onset at or before the reference leaves no eligible
         # post-reference interval in which stopping could precede escape.
@@ -436,7 +449,7 @@ def measure_stopping(
         if averaged[i] < threshold - margin:
             result.update(onset_ms=crossing, status="observed")
             return result
-    if truncated:
+    if truncated and t[-1] < end:
         return result
     result["status"] = "threshold_unresolved" if np.isfinite(crossing) else "no_preescape_stop"
     return result

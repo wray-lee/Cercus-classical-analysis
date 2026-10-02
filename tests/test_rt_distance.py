@@ -79,6 +79,29 @@ def test_wind_prewalk_rt_is_filtered_stop_endpoint_not_true_step(wind_ms):
     assert result["distance_500ms_mm"] == expected["distance_500ms_mm"]
 
 
+@pytest.mark.parametrize("wind_ms", [0.0, -373.0])
+@pytest.mark.parametrize("history", ["missing_speed", "gap", "short"])
+def test_unobserved_cohort_retains_local_endpoints_without_primary_rt(wind_ms, history):
+    from cercus.analysis.reaction_time import select_escape_latency
+
+    trial = _wind_trial(wind_ms)
+    if history == "missing_speed":
+        trial.loc[trial["t_rel"] == wind_ms - 500.0, "speed_raw"] = np.nan
+    elif history == "gap":
+        trial = trial.loc[~trial["t_rel"].between(wind_ms - 550.0, wind_ms - 500.0)]
+    else:
+        trial = trial.loc[trial["t_rel"] >= wind_ms - 500.0]
+    result = classify_trial(trial)
+    assert result["response_type"] == "Escape"
+    assert result["pause_baseline_status"] == "unobserved"
+    assert result["stillness_baseline_status"] == "unobserved"
+    assert result["pause_status"] == result["stillness_status"] == "observed"
+    assert result["pause_stopping_time_ms"] == result["stillness_reaction_time_ms"] == 70.0
+    assert result["pause_to_escape_time_ms"] == result["stop_to_escape_interval_ms"] == 50.0
+    assert result["pause_reaction_time_ms"] == result["escape_reaction_time_ms"] == 120.0
+    assert np.isnan(select_escape_latency(pd.DataFrame([{**result, "type": trial["type"].iloc[0]}])).iloc[0])
+
+
 def test_wind_prewalk_skips_ongoing_burst_before_stillness():
     result = classify_trial(_wind_trial(early_burst=True))
     assert result["response_type"] == "PreWalk"
@@ -118,8 +141,8 @@ def test_prewind_stillness_is_not_clipped_into_postwind_reaction():
     trial = _wind_trial(pause_start_ms=-60.0)
     trial["speed_raw"] = np.where(trial["t_rel"] < -60.0, 20.0, 2.0)
     result = classify_trial(trial)
-    assert result["response_type"] == "PreWalk"
-    assert np.isnan(result["reaction_time_ms"])
+    assert result["response_type"] == "Escape"
+    assert result["reaction_time_ms"] == 120.0
     assert result["stillness_status"] == "not_moving_at_wind"
     assert result["interval_onset_ms"] == 120.0
     assert np.isfinite(result["distance_mm"])
@@ -191,6 +214,7 @@ def test_wind_escape_keeps_movement_rt_without_50ms_clipping():
     trial = _wind_trial()
     trial.loc[trial["t_rel"] < 120.0, "speed"] = 2.0
     trial.loc[(trial["t_rel"] >= 30.0) & (trial["t_rel"] < 220.0), "speed"] = 120.0
+    trial["speed_raw"] = trial["speed"]
     result = classify_trial(trial)
     assert result["response_type"] == "Escape"
     assert result["reaction_time_ms"] == 30.0
@@ -225,6 +249,7 @@ def test_wind_onset_at_boundary_does_not_reuse_earlier_walking_onset():
     trial = _wind_trial()
     trial.loc[trial["t_rel"] < 0.0, "speed"] = 2.0
     trial.loc[(trial["t_rel"] >= 0.0) & (trial["t_rel"] < 220.0), "speed"] = 120.0
+    trial["speed_raw"] = trial["speed"]
     result = classify_trial(trial)
     assert result["response_type"] == "Escape"
     assert result["interval_onset_ms"] == 0.0
@@ -421,7 +446,11 @@ def test_stillness_plot_separates_state_presence_from_stopping_rt():
     import matplotlib.pyplot as plt
     from cercus.visualization.behavior import plot_prewalk_stillness
 
-    trial = label_trials(_wind_trial(pause_start_ms=-60.0))
+    # Keep the full moving history, but the first post-wind excursion is
+    # count-scale unresolved: a low-speed level exists without a stopping RT.
+    source = _wind_trial()
+    source.loc[(source["t_rel"] >= 40.0) & (source["t_rel"] < 80.0), "speed_raw"] = 9.0
+    trial = label_trials(source)
     trial["stillness_reaction_time_ms"] = np.nan
     trial["global_trial_index"] = 1
     trial["subject_id"] = "a"
@@ -435,7 +464,7 @@ def test_stillness_plot_does_not_call_missing_data_absence():
     from cercus.visualization.behavior import plot_prewalk_stillness
 
     trial = _wind_trial()
-    trial["speed_raw"] = np.nan
+    trial.loc[trial["t_rel"] > 0.0, "speed_raw"] = np.nan
     trial = label_trials(trial)
     trial["global_trial_index"] = 1
     trial["subject_id"] = "a"
@@ -570,9 +599,10 @@ def test_missing_acquisition_clock_does_not_establish_stopping():
     trial = _wind_trial()
     trial["t_acquisition_rel"] = np.nan
     result = classify_trial(trial)
-    assert result["response_type"] == "PreWalk"
+    assert result["response_type"] == "Escape"
+    assert result["pause_baseline_status"] == "unobserved"
     assert np.isnan(result["stillness_reaction_time_ms"])
-    assert result["stillness_status"] == "invalid_acquisition_clock"
+    assert result["stillness_status"] == result["pause_status"] == "missing_acquisition_clock"
     assert result["escape_reaction_time_ms"] == 120.0
 
 
@@ -627,8 +657,10 @@ def test_calibration_rejects_pause_started_before_air_arrival(monkeypatch):
     trial = _wind_trial()
     trial["speed_raw"] = np.where(trial["t_rel"] < 60.0, 20.0, 2.0)
     result = classify_trial(trial)
+    assert result["response_type"] == "Escape"
+    assert result["pause_baseline_status"] == "intermittent_moving"
     assert np.isnan(result["stillness_reaction_time_ms"])
-    assert np.isnan(result["reaction_time_ms"])
+    assert result["reaction_time_ms"] == 40.0
     assert result["escape_reaction_time_ms"] == 40.0
     assert result["short_rt"]
 
@@ -855,13 +887,59 @@ def test_pause_cohort_requires_strictly_above_threshold_history(plateau):
 
 def test_prestimulus_slow_level_is_not_a_pause_transition():
     trial = _wind_trial()
-    # Broad PreWalk still holds; a resolved slow level at wind is not a pause.
+    # Earlier movement is retained as intermittent history, not strict PreWalk.
     trial.loc[(trial["t_rel"] >= -300.0) & (trial["t_rel"] < 120.0), "speed_raw"] = 8.0
     result = classify_trial(trial)
-    assert result["response_type"] == "PreWalk"
+    assert result["response_type"] == "Escape"
+    assert result["pause_baseline_status"] == "intermittent_moving"
     assert result["pause_status"] == "threshold_unresolved"
     assert np.isnan(result["pause_stopping_time_ms"])
     assert np.isnan(result["pause_to_escape_time_ms"])
+
+
+@pytest.mark.parametrize("wind_ms", [0.0, -373.0])
+@pytest.mark.parametrize("history", ["continuous", "interrupted", "quiet_at_wind", "equal", "quiet_history", "invalid_history", "missing_clock", "short"])
+def test_wind_prewalk_uses_same_continuous_history_as_pause_rt(wind_ms, history):
+    trial = _wind_trial(wind_ms=wind_ms)
+    t = trial["t_acquisition_rel"] - wind_ms
+    if history == "interrupted":
+        trial.loc[(t >= -600.0) & (t < -400.0), "speed_raw"] = 2.0
+    elif history == "quiet_at_wind":
+        trial.loc[(t >= -100.0) & (t <= 0.0), "speed_raw"] = 2.0
+    elif history == "equal":
+        trial.loc[(t >= -600.0) & (t < -400.0), "speed_raw"] = 10.0
+    elif history == "quiet_history":
+        trial.loc[t <= 0.0, "speed_raw"] = 2.0
+    elif history == "invalid_history":
+        trial.loc[t == -500.0, "speed_raw"] = np.nan
+    elif history == "missing_clock":
+        trial = trial.drop(columns="t_acquisition_rel")
+    elif history == "short":
+        trial = trial.loc[t >= -500.0].copy()
+    result = classify_trial(trial)
+    expected = {
+        "continuous": "continuous_moving", "interrupted": "intermittent_moving",
+        "quiet_at_wind": "intermittent_moving", "equal": "intermittent_moving",
+        "quiet_history": "stationary", "invalid_history": "unobserved",
+        "missing_clock": "unobserved", "short": "unobserved",
+    }
+    assert result["pause_baseline_status"] == expected[history]
+    assert result["stillness_baseline_status"] == expected[history]
+    moving = result["pause_baseline_status"] == "continuous_moving"
+    assert moving == (history == "continuous")
+    assert (result["response_type"] == "PreWalk") == moving
+    assert result["escape_reaction_time_ms"] == 120.0
+    assert np.isfinite(result["distance_mm"])
+
+
+def test_strict_prewalk_does_not_require_observed_stop():
+    trial = _wind_trial()
+    trial["speed_raw"] = 20.0
+    result = classify_trial(trial)
+    assert result["pause_baseline_status"] == "continuous_moving"
+    assert result["pause_status"] == "no_preescape_stop"
+    assert result["response_type"] == "PreWalk"
+    assert np.isnan(result["pause_stopping_time_ms"])
 
 
 def test_prewind_interruption_keeps_local_stop_but_excludes_paper_moving_cohort():

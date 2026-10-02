@@ -25,11 +25,18 @@ from cercus.constants.response_types import (
     RESPONSE_COLORS,
     RESPONSE_TYPES,
 )
+from cercus.analysis.reaction_time import select_escape_latency
 
 log = logging.getLogger(__name__)
 
-# RT/distance 由逃逸 burst 定义：有 burst 的三类（Escape/PreEscape/PreWalk）均有值，
-# NoResponse 无 burst（rt/dist=NaN）故排除。
+# Burst 行程独立保留；RT 使用共享的状态/endpoint 选择器，缺失不回填。
+
+
+def _latency_trials(df: pd.DataFrame) -> pd.DataFrame:
+    trials = df.drop_duplicates(["paradigm", "subject_id", "global_trial_index"]).copy()
+    trials["rt"] = select_escape_latency(trials)
+    trials["dist"] = trials["distance_mm"]
+    return trials
 
 
 def summarize_subjects(df: pd.DataFrame) -> pd.DataFrame:
@@ -38,15 +45,7 @@ def summarize_subjects(df: pd.DataFrame) -> pd.DataFrame:
     Columns: paradigm, subject_id, n_trials, response_rate, rt_mean, dist_mean.
     ``response_rate`` = (Escape+PreEscape)/all trials; RT/distance 均值仅在逃逸 trial 上。
     """
-    trial = (
-        df.groupby(["paradigm", "subject_id", "global_trial_index"])
-        .agg(
-            response_type=("response_type", "first"),
-            rt=("escape_reaction_time_ms" if "escape_reaction_time_ms" in df else "reaction_time_ms", "first"),
-            dist=("distance_mm", "first"),
-        )
-        .reset_index()
-    )
+    trial = _latency_trials(df)
     trial["is_escape"] = trial["response_type"].isin(_ESCAPE_CLASSES)
     out = (
         trial.groupby(["paradigm", "subject_id"])
@@ -64,18 +63,10 @@ def summarize_subjects(df: pd.DataFrame) -> pd.DataFrame:
 def summarize_subjects_by_class(df: pd.DataFrame) -> pd.DataFrame:
     """Trial 级表 → per-(paradigm, subject, response_type) 的中位数汇总。
 
-    保留三类有 burst 的行为（Escape / PreEscape / PreWalk，classifier 对
-    三者都产出刺激锚定 RT 与逃逸区间行程）；NoResponse 无 burst → 排除。
+    保留三类有 burst 的行为（Escape / PreEscape / PreWalk）；RT 按可观测状态
+    选择 endpoint，缺失不回填；行程不随 RT eligibility 改变。NoResponse 排除。
     """
-    trial = (
-        df.groupby(["paradigm", "subject_id", "global_trial_index"])
-        .agg(
-            response_type=("response_type", "first"),
-            rt=("escape_reaction_time_ms" if "escape_reaction_time_ms" in df else "reaction_time_ms", "first"),
-            dist=("distance_mm", "first"),
-        )
-        .reset_index()
-    )
+    trial = _latency_trials(df)
     esc = trial[trial["response_type"].isin(_BURST_CLASSES)]
     return (
         esc.groupby(["paradigm", "subject_id", "response_type"])
@@ -163,7 +154,7 @@ def plot_paradigm_rt_dist(
     panel_notes: list[list[str]] = []
     for ax, (col, ylab), tag in zip(
         axes,
-        (("rt_med", "Escape onset vs stimulus (ms)"), ("dist_med", "Escape-interval distance (mm)")),
+        (("rt_med", "Selected timing endpoint vs reference (ms)"), ("dist_med", "Escape-interval distance (mm)")),
         panel_tags,
     ):
         # 面板标签：set_title 左对齐到轴框上方，自动避让 y 轴标签（不再重叠）
@@ -300,7 +291,7 @@ def plot_paradigm_dumbbell(
 
     panels = (
         ("response_rate", "Escape probability", "P(Escape+PreEscape)"),
-        ("rt_mean", "Escape onset vs stimulus", "Onset offset (ms)"),
+        ("rt_mean", "State-selected response timing", "Selected timing endpoint (ms)"),
         ("dist_mean", "Escape distance", "distance (mm)"),
     )
 
