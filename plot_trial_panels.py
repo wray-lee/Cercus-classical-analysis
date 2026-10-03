@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from cercus.config import get_visualization
 from pipeline.classifier import label_trials
 from pipeline.constants import (
     COLOR_CONTROL,
@@ -92,9 +93,15 @@ def plot_trial_panel(
     interval_offset_ms: float = np.nan,
 ) -> plt.Figure:
     """Single composite figure for one trial: speed, angular velocity, stimulus, trajectory."""
-    fig = plt.figure(figsize=(16, 8))
-    gs = gridspec.GridSpec(3, 2, height_ratios=[3, 3, 1], width_ratios=[2, 1.5],
-                           hspace=0.25, wspace=0.3)
+    vis = get_visualization()
+    fig = plt.figure(figsize=tuple(vis.trial_panel_figsize))
+    gs = gridspec.GridSpec(
+        3, 2,
+        height_ratios=vis.trial_panel_gridspec_height_ratios,
+        width_ratios=vis.trial_panel_gridspec_width_ratios,
+        hspace=float(vis.trial_panel_gridspec_hspace),
+        wspace=float(vis.trial_panel_gridspec_wspace),
+    )
 
     ax_speed = fig.add_subplot(gs[0, 0])
     ax_angvel = fig.add_subplot(gs[1, 0], sharex=ax_speed)
@@ -337,7 +344,10 @@ def plot_trial_panel(
         fontweight="bold", fontsize=10, y=0.98,
     )
 
-    fig.tight_layout(pad=1.0, rect=[0, 0, 1, 0.95])
+    fig.tight_layout(
+        pad=float(vis.trial_panel_layout_pad),
+        rect=vis.trial_panel_layout_rect,
+    )
     return fig
 
 

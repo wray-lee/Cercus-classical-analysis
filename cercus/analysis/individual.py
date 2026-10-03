@@ -45,7 +45,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from cercus.config import get_analysis, get_visualization
+from cercus.config import get_analysis
 from cercus.constants.response_types import BURST_CLASSES
 from cercus.visualization._circstats import circ_mean_rad, rayleigh_p, wallraff_test
 from cercus.visualization._core import compute_trajectory_masks
@@ -63,9 +63,7 @@ BOOTSTRAP_ITERATIONS: int = int(_ANALYSIS.individual.bootstrap_iterations)
 # but NoResponse, and the switch collapses PreEscape away when off) so most
 # animals reach the n>=3 second-order threshold; Escape-only when the toggle is
 # false.  Column values are capitalized — kept as exact matches.
-_INCLUDE_PREWALK: bool = bool(
-    get_visualization().get("individual_checks_include_prewalk", True)
-)
+_INCLUDE_PREWALK: bool = bool(_ANALYSIS.individual.include_prewalk)
 INDIVIDUAL_CHECK_RESPONSE_TYPES: tuple[str, ...] = (
     BURST_CLASSES if _INCLUDE_PREWALK else ("Escape",)
 )

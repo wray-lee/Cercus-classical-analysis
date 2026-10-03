@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from cercus.config import get_visualization
 from cercus.visualization import (
     plot_behavior_probability,
     plot_escape_angle_distribution,
@@ -189,11 +190,21 @@ class TestHeatmapPlots:
     """Regression tests for heatmap plots."""
 
     def test_spaghetti_kinetics_heatmap(self, sample_df):
+        vis = get_visualization()
         fig = plot_spaghetti_kinetics_heatmap(sample_df)
+        assert fig.axes[0].get_ylim() == (
+            vis.spaghetti_heatmap_speed_min_mm_s,
+            vis.spaghetti_heatmap_speed_max_mm_s,
+        )
         _assert_regression(fig, "spaghetti_kinetics_heatmap")
 
     def test_trial_stacked_heatmap(self, sample_df):
+        vis = get_visualization()
         fig = plot_trial_stacked_heatmap(sample_df)
+        assert np.allclose(
+            fig.axes[-1].get_position().bounds,
+            vis.trial_heatmap_colorbar_axes_horizontal,
+        )
         _assert_regression(fig, "trial_stacked_heatmap")
 
     @pytest.mark.parametrize("response_type", ["Escape", "PreEscape", "PreWalk", "NoResponse"])

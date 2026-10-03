@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from cercus.analysis.full import _paradigm_sort_key
+from cercus.config import get_visualization
 from cercus.constants.colors import NPG_PALETTE
 from cercus.constants.response_types import (
     BURST_CLASSES as _BURST_CLASSES,
@@ -141,7 +142,7 @@ def _compute_distance_ticks(
 
 def plot_paradigm_rt_dist(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (8.5, 3.8),
+    figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:
     """2-panel 范式 × 行为类对比：RT / escape distance（三类有 burst 行为）。
 
@@ -150,6 +151,9 @@ def plot_paradigm_rt_dist(
     """
     from scipy import stats as sps
 
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("paradigm_rt_dist_figsize", (8.5, 3.8)))
     subj = summarize_subjects_by_class(df)
     paradigms = sorted(subj["paradigm"].unique(), key=_paradigm_sort_key)
     classes = [c for c in RESPONSE_TYPES
@@ -299,12 +303,15 @@ def plot_paradigm_rt_dist(
 
 def plot_paradigm_dumbbell(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (7.5, 3.2),
+    figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:
     """3-panel dumbbell: response rate / RT / distance across paradigms.
 
     输入 = full 模式的 trial 级聚合 df（需含 paradigm / subject_id 列）。
     """
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("paradigm_dumbbell_figsize", vis.get("paradigm_reaction_distance_figsize", (7.5, 3.2))))
     subj = summarize_subjects(df)
     paradigms = sorted(subj["paradigm"].unique(), key=_paradigm_sort_key)
     n_p = len(paradigms)

@@ -23,6 +23,7 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
     _get_unified_side,
 )
+from cercus.config import get_visualization
 from cercus.visualization._core import (
     add_threshold_lines,
     draw_oscilloscope_channels,
@@ -36,13 +37,18 @@ def plot_speed_kinetics(
     df: pd.DataFrame,
     control_type: str = "baseline_visual",
     stim_type: str = "looming_wind",
-    figsize: tuple[float, float] = (10, 6),
+    figsize: tuple[float, float] | None = None,
     y_col: str = "speed",
     y_label: str = "Escape Speed (mm/s)",
 ) -> plt.Figure:
     """Two-panel figure (4:1 height ratio) with shared X axis."""
+    vis = get_visualization()
+    if figsize is None:
+        figsize = tuple(vis.speed_kinetics_figsize)
     fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
+    height_ratios = list(vis.get("speed_kinetics_height_ratios", [4, 1]))
+    hspace = float(vis.get("speed_kinetics_hspace", 0.08))
+    gs = gridspec.GridSpec(2, 1, height_ratios=height_ratios, hspace=hspace)
     ax_main = fig.add_subplot(gs[0])
     ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
 
@@ -108,12 +114,15 @@ def plot_speed_kinetics(
 
 def plot_population_speed_kinetics(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (10, 6),
+    figsize: tuple[float, float] | None = None,
     y_col: str = "speed",
     y_label: str = "Speed (mm/s)",
     t_window: tuple[float, float] = (-1000.0, 500.0),
 ) -> plt.Figure:
     """Population-level speed kinetics split by response type."""
+    vis = get_visualization()
+    if figsize is None:
+        figsize = tuple(vis.population_speed_kinetics_figsize)
     df = df[
         (df["t_rel"] >= t_window[0]) & (df["t_rel"] <= t_window[1])
     ].copy()
@@ -126,7 +135,9 @@ def plot_population_speed_kinetics(
         return fig
 
     fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.08)
+    height_ratios = list(vis.get("population_speed_kinetics_height_ratios", [4, 1]))
+    hspace = float(vis.get("population_speed_kinetics_hspace", 0.08))
+    gs = gridspec.GridSpec(2, 1, height_ratios=height_ratios, hspace=hspace)
     ax_main = fig.add_subplot(gs[0])
     ax_stim = fig.add_subplot(gs[1], sharex=ax_main)
 
@@ -185,15 +196,23 @@ def plot_population_speed_kinetics(
 
 def plot_population_spaghetti_kinetics(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (12, 8),
+    figsize: tuple[float, float] | None = None,
     y_col: str = "speed",
     y_label: str = "Speed (mm/s)",
     t_window: tuple[float, float] = (-1000.0, 500.0),
 ) -> plt.Figure:
     """Population-level spaghetti plot split by response type."""
+    vis = get_visualization()
+    if figsize is None:
+        figsize = tuple(vis.population_spaghetti_kinetics_figsize)
     df = df[
         (df["t_rel"] >= t_window[0]) & (df["t_rel"] <= t_window[1])
     ].copy()
+    response_types = list(RESPONSE_TYPES)
+    response_colors = dict(RESPONSE_COLORS)
+    n_panels = len(response_types)
+    # population/spaghetti_kinetics.svg — three response panels; width scales with N.
+    figsize = (figsize[0] * n_panels / 3, figsize[1])
     if df.empty:
         fig, ax = plt.subplots(figsize=figsize)
         ax.text(
@@ -202,13 +221,12 @@ def plot_population_spaghetti_kinetics(
         )
         return fig
 
-    response_types = list(RESPONSE_TYPES)
-    response_colors = dict(RESPONSE_COLORS)
-
-    n_panels = len(response_types)
-    fig = plt.figure(figsize=(figsize[0] * n_panels / 3, figsize[1]))
+    height_ratios = list(vis.get("population_spaghetti_kinetics_height_ratios", [4, 1]))
+    hspace = float(vis.get("population_spaghetti_kinetics_hspace", 0.1))
+    wspace = float(vis.get("population_spaghetti_kinetics_wspace", 0.15))
+    fig = plt.figure(figsize=figsize)
     gs = gridspec.GridSpec(
-        2, n_panels, height_ratios=[4, 1], hspace=0.1, wspace=0.15, figure=fig
+        2, n_panels, height_ratios=height_ratios, hspace=hspace, wspace=wspace, figure=fig
     )
 
     ax_upper: list[plt.Axes] = []
@@ -303,12 +321,17 @@ def plot_spaghetti_kinetics(
     df: pd.DataFrame,
     control_type: str = "baseline_visual",
     stim_type: str = "looming_wind",
-    figsize_per_col: float = 4.5,
-    row_height: float = 5.0,
+    figsize_per_col: float | None = None,
+    row_height: float | None = None,
     y_col: str = "speed",
     y_label: str = "Escape Speed (mm/s)",
 ) -> plt.Figure:
     """Multi-panel spaghetti plot with per-condition spatial decoupling."""
+    vis = get_visualization()
+    if figsize_per_col is None:
+        figsize_per_col = float(vis.get("spaghetti_kinetics_figsize_per_col", 4.5))
+    if row_height is None:
+        row_height = float(vis.get("spaghetti_kinetics_row_height", 5.0))
     cond_color_map: dict[str, str] = {}
     for ttype in df["type"].dropna().unique():
         if ttype == control_type:
@@ -329,8 +352,11 @@ def plot_spaghetti_kinetics(
         return fig
 
     fig = plt.figure(figsize=(figsize_per_col * n_conds, row_height * 2))
+    height_ratios = list(vis.get("spaghetti_kinetics_height_ratios", [4, 1]))
+    hspace = float(vis.get("spaghetti_kinetics_hspace", 0.1))
+    wspace = float(vis.get("spaghetti_kinetics_wspace", 0.15))
     gs = gridspec.GridSpec(
-        2, n_conds, height_ratios=[4, 1], hspace=0.1, wspace=0.15, figure=fig
+        2, n_conds, height_ratios=height_ratios, hspace=hspace, wspace=wspace, figure=fig
     )
 
     ax_upper: list[plt.Axes] = []
@@ -436,13 +462,16 @@ def plot_single_trial_kinetics(
     v_max: float,
     global_trial_index: int,
     response_type: str = "Escape",
-    figsize: tuple[float, float] = (6.0, 3.5),
+    figsize: tuple[float, float] | None = None,
     y_col: str = "speed",
     y_label: str = "Escape Speed (mm/s)",
     interval_onset_ms: float = np.nan,
     interval_offset_ms: float = np.nan,
 ) -> plt.Figure:
     """Single-trial kinetics with latency marker."""
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("single_trial_kinetics_figsize", (6.0, 3.5)))
     fig, ax = plt.subplots(figsize=figsize)
 
     t = trial["t_rel"].values

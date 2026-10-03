@@ -1,26 +1,205 @@
 # ══════════════════════════════════════════════════════════════════════
 # Cercus Framework — Visualization Configuration
 # ══════════════════════════════════════════════════════════════════════
-# Visualization style settings.
-# These values can be overridden by user config.yaml in project root.
+# Figure geometry and style defaults. Comments map keys to output/function.
+# User config.yaml may override this section.
 
-# ── Bar Label Style ──
-# Options:
-#   "inline"  — label inside bar (default, intuitive)
-#   "axis"    — label via horizontal dashed line to y-axis (publication style)
+# ── Bar label style ──
+# "inline" labels bars directly; "axis" labels values at the y-axis.
 bar_label_style: "inline"
 
-# Shared y-axis limit across population reaction_distance_panel.svg datasets (mm).
+# ── Behavior/probability plots (behavior.py) ──
+# behavior_prob.svg — plot_behavior_probability
+behavior_probability_figsize: [3.5, 3.0]
+
+# population/behavior_prob.svg — plot_population_behavior_probability
+population_behavior_probability_figsize: [4.5, 3.5]
+
+# habituation.svg — plot_habituation_curve
+habituation_figsize: [8.0, 3.5]
+
+# population/habituation.svg — plot_population_habituation
+population_habituation_figsize: [10.0, 4.5]
+
+# prewalk_stillness.svg — plot_prewalk_stillness
+prewalk_stillness_figsize: [4.5, 3.5]
+
+# reaction_distance_panel.svg — plot_reaction_distance_panel
+# Shared distance-axis upper limit (mm); footer offsets are from axes coordinates.
 reaction_distance_max_mm: 500
-reaction_distance_figsize: [9.5, 4.2]  # three panels: escape RT, distance, paired T1/T2
-# ── Vmax Threshold Plot ──
-# show the fixed start/vmax reference lines on the population vmax plots
+reaction_distance_figsize: [9.5, 5.0]
+reaction_distance_layout:
+  left: 0.085
+  right: 0.99
+  top: 0.91
+  bottom: 0.40
+  wspace: 0.42
+reaction_distance_footer_axis_y: -0.11
+reaction_distance_footer_method_offset: 0.075
+reaction_distance_footer_coverage_offset: 0.15
+reaction_distance_note_y: 0.17
+reaction_distance_annotation_fontsize: 6.0
+reaction_distance_note_fontsize: 5.8
+reaction_distance_stats_y: 0.035
+reaction_distance_stats_fontsize: 6.0
+
+# ── Kinetics plots (kinetics.py) ──
+# speed_kinetics.svg — plot_speed_kinetics
+speed_kinetics_figsize: [10.0, 6.0]
+speed_kinetics_height_ratios: [4, 1]
+speed_kinetics_hspace: 0.08
+
+# population/speed_kinetics.svg — plot_population_speed_kinetics
+population_speed_kinetics_figsize: [10.0, 6.0]
+population_speed_kinetics_height_ratios: [4, 1]
+population_speed_kinetics_hspace: 0.08
+
+# spaghetti_kinetics.svg — plot_spaghetti_kinetics (per-condition panels)
+spaghetti_kinetics_figsize_per_col: 4.5
+spaghetti_kinetics_row_height: 5.0
+spaghetti_kinetics_height_ratios: [4, 1]
+spaghetti_kinetics_hspace: 0.1
+spaghetti_kinetics_wspace: 0.15
+
+# population/spaghetti_kinetics.svg — plot_population_spaghetti_kinetics
+population_spaghetti_kinetics_figsize: [12.0, 8.0]
+population_spaghetti_kinetics_height_ratios: [4, 1]
+population_spaghetti_kinetics_hspace: 0.1
+population_spaghetti_kinetics_wspace: 0.15
+
+# Single-trial kinetics figures — plot_single_trial_kinetics
+single_trial_kinetics_figsize: [6.0, 3.5]
+
+# ── Polar/angle plots (polar.py) ──
+# escape_angle_distribution.svg — plot_escape_angle_distribution
+escape_angle_distribution_figsize: [6.0, 4.0]
+escape_angle_distribution_bins: 36
+
+# polar_direction_histogram.svg — plot_population_polar_histogram
+polar_direction_histogram_figsize: [6.0, 4.8]
+polar_direction_histogram_bins: 36
+
+# pre_movement_prewalk.svg — plot_population_pre_movement_prewalk
+pre_movement_prewalk_figsize: [6.0, 4.8]
+pre_movement_prewalk_bins: 36
+
+# ── Trajectory plots (trajectories.py) ──
+# Multisensory comparison — plot_multisensory_trajectory_comparison
+multisensory_trajectory_figsize: [6.0, 6.0]
+
+# Per-type subplot geometry — plot_trajectory_overlay
+trajectory_overlay_figsize_per_ax: [4.0, 4.0]
+
+# Unified overlay — plot_global_trajectory_overlay_fixed
+global_trajectory_fixed_figsize: [5.0, 5.0]
+
+# ── Cross-paradigm plots (paradigm.py) ──
+# paradigm_dumbbell.svg — plot_paradigm_dumbbell
+paradigm_dumbbell_figsize: [7.5, 3.2]
+
+# paradigm_rt_dist.svg — plot_paradigm_rt_dist
+paradigm_rt_dist_figsize: [8.5, 3.8]
+
+# ── Heatmaps (heatmaps.py) ──
+# spaghetti_density_heatmap.svg — plot_spaghetti_kinetics_heatmap
+spaghetti_heatmap_figsize_horizontal: [9.0, 3.5]
+spaghetti_heatmap_figsize_vertical: [8.0, 7.5]
+spaghetti_heatmap_speed_bins: 50
+spaghetti_heatmap_speed_min_mm_s: 0.0
+spaghetti_heatmap_speed_max_mm_s: 600.0
+spaghetti_heatmap_hspace_horizontal: 0.1
+spaghetti_heatmap_wspace_horizontal: 0.15
+spaghetti_heatmap_hspace_vertical: 0.35
+spaghetti_heatmap_wspace_vertical: 0.1
+spaghetti_heatmap_colorbar_fraction: 0.02
+spaghetti_heatmap_colorbar_pad: 0.02
+spaghetti_heatmap_layout_pad: 1.0
+
+# trial_stacked_heatmap.svg — plot_trial_stacked_heatmap
+trial_heatmap_figsize_horizontal: [12.0, 4.5]
+trial_heatmap_figsize_vertical: [8.0, 7.5]
+trial_heatmap_max_trials_per_panel: 200
+trial_heatmap_hspace_horizontal: 0.15
+trial_heatmap_wspace_horizontal: 0.25
+trial_heatmap_hspace_vertical: 0.35
+trial_heatmap_wspace_vertical: 0.1
+trial_heatmap_subplot_right_horizontal: 0.92
+trial_heatmap_subplot_right_vertical: 0.88
+trial_heatmap_colorbar_axes_horizontal: [0.93, 0.15, 0.02, 0.7]
+trial_heatmap_colorbar_axes_vertical: [0.90, 0.2, 0.02, 0.6]
+trial_heatmap_layout_pad: 1.0
+
+# ── Trial composite panels (plot_trial_panels.py) ──
+# trial_<N>_<response>.svg — plot_trial_panel
+trial_panel_figsize: [16.0, 8.0]
+trial_panel_gridspec_height_ratios: [3, 3, 1]
+trial_panel_gridspec_width_ratios: [2, 1.5]
+trial_panel_gridspec_hspace: 0.25
+trial_panel_gridspec_wspace: 0.3
+trial_panel_layout_pad: 1.0
+trial_panel_layout_rect: [0, 0, 1, 0.95]
+
+# ── MCMC figures (pipeline/mcmc.py) ──
+# psychometric_curves.svg — plot_psychometric_curves
+mcmc_psychometric_figsize: [8.0, 5.0]
+
+# kaplan_meier_cumulative.svg — plot_kaplan_meier_cumulative
+mcmc_kaplan_meier_figsize: [8.0, 5.0]
+mcmc_kaplan_meier_layout_rect: [0, 0, 1, 0.95]
+
+# race_model_violation.svg — plot_race_model_violation
+mcmc_race_model_figsize: [8.0, 5.0]
+mcmc_race_model_layout_rect: [0, 0, 1, 0.95]
+
+# probability_enhancement.svg — plot_probability_enhancement
+mcmc_probability_enhancement_figsize: [14.0, 8.0]
+mcmc_probability_enhancement_height_ratios: [3, 2]
+mcmc_probability_enhancement_hspace: 0.08
+mcmc_probability_enhancement_left: 0.36
+mcmc_probability_enhancement_right: 0.58
+
+# time_window_of_integration.svg — plot_time_window_of_integration
+mcmc_time_window_figsize: [8.0, 5.0]
+
+# ── Supporting MCMC figures (pipeline/mcmc.py) ──
+# posterior_traces.svg — plot_posterior_traces; height scales with panel count
+mcmc_posterior_traces_width: 12.0
+mcmc_posterior_traces_height_per_panel: 2.5
+mcmc_posterior_traces_layout_top: 0.92
+
+# posterior_distributions.svg — plot_posterior_distributions; height scales with panel count
+mcmc_posterior_distributions_width: 8.0
+mcmc_posterior_distributions_height_per_panel: 3.5
+
+# ttc50_differences.svg — plot_ttc50_differences; height scales with comparison count
+mcmc_ttc50_differences_width: 8.0
+mcmc_ttc50_differences_height_per_comparison: 3.5
+mcmc_ttc50_differences_right: 0.75
+
+# variance_reduction.svg — plot_variance_reduction; width scales with condition count
+mcmc_variance_reduction_min_width: 6.0
+mcmc_variance_reduction_width_per_condition: 1.2
+mcmc_variance_reduction_height: 5.0
+
+# ── Vmax plots (vmax.py) ──
+# vmax_distribution_diagnostic.svg — plot_vmax_distribution
+vmax_distribution_figsize: [5.0, 3.5]
+
+# Population Vmax plots — plot_population_vmax_gmm / response / moving_gmm
+population_vmax_figsize: [5.5, 4.0]
 draw_fixed_thresholds: true
 
-# ── Individual-Checks Response Inclusion ──
-# When true (default), the per-animal robustness figures behind the
-# `population --individual-checks` flag pool BOTH Escape and PreWalk trials,
-# so most animals reach the n>=3 second-order threshold. When false, only
-# Escape trials are used (the previous behaviour). Only touches the code path
-# behind --individual-checks; main population figures stay escape-only.
+# Deprecated compatibility alias for analysis.individual.include_prewalk.
+# Existing user configs may still override this key; new configs should use the
+# analysis section above instead.
 individual_checks_include_prewalk: true
+
+# ── Individual robustness supplements (individual.py) ──
+# suppl_trial_counts.png — plot_trial_counts
+individual_trial_counts_figsize: [6.0, 4.2]
+
+# suppl_second_order.png — plot_second_order
+individual_second_order_figsize: [4.8, 4.8]
+
+# suppl_loo.png — plot_loo
+individual_loo_figsize: [7.0, 3.8]

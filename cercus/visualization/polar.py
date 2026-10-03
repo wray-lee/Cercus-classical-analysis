@@ -21,6 +21,7 @@ from pipeline.constants import (
     COLOR_PREWALK,
     _get_unified_side,
 )
+from cercus.config import get_visualization
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 from cercus.visualization._circstats import (
     rayleigh_p,
@@ -40,10 +41,15 @@ def _stimulus_relative_angle(traj_x, traj_y, side: str) -> float:
 
 def plot_escape_angle_distribution(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (6.0, 4.0),
-    bins: int = 36,
+    figsize: tuple[float, float] | None = None,
+    bins: int | None = None,
 ) -> plt.Figure:
-    """Histogram + KDE of final escape angles for Escape and PreWalk trials."""
+    """Histogram + KDE of final escape angles for response trials except NoResponse."""
+    vis = get_visualization()
+    if figsize is None:
+        figsize = tuple(vis.get("escape_angle_distribution_figsize", (6.0, 4.0)))
+    if bins is None:
+        bins = int(vis.get("escape_angle_distribution_bins", 36))
     group_cols = (
         ["subject_id", "global_trial_id"]
         if "subject_id" in df.columns
@@ -144,8 +150,8 @@ def plot_escape_angle_distribution(
 def plot_population_polar_histogram(
     df: pd.DataFrame,
     response_types: list[str] | tuple[str, ...] | str | None = None,
-    figsize: tuple[float, float] = (6.0, 4.8),
-    bins: int = 36,
+    figsize: tuple[float, float] | None = None,
+    bins: int | None = None,
     title: str | None = None,
 ) -> plt.Figure:
     """360° polar rose of stimulus-relative response directions.
@@ -154,6 +160,11 @@ def plot_population_polar_histogram(
     reflected to +90°. Thus +90° is ipsilateral and −90° contralateral.
     Trials without a known stimulus side cannot be assigned either label.
     """
+    vis = get_visualization()
+    if figsize is None:
+        figsize = tuple(vis.get("polar_direction_histogram_figsize", (6.0, 4.8)))
+    if bins is None:
+        bins = int(vis.get("polar_direction_histogram_bins", 36))
     group_cols = (
         ["subject_id", "global_trial_id"]
         if "subject_id" in df.columns
@@ -404,8 +415,8 @@ def plot_population_polar_histogram(
 
 def plot_population_pre_movement_prewalk(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (6.0, 4.8),
-    bins: int = 36,
+    figsize: tuple[float, float] | None = None,
+    bins: int | None = None,
     title: str = "Pre-movement Direction Distribution (PreWalk)",
 ) -> plt.Figure:
     """360° polar rose of population PreWalk pre-movement direction dispersion.
@@ -413,6 +424,11 @@ def plot_population_pre_movement_prewalk(
     Integrates trajectory from trial start to escape onset (interval_onset_ms)
     to quantify walking direction before the escape, relative to stimulus side.
     """
+    vis = get_visualization()
+    if figsize is None:
+        figsize = tuple(vis.get("pre_movement_prewalk_figsize", (6.0, 4.8)))
+    if bins is None:
+        bins = int(vis.get("pre_movement_prewalk_bins", 36))
     group_cols = (
         ["subject_id", "global_trial_id"]
         if "subject_id" in df.columns

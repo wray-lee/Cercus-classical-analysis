@@ -36,7 +36,10 @@ _NPG8 = [
 ]
 
 
-def plot_behavior_probability(df: pd.DataFrame) -> plt.Figure:
+def plot_behavior_probability(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] | None = None,
+) -> plt.Figure:
     """Bar chart of response-type proportions (RESPONSE_TYPES order)."""
     counts = df.groupby("global_trial_id")["response_type"].first().value_counts()
     total = counts.sum()
@@ -47,7 +50,9 @@ def plot_behavior_probability(df: pd.DataFrame) -> plt.Figure:
     ]
     colors = [RESPONSE_COLORS[c] for c in categories]
 
-    fig, ax = plt.subplots(figsize=(3.5, 3.0))
+    fig, ax = plt.subplots(
+        figsize=figsize or tuple(get_visualization().behavior_probability_figsize)
+    )
     bars = ax.bar(
         categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85
     )
@@ -73,7 +78,10 @@ def plot_behavior_probability(df: pd.DataFrame) -> plt.Figure:
     return fig
 
 
-def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
+def plot_habituation_curve(
+    df: pd.DataFrame,
+    figsize: tuple[float, float] | None = None,
+) -> plt.Figure:
     """Scatter + line of V_max per trial across the global trial sequence."""
     trial_agg = (
         df.groupby("global_trial_index")
@@ -93,7 +101,9 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
         for rt in trial_agg["response_type"].values
     ]
 
-    fig, ax = plt.subplots(figsize=(8, 3.5))
+    fig, ax = plt.subplots(
+        figsize=figsize or tuple(get_visualization().habituation_figsize)
+    )
 
     ax.plot(x, y, color="0.7", lw=0.8, alpha=0.6, zorder=1)
     ax.scatter(
@@ -163,7 +173,7 @@ def plot_habituation_curve(df: pd.DataFrame) -> plt.Figure:
 
 def plot_population_habituation(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (10, 4.5),
+    figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:
     """Population fatigue curve: per-subject lines + mean ± SEM ribbon."""
     trial_df = (
@@ -186,7 +196,7 @@ def plot_population_habituation(
         )["v_max"]
         subject_pivots.append(sdf)
 
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize or tuple(get_visualization().population_habituation_figsize))
 
     for i, (subj, sdf) in enumerate(zip(subjects, subject_pivots)):
         color = _NPG8[i % len(_NPG8)]
@@ -295,7 +305,7 @@ def plot_population_habituation(
 
 def plot_population_behavior_probability(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (4.5, 3.5),
+    figsize: tuple[float, float] | None = None,
     bar_label_style: str | None = None,
 ) -> plt.Figure:
     """Bar chart with per-subject scatter points."""
@@ -319,7 +329,7 @@ def plot_population_behavior_probability(
         .unstack(fill_value=0.0)
     )
 
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize or tuple(get_visualization().population_behavior_probability_figsize))
     bars = ax.bar(
         categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85
     )
@@ -412,7 +422,7 @@ def plot_population_behavior_probability(
 
 def plot_prewalk_stillness(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (4.5, 3.5),
+    figsize: tuple[float, float] | None = None,
     stillness_threshold: float = ESCAPE_START_THRESHOLD,
     bar_label_style: str | None = None,
 ) -> plt.Figure:
@@ -433,7 +443,7 @@ def plot_prewalk_stillness(
     prewalk_trials = trial_level[trial_level["response_type"] == "PreWalk"].copy()
 
     if prewalk_trials.empty:
-        fig, ax = plt.subplots(figsize=figsize)
+        fig, ax = plt.subplots(figsize=figsize or tuple(get_visualization().prewalk_stillness_figsize))
         ax.text(0.5, 0.5, "No PreWalk trials", ha="center", va="center", transform=ax.transAxes, fontsize=10, color="0.5")
         return fig
 
@@ -479,7 +489,7 @@ def plot_prewalk_stillness(
     values = [count / n_total for count in counts]
     colors = [COLOR_WITH_STILLNESS, COLOR_NO_STILLNESS, COLOR_NO_RESPONSE]
 
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize or tuple(get_visualization().prewalk_stillness_figsize))
     bars = ax.bar(categories, values, color=colors, width=0.55, edgecolor="none", alpha=0.85)
     subject_probs = (
         prewalk_trials.groupby("subject_id")["stillness_presence"]
@@ -555,9 +565,20 @@ def plot_reaction_distance_panel(
     # actual trial pair rather than join two independent subject medians.
     subj_med = trial.groupby(["subject_id", "response_type"])[["rt", "dist"]].median()
 
+    visualization = get_visualization()
+    # All dimensions/paddings below map to reaction_distance_panel.svg settings in visualization.yaml.
     fig, axes = plt.subplots(
-        1, 3, figsize=figsize or tuple(get_visualization().reaction_distance_figsize),
+        1, 3, figsize=figsize or tuple(visualization.reaction_distance_figsize),
     )
+    fig.subplots_adjust(**visualization.reaction_distance_layout.to_dict())
+    annotation_size = float(visualization.reaction_distance_annotation_fontsize)
+    footer_y = float(visualization.reaction_distance_footer_axis_y)
+    footer_method_offset = float(visualization.reaction_distance_footer_method_offset)
+    footer_coverage_offset = float(visualization.reaction_distance_footer_coverage_offset)
+    note_y = float(visualization.reaction_distance_note_y)
+    note_size = float(visualization.reaction_distance_note_fontsize)
+    stats_y = float(visualization.reaction_distance_stats_y)
+    stats_size = float(visualization.reaction_distance_stats_fontsize)
     rng = np.random.default_rng(42)
     for ax, col, title, xlabel in (
         (axes[0], "rt", "Class-selected response timing", "Selected timing endpoint vs reference (ms)"),
@@ -625,24 +646,15 @@ def plot_reaction_distance_panel(
             ax.grid(axis="y", color="#E5E7EB", lw=0.5, alpha=0.6)
 
     rt_coverage = [
-        f"{response}: N={len(group)}; RT observed={int(np.isfinite(group['rt']).sum())}; "
+        f"RT observed — {response}: {int(np.isfinite(group['rt']).sum())}/{len(group)}; "
         f"missing={int((~np.isfinite(group['rt'])).sum())}"
         for response, group in trial.groupby("response_type", sort=False)
         if response in classes
     ]
-    axes[0].text(0.5, -0.23, "\n".join(rt_coverage),
-                 transform=axes[0].transAxes, ha="center", va="top",
-                 fontsize=6, color="0.35")
     axes[0].text(
-        0.5, -0.31,
-        "\n".join(
-            f"RT observed — {response}: "
-            f"{int(np.isfinite(group['rt']).sum())}/{len(group)}"
-            for response, group in trial.groupby("response_type", sort=False)
-            if response in classes
-        ),
+        0.5, footer_y, "\n".join(rt_coverage),
         transform=axes[0].transAxes, ha="center", va="top",
-        fontsize=6, color="0.35",
+        fontsize=annotation_size, color="0.35",
     )
 
     # ── Default T1/T2 cohort comes from final classifier labels ──
@@ -682,28 +694,38 @@ def plot_reaction_distance_panel(
                 continue
             selected_group = trial.loc[selected & mask]
             complete = np.isfinite(selected_group["t1"]) & np.isfinite(selected_group["t2"])
+            pair_n = int(complete.sum())
+            t1_n = int(np.isfinite(selected_group["t1"]).sum())
+            t2_n = int(np.isfinite(selected_group["t2"]).sum())
+            rt_n = int(np.isfinite(selected_group["rt"]).sum())
+            coverage_n = len(group) if classified or not (moving or strict) else len(selected_group)
             if classified:
-                coverage.append(f"{name}: PreWalk {len(group)}; paired {int(complete.sum())}/{len(group)}")
+                cohort_label = f"{name}: PreWalk {len(group)}; paired {pair_n}/{len(group)}"
             elif moving:
-                coverage.append(f"{name}: eligible {len(selected_group)}/{len(group)}; paired {int(complete.sum())}/{len(selected_group)}")
+                cohort_label = (
+                    f"{name}: eligible {len(selected_group)}/{len(group)}; "
+                    f"paired {pair_n}/{len(selected_group)}"
+                )
             elif strict:
-                coverage.append(f"{name}: moving {len(selected_group)}/{len(group)}; paired {int(complete.sum())}/{len(selected_group)}")
+                cohort_label = (
+                    f"{name}: moving {len(selected_group)}/{len(group)}; "
+                    f"paired {pair_n}/{len(selected_group)}"
+                )
             else:
                 cohort_n = int((source & mask & strict_mask).sum())
-                coverage.append(f"{name}: paired {int(complete.sum())}/{len(group)}; moving-history {cohort_n}")
+                cohort_label = f"{name}: paired {pair_n}/{len(group)}; moving-history {cohort_n}"
+            coverage.append(cohort_label)
             endpoint_coverage.append(
-                f"{name}: paired {int(complete.sum())}/{len(group)}; missing={int((~complete).sum())}\n"
-                f"  T1 observed={int(np.isfinite(selected_group['t1']).sum())}; "
-                f"missing={len(selected_group) - int(np.isfinite(selected_group['t1']).sum())}\n"
-                f"  T2 observed={int(np.isfinite(selected_group['t2']).sum())}; "
-                f"missing={len(selected_group) - int(np.isfinite(selected_group['t2']).sum())}\n"
-                f"  RT observed={int(np.isfinite(selected_group['rt']).sum())}; "
-                f"missing={len(selected_group) - int(np.isfinite(selected_group['rt']).sum())}"
+                f"{cohort_label}; missing={coverage_n - pair_n}\n"
+                f"  T1 observed={t1_n}; missing={coverage_n - t1_n}\n"
+                f"  T2 observed={t2_n}; missing={coverage_n - t2_n}\n"
+                f"  RT observed={rt_n}; missing={coverage_n - rt_n}"
             )
         paired = paired[np.isfinite(paired["t1"]) & np.isfinite(paired["t2"])]
     else:
         paired = trial.iloc[0:0].copy()
         coverage = []
+        endpoint_coverage = []
     if not paired.empty:
         type_text = paired["type"].astype(str).str.lower()
         paired["cohort"] = np.where(
@@ -764,28 +786,36 @@ def plot_reaction_distance_panel(
             t_ax.grid(axis="y", color="#E5E7EB", lw=0.5, alpha=0.6)
             n_subjects = paired["subject_id"].nunique()
             n_trials = len(paired)
-            t_ax.text(0.5, -0.21, f"paired: {n_trials} trials / {n_subjects} subjects",
-                      transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
-                      color="0.35")
-            t_ax.text(0.5, -0.28 - 0.07 * max(1, sum(s.count("\n") + 1 for s in coverage)),
-                      "Boxes/dots: subject medians; lines: trial pairs",
-                      transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
-                      color="0.35")
+            t_ax.text(
+                0.5, footer_y, f"paired: {n_trials} trials / {n_subjects} subjects",
+                transform=t_ax.transAxes, ha="center", va="top",
+                fontsize=annotation_size, color="0.35",
+            )
+            t_ax.text(
+                0.5, footer_y - footer_method_offset,
+                "Boxes/dots: subject medians; lines: trial pairs",
+                transform=t_ax.transAxes, ha="center", va="top",
+                fontsize=annotation_size, color="0.35",
+            )
             if endpoint_coverage:
-                t_ax.text(0.5, -0.34 - 0.07 * max(1, sum(s.count("\n") + 1 for s in coverage)),
-                          "\n".join(endpoint_coverage),
-                          transform=t_ax.transAxes, ha="center", va="top", fontsize=6,
-                          color="0.35")
+                t_ax.text(
+                    0.5, footer_y - footer_coverage_offset, "\n".join(endpoint_coverage),
+                    transform=t_ax.transAxes, ha="center", va="top",
+                    fontsize=annotation_size, color="0.35",
+                )
         else:
             t_ax.text(0.5, 0.5, "no paired eligible endpoints" if (moving or strict) else "no paired endpoints", transform=t_ax.transAxes,
                       ha="center", va="center", fontsize=8, color="0.5")
     else:
         t_ax.text(0.5, 0.5, "no paired eligible endpoints" if (moving or strict) else "no paired wind PreWalk endpoints" if classified else "no paired local endpoints", transform=t_ax.transAxes,
                   ha="center", va="center", fontsize=8, color="0.5")
+        if endpoint_coverage:
+            t_ax.text(
+                0.5, footer_y, "\n".join(endpoint_coverage),
+                transform=t_ax.transAxes, ha="center", va="top",
+                fontsize=annotation_size, color="0.35",
+            )
     t_ax.axhline(0, color="0.5", ls="--", lw=0.7)
-    if coverage:
-        t_ax.text(0.5, -0.27, "\n".join(coverage), transform=t_ax.transAxes,
-                  ha="center", va="top", fontsize=6, color="0.35")
 
     # Escape vs PreEscape 机制分离检验（subject 级中位数，避免 trial 级伪重复）
     from scipy.stats import mannwhitneyu
@@ -806,10 +836,10 @@ def plot_reaction_distance_panel(
             foot.append(f"{lbl}: n={len(esc)}+{len(pre)} subj, p = {p_val:.2g}")
     if foot:
         fig.text(
-            0.5, 0.01,
+            0.5, stats_y,
             "Escape vs PreEscape (subject medians, Mann-Whitney) — "
             + " | ".join(foot),
-            ha="center", fontsize=6, color="0.3",
+            ha="center", fontsize=stats_size, color="0.3",
         )
 
     if causal_pair:
@@ -840,6 +870,5 @@ def plot_reaction_distance_panel(
             if "escape_reaction_time_ms" in df
             else "Legacy reaction_time_ms shown; endpoint definitions depend on the source table."
         )
-    fig.text(0.5, 0.035, note, ha="center", fontsize=6, color="0.3")
-    fig.tight_layout(pad=1.0, rect=(0, 0.17, 1, 1))
+    fig.text(0.5, note_y, note, ha="center", fontsize=note_size, color="0.3", va="top")
     return fig

@@ -19,6 +19,9 @@ individual:
   # Number of bootstrap iterations for the animal-level resampling CI.
   bootstrap_iterations: 1000
 
+  # Include PreEscape and PreWalk alongside Escape in population individual checks.
+  include_prewalk: true
+
 # Adaptive V_max thresholding in population_analysis.py
 vmax_thresholding:
   # Set true to use adaptive threshold (KDE/GMM); false to use escape.vmax_threshold from config

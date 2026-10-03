@@ -19,7 +19,7 @@ from pipeline.constants import (
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
 )
-from cercus.config import get_colors, get_geometry
+from cercus.config import get_colors, get_geometry, get_visualization
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
 _WIND_COLOR = str(get_colors().wind_mark)  # 风到达标识色（NPG sky blue，非行为类配色，纯图元）
@@ -31,7 +31,7 @@ def plot_spaghetti_kinetics_heatmap(
     df: pd.DataFrame,
     figsize: tuple[float, float] | None = None,
     t_window: tuple[float, float] = (-400.0, 500.0),
-    speed_bins: int = 50,
+    speed_bins: int | None = None,
     y_col: str = "speed",
     y_label: str = "Speed (mm/s)",
     dt: float = 5.0,
@@ -52,13 +52,30 @@ def plot_spaghetti_kinetics_heatmap(
     response_colors = dict(RESPONSE_COLORS)
 
     n_panels = len(response_types)
+    vis = get_visualization()
+    if speed_bins is None:
+        speed_bins = int(vis.get("spaghetti_heatmap_speed_bins", 50))
     if figsize is None:
-        figsize = (8.0, 7.5) if orientation == "vertical" else (9, 3.5)
+        figsize = (
+            tuple(vis.spaghetti_heatmap_figsize_vertical)
+            if orientation == "vertical"
+            else tuple(vis.spaghetti_heatmap_figsize_horizontal)
+        )
     fig = plt.figure(figsize=figsize)
+    hspace = (
+        float(vis.get("spaghetti_heatmap_hspace_vertical", 0.35))
+        if orientation == "vertical"
+        else float(vis.get("spaghetti_heatmap_hspace_horizontal", 0.1))
+    )
+    wspace = (
+        float(vis.get("spaghetti_heatmap_wspace_vertical", 0.1))
+        if orientation == "vertical"
+        else float(vis.get("spaghetti_heatmap_wspace_horizontal", 0.15))
+    )
     if orientation == "vertical":
-        gs = gridspec.GridSpec(n_panels, 1, hspace=0.35, wspace=0.1, figure=fig)
+        gs = gridspec.GridSpec(n_panels, 1, hspace=hspace, wspace=wspace, figure=fig)
     else:
-        gs = gridspec.GridSpec(1, n_panels, hspace=0.1, wspace=0.15, figure=fig)
+        gs = gridspec.GridSpec(1, n_panels, hspace=hspace, wspace=wspace, figure=fig)
 
     ax_panels: list[plt.Axes] = []
     for j in range(n_panels):
@@ -66,7 +83,8 @@ def plot_spaghetti_kinetics_heatmap(
         ax = fig.add_subplot(gs[j, 0] if orientation == "vertical" else gs[0, j], sharey=sharey)
         ax_panels.append(ax)
 
-    speed_min, speed_max = 0.0, 600.0
+    speed_min = float(vis.get("spaghetti_heatmap_speed_min_mm_s", 0.0))
+    speed_max = float(vis.get("spaghetti_heatmap_speed_max_mm_s", 600.0))
     speed_edges = np.linspace(speed_min, speed_max, speed_bins + 1)
 
     vmax_global = 0.0
@@ -301,14 +319,17 @@ def plot_spaghetti_kinetics_heatmap(
 
     if ims:
         cbar = fig.colorbar(
-            ims[0], ax=ax_panels, fraction=0.02, pad=0.02
+            ims[0],
+            ax=ax_panels,
+            fraction=float(vis.get("spaghetti_heatmap_colorbar_fraction", 0.02)),
+            pad=float(vis.get("spaghetti_heatmap_colorbar_pad", 0.02)),
         )
         cbar.set_label("P(speed | time)", fontsize=7)
         cbar.set_ticks([0, 1])
         cbar.set_ticklabels(["0", "1"])
         cbar.ax.tick_params(labelsize=6)
 
-    fig.tight_layout(pad=1.0)
+    fig.tight_layout(pad=float(vis.get("spaghetti_heatmap_layout_pad", 1.0)))
     return fig
 
 
@@ -320,11 +341,14 @@ def plot_trial_stacked_heatmap(
     vmax: float | None = None,
     figsize: tuple[float, float] | None = None,
     conditions: list[str] | None = None,
-    max_trials_per_panel: int = 200,
+    max_trials_per_panel: int | None = None,
     orientation: str = "horizontal",
 ) -> plt.Figure:
     """Trial-stacked heatmap using config-driven windows and color scaling."""
     heatmap_cfg = get_geometry().heatmap
+    vis = get_visualization()
+    if max_trials_per_panel is None:
+        max_trials_per_panel = int(vis.get("trial_heatmap_max_trials_per_panel", 200))
     if t_window is None:
         configured = (
             heatmap_cfg.t_window_onset
@@ -357,12 +381,26 @@ def plot_trial_stacked_heatmap(
 
     n_panels = len(conditions)
     if figsize is None:
-        figsize = (8.0, 7.5) if orientation == "vertical" else (12, 4.5)
+        figsize = (
+            tuple(vis.trial_heatmap_figsize_vertical)
+            if orientation == "vertical"
+            else tuple(vis.trial_heatmap_figsize_horizontal)
+        )
     fig = plt.figure(figsize=figsize)
+    hspace = (
+        float(vis.get("trial_heatmap_hspace_vertical", 0.35))
+        if orientation == "vertical"
+        else float(vis.get("trial_heatmap_hspace_horizontal", 0.15))
+    )
+    wspace = (
+        float(vis.get("trial_heatmap_wspace_vertical", 0.1))
+        if orientation == "vertical"
+        else float(vis.get("trial_heatmap_wspace_horizontal", 0.25))
+    )
     if orientation == "vertical":
-        gs = gridspec.GridSpec(n_panels, 1, hspace=0.35, wspace=0.1, figure=fig)
+        gs = gridspec.GridSpec(n_panels, 1, hspace=hspace, wspace=wspace, figure=fig)
     else:
-        gs = gridspec.GridSpec(1, n_panels, hspace=0.15, wspace=0.25, figure=fig)
+        gs = gridspec.GridSpec(1, n_panels, hspace=hspace, wspace=wspace, figure=fig)
 
     t_common = np.arange(t_window[0], t_window[1], t_bin_s)
     norm = mcolors.PowerNorm(gamma=gamma, vmin=0, vmax=vmax)
@@ -505,11 +543,13 @@ def plot_trial_stacked_heatmap(
         )
 
     if orientation == "vertical":
-        fig.subplots_adjust(right=0.88)
-        cbar_ax = fig.add_axes([0.90, 0.2, 0.02, 0.6])
+        subplot_right = float(vis.get("trial_heatmap_subplot_right_vertical", 0.88))
+        colorbar_axes = vis.get("trial_heatmap_colorbar_axes_vertical", [0.90, 0.2, 0.02, 0.6])
     else:
-        fig.subplots_adjust(right=0.92)
-        cbar_ax = fig.add_axes([0.93, 0.15, 0.02, 0.7])
+        subplot_right = float(vis.get("trial_heatmap_subplot_right_horizontal", 0.92))
+        colorbar_axes = vis.get("trial_heatmap_colorbar_axes_horizontal", [0.93, 0.15, 0.02, 0.7])
+    fig.subplots_adjust(right=subplot_right)
+    cbar_ax = fig.add_axes(colorbar_axes)
     cmap = plt.get_cmap("inferno")
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     cbar = fig.colorbar(sm, cax=cbar_ax)
@@ -517,5 +557,8 @@ def plot_trial_stacked_heatmap(
 
     # rect leaves room for the manually placed colorbar axes (avoids the
     # tight_layout "Axes not compatible" warning). 为 cbar 预留边距
-    fig.tight_layout(pad=1.0, rect=(0, 0, 0.88 if orientation == "vertical" else 0.92, 1.0))
+    fig.tight_layout(
+        pad=float(vis.get("trial_heatmap_layout_pad", 1.0)),
+        rect=(0, 0, subplot_right, 1.0),
+    )
     return fig

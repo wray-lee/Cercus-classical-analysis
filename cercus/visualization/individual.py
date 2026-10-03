@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline.constants import COLOR_ESCAPE, COLOR_PREWALK, NPG_PALETTE
+from cercus.config import get_visualization
 from cercus.visualization._circstats import circ_mean_rad, rayleigh_p
 
 log = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def plot_trial_counts(
     wallraff: dict | None = None,
     n_total: int | None = None,
     filter_low_n: bool = False,
-    figsize: tuple[float, float] = (6.0, 4.2),
+    figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:
     """Histogram of response trials (all burst classes) per animal.
 
@@ -52,6 +53,9 @@ def plot_trial_counts(
         If True, draw reference lines at n≥3 / n≥5. If False (default),
         omit the lines since no filtering is applied.
     """
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("individual_trial_counts_figsize", (6.0, 4.2)))
     counts = counts.astype(int)
     max_c = int(counts.max())
     n_animals = n_total if n_total is not None else len(counts)
@@ -145,7 +149,7 @@ def plot_second_order(
     animal_df: pd.DataFrame,
     n_total: int = 0,
     filter_low_n: bool = False,
-    figsize: tuple[float, float] = (4.8, 4.8),
+    figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:
     """Polar scatter of per-animal mean response directions + second-order mean.
 
@@ -155,6 +159,9 @@ def plot_second_order(
     resultant R2. This is the anti-pseudo-replication view — every animal
     contributes exactly one unit of evidence.
     """
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("individual_second_order_figsize", (4.8, 4.8)))
     mu_deg = np.asarray(animal_df["mu_deg"].values, dtype=float)
     R_k = np.asarray(animal_df["R"].values, dtype=float)
     valid = ~np.isnan(mu_deg) & ~np.isnan(R_k)
@@ -244,7 +251,7 @@ def plot_loo(
     loo_df: pd.DataFrame,
     pooled_mu_deg: float,
     n_total: int | None = None,
-    figsize: tuple[float, float] = (7.0, 3.8),
+    figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:
     """Leave-one-animal-out sensitivity of the pooled response direction.
 
@@ -263,6 +270,9 @@ def plot_loo(
         Total number of animals in the experiment. If None, uses
         ``len(loo_df)``.
     """
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("individual_loo_figsize", (7.0, 3.8)))
     animal_ids = loo_df["animal_id"].astype(str).values
     mu_deg = np.asarray(loo_df["mu_deg"].values, dtype=float)
     delta = np.asarray(loo_df["delta_deg"].values, dtype=float)

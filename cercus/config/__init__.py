@@ -116,7 +116,29 @@ class ConfigManager:
                     else:
                         merged[section] = data
             if self.user_config_path.exists():
-                merged = self._merge(merged, self._load_yaml_file(self.user_config_path))
+                user_data = self._load_yaml_file(self.user_config_path)
+                # Keep the pre-migration visualization override effective when
+                # no explicit analysis-level replacement is present. New config
+                # wins when both keys are supplied.
+                legacy_include = (
+                    user_data.get("visualization", {}).get(
+                        "individual_checks_include_prewalk"
+                    )
+                    if isinstance(user_data.get("visualization"), dict)
+                    else None
+                )
+                analysis_individual = user_data.get("analysis", {}).get(
+                    "individual", {}
+                )
+                if (
+                    legacy_include is not None
+                    and isinstance(analysis_individual, dict)
+                    and "include_prewalk" not in analysis_individual
+                ):
+                    user_data.setdefault("analysis", {}).setdefault("individual", {})[
+                        "include_prewalk"
+                    ] = legacy_include
+                merged = self._merge(merged, user_data)
             self._data = merged
             log.info("Configuration loaded: %d sections", len(self._data))
 

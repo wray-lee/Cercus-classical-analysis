@@ -25,6 +25,7 @@ from pipeline.constants import (
     TRAJ_USE_Z_DEGREE,
     _get_unified_side,
 )
+from cercus.config import get_visualization
 from cercus.visualization._core import (
     compute_trajectory_masks,
     draw_side_arrows,
@@ -41,7 +42,7 @@ def plot_multisensory_trajectory_comparison(
     df_bv: pd.DataFrame,
     df_bw: pd.DataFrame,
     df_ms: pd.DataFrame,
-    figsize: tuple[float, float] = (6.0, 6.0),
+    figsize: tuple[float, float] | None = None,
     alpha: float = 0.8,
     lw: float = 0.5,
     bv_color: str = COLOR_LEFT,
@@ -59,6 +60,9 @@ def plot_multisensory_trajectory_comparison(
     With one supplied dataset, the full grid remains visible; only its
     mirrored trajectories and corresponding half-region annotation are shown.
     """
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("multisensory_trajectory_figsize", (6.0, 6.0)))
     datasets = {
         "bv": (df_bv, bv_color, False, None, "Baseline Visual"),
         "bw": (df_bw, bw_color, False, wind_offset_deg, "Baseline Wind"),
@@ -156,13 +160,16 @@ def plot_trajectory_overlay(
     control_type: str = "baseline_visual_test",
     left_color: str = COLOR_LEFT,
     right_color: str = COLOR_RIGHT,
-    figsize_per_ax: tuple[float, float] = (4.0, 4.0),
+    figsize_per_ax: tuple[float, float] | None = None,
     USE_Z_DEGREE_TO_DRAW_TRAJECTORY: bool = TRAJ_USE_Z_DEGREE,
     USE_RIGID_ROTATION: bool = TRAJ_USE_RIGID_ROTATION,
     USE_ESCAPE_ONSET_ONLY_XY: bool = TRAJ_USE_ESCAPE_ONSET_ONLY_XY,
     dz_integration_range: str = DZ_INTEGRATION_RANGE,
 ) -> plt.Figure:
     """One subplot per trial type. Left stimuli in NPG blue, right in NPG red."""
+    if figsize_per_ax is None:
+        vis = get_visualization()
+        figsize_per_ax = tuple(vis.get("trajectory_overlay_figsize_per_ax", (4.0, 4.0)))
     all_types = sorted(df["type"].dropna().unique())
     if not all_types:
         log.warning("No trial types found for trajectory overlay.")
@@ -233,7 +240,7 @@ def plot_global_trajectory_overlay_fixed(
     df: pd.DataFrame,
     TRAJECTORY_MAX_RADIUS_MM: float = 200.0,
     TRAJECTORY_STEP_MM: float = 20.0,
-    figsize: tuple[float, float] = (5.0, 5.0),
+    figsize: tuple[float, float] | None = None,
     alpha: float = 1.0,
     lw: float = 0.3,
     left_color: str = COLOR_LEFT,
@@ -244,6 +251,9 @@ def plot_global_trajectory_overlay_fixed(
     dz_integration_range: str = DZ_INTEGRATION_RANGE,
 ) -> plt.Figure:
     """Unified trajectory overlay — all paradigms on one axes."""
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("global_trajectory_fixed_figsize", (5.0, 5.0)))
     fig, ax = plt.subplots(figsize=figsize)
 
     group_cols = (

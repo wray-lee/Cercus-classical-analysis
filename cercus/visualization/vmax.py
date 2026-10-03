@@ -18,6 +18,7 @@ from pipeline.constants import (
     ESCAPE_START_THRESHOLD,
     ESCAPE_VMAX_THRESHOLD,
 )
+from cercus.config import get_visualization
 from cercus.constants.response_types import RESPONSE_TYPES
 
 log = logging.getLogger(__name__)
@@ -43,9 +44,12 @@ def _get_trial_vmax(
 def _setup_vmax_axes(
     trial_vmax: np.ndarray,
     x_upper_override: float | None = None,
-    figsize: tuple[float, float] = (5.5, 4.0),
+    figsize: tuple[float, float] | None = None,
 ) -> tuple[plt.Figure, plt.Axes, float]:
     """Create figure + axes with histogram + KDE."""
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("population_vmax_figsize", (5.5, 4.0)))
     fig, ax = plt.subplots(figsize=figsize)
 
     x_upper = (
@@ -143,9 +147,12 @@ def _draw_gmm_thresholds(
 
 
 def plot_vmax_distribution(
-    df: pd.DataFrame, figsize: tuple[float, float] = (5.0, 3.5)
+    df: pd.DataFrame, figsize: tuple[float, float] | None = None
 ) -> plt.Figure:
     """Histogram + KDE of per-trial V_max for Escape trials."""
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("vmax_distribution_figsize", (5.0, 3.5)))
     df_resp = df[df["response_type"] == "Escape"].copy()
     if df_resp.empty:
         log.warning("No Escape trials for V_max distribution plot.")
@@ -226,13 +233,18 @@ def plot_vmax_distribution(
 
 def plot_population_vmax_gmm(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (5.5, 4.0),
+    figsize: tuple[float, float] | None = None,
     gmm_start_threshold: float | None = None,
     gmm_escape_threshold: float | None = None,
     iqr_gmm_threshold: float | None = None,
-    draw_fixed_thresholds: bool = True,
+    draw_fixed_thresholds: bool | None = None,
 ) -> plt.Figure:
     """V_max distribution of all trials with GMM threshold markers."""
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("population_vmax_figsize", (5.5, 4.0)))
+    if draw_fixed_thresholds is None:
+        draw_fixed_thresholds = bool(get_visualization().get("draw_fixed_thresholds", True))
     trial_vmax = _get_trial_vmax(df)
 
     if len(trial_vmax) < 2:
@@ -315,11 +327,16 @@ def plot_population_vmax_gmm(
 
 def plot_population_vmax_response(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (5.5, 4.0),
+    figsize: tuple[float, float] | None = None,
     auto_threshold: float | None = None,
-    draw_fixed_thresholds: bool = True,
+    draw_fixed_thresholds: bool | None = None,
 ) -> plt.Figure:
     """V_max distribution of response trials (all burst classes) only."""
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("population_vmax_figsize", (5.5, 4.0)))
+    if draw_fixed_thresholds is None:
+        draw_fixed_thresholds = bool(get_visualization().get("draw_fixed_thresholds", True))
     trial_vmax = _get_trial_vmax(df, response_filter=_RESPONSE_FILTER)
 
     if len(trial_vmax) < 2:
@@ -397,16 +414,21 @@ def plot_population_vmax_response(
 
 def plot_population_vmax_moving_gmm(
     df: pd.DataFrame,
-    figsize: tuple[float, float] = (5.5, 4.0),
+    figsize: tuple[float, float] | None = None,
     min_speed_floor: float = 10.0,
     gmm_escape_threshold: float | None = None,
-    draw_fixed_thresholds: bool = True,
+    draw_fixed_thresholds: bool | None = None,
 ) -> plt.Figure:
     """V_max distribution of active trials (v_max >= min_speed_floor) with 2-component GMM curves.
 
     Fits a 2-component log-GMM on moving trials (excluding stationary noise < 10 mm/s)
     to separate Walking/Spontaneous Movement from true Escape bursts (~98 mm/s).
     """
+    if figsize is None:
+        vis = get_visualization()
+        figsize = tuple(vis.get("population_vmax_figsize", (5.5, 4.0)))
+    if draw_fixed_thresholds is None:
+        draw_fixed_thresholds = bool(get_visualization().get("draw_fixed_thresholds", True))
     trial_vmax = _get_trial_vmax(df)
     moving_vmax = trial_vmax[trial_vmax >= min_speed_floor]
 

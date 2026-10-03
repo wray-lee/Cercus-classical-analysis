@@ -40,6 +40,7 @@ from .classifier import label_trials
 from .constants import NPG_PALETTE, _apply_publication_style
 from .io import load_and_concat_sessions, scan_and_pair_sessions
 from .kinematics import preprocess
+from cercus.config import get_visualization
 from cercus.constants.response_types import BURST_CLASSES, ESCAPE_CLASSES
 
 # ── JAX / numpyro CPU multi-device setup (must run before JAX initializes) ──
@@ -1028,7 +1029,15 @@ def plot_posterior_traces(
         return
 
     n_chains = trace.posterior.sizes["chain"]
-    fig, axes = plt.subplots(n, 1, figsize=(12, 2.5 * n), squeeze=False)
+    vis = get_visualization()
+    fig, axes = plt.subplots(
+        n, 1,
+        figsize=(
+            float(vis.mcmc_posterior_traces_width),
+            float(vis.mcmc_posterior_traces_height_per_panel) * n,
+        ),
+        squeeze=False,
+    )
     axes = axes.flatten()
 
     for ax, (param, cond, ylabel) in zip(axes, panels):
@@ -1075,7 +1084,7 @@ def plot_posterior_traces(
         ax.legend_.remove() if ax.legend_ else None
 
     plt.tight_layout()
-    fig.subplots_adjust(top=0.92)
+    fig.subplots_adjust(top=float(vis.mcmc_posterior_traces_layout_top))
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -1117,9 +1126,8 @@ def plot_psychometric_curves(
     ttc_hi = 1000.0
     ttc_grid = np.linspace(ttc_lo, ttc_hi, 500)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    # ── Bimodal conditions: sigmoid curves ──
+    vis = get_visualization()
+    fig, ax = plt.subplots(figsize=tuple(vis.mcmc_psychometric_figsize))
     if len(bi_conditions) > 0:
         ttc50_post = get_ttc50_posterior(trace, bi_conditions)
         k_post = get_k_posterior(trace, bi_conditions)
@@ -1286,7 +1294,14 @@ def plot_posterior_distributions(
     palette = _generate_color_palette(bi_conditions, uni_conditions)
 
     n_panels = 2 + (1 if uni_conditions else 0)
-    fig, axes = plt.subplots(n_panels, 1, figsize=(8, 3.5 * n_panels))
+    vis = get_visualization()
+    fig, axes = plt.subplots(
+        n_panels, 1,
+        figsize=(
+            float(vis.mcmc_posterior_distributions_width),
+            float(vis.mcmc_posterior_distributions_height_per_panel) * n_panels,
+        ),
+    )
     if n_panels == 1:
         axes = [axes]
 
@@ -1362,7 +1377,14 @@ def plot_ttc50_differences(
 
     ttc50_post = get_ttc50_posterior(trace, bi_conditions)
     n = len(comparisons)
-    fig, axes = plt.subplots(n, 1, figsize=(8, 3.5 * n))
+    vis = get_visualization()
+    fig, axes = plt.subplots(
+        n, 1,
+        figsize=(
+            float(vis.mcmc_ttc50_differences_width),
+            float(vis.mcmc_ttc50_differences_height_per_comparison) * n,
+        ),
+    )
     if n == 1:
         axes = [axes]
 
@@ -1415,7 +1437,7 @@ def plot_ttc50_differences(
         ax.set_title(f"TTC50: {key}")
 
     plt.tight_layout()
-    fig.subplots_adjust(right=0.75)
+    fig.subplots_adjust(right=float(vis.mcmc_ttc50_differences_right))
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -1453,7 +1475,16 @@ def plot_variance_reduction(
     if not conditions:
         return
 
-    fig, ax = plt.subplots(figsize=(max(6, len(conditions) * 1.2), 5))
+    vis = get_visualization()
+    fig, ax = plt.subplots(
+        figsize=(
+            max(
+                float(vis.mcmc_variance_reduction_min_width),
+                len(conditions) * float(vis.mcmc_variance_reduction_width_per_condition),
+            ),
+            float(vis.mcmc_variance_reduction_height),
+        )
+    )
     x = np.arange(len(conditions))
     yerr_lo = [r - lo for r, lo in zip(reductions, ci_lo)]
     yerr_hi = [hi - r for r, hi in zip(reductions, ci_hi)]
@@ -1685,7 +1716,8 @@ def plot_kaplan_meier_cumulative(
         })
     df = pd.concat([df, pd.DataFrame(anchor_rows)], ignore_index=True)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    vis = get_visualization()
+    fig, ax = plt.subplots(figsize=tuple(vis.mcmc_kaplan_meier_figsize))
     kmf = KaplanMeierFitter()
 
     for cond in all_conditions:
@@ -1755,7 +1787,7 @@ def plot_kaplan_meier_cumulative(
     ax.set_title("Kaplan-Meier: Cumulative Escape Dynamics")
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=vis.mcmc_kaplan_meier_layout_rect)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -1862,8 +1894,8 @@ def plot_race_model_violation(
     elif "wind_only" in uni_cdf:
         bound_x, bound_y = uni_cdf["wind_only"]
 
-    # ── Plot ──
-    fig, ax = plt.subplots(figsize=(8, 5))
+    vis = get_visualization()
+    fig, ax = plt.subplots(figsize=tuple(vis.mcmc_race_model_figsize))
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
@@ -1911,7 +1943,7 @@ def plot_race_model_violation(
     ax.set_title("Race Model Inequality: Bayesian Integration Evidence")
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", frameon=False)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=vis.mcmc_race_model_layout_rect)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -1975,7 +2007,8 @@ def plot_time_window_of_integration(
     lo_arr = np.asarray(err_lo)[order]
     hi_arr = np.asarray(err_hi)[order]
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    vis = get_visualization()
+    fig, ax = plt.subplots(figsize=tuple(vis.mcmc_time_window_figsize))
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
@@ -2063,10 +2096,17 @@ def plot_probability_enhancement(
     # Linestyle per baseline
     _BL_LS: dict[str, str] = {"visual_only": "--", "wind_only": ":"}
 
+    vis = get_visualization()
     fig, (ax_top, ax_bot) = plt.subplots(
-        2, 1, figsize=(14, 8), sharex=True,
-        gridspec_kw={"height_ratios": [3, 2], "hspace": 0.08,
-                      "left": 0.36, "right": 0.72},
+        2, 1,
+        figsize=tuple(vis.mcmc_probability_enhancement_figsize),
+        sharex=True,
+        gridspec_kw={
+            "height_ratios": vis.mcmc_probability_enhancement_height_ratios,
+            "hspace": float(vis.mcmc_probability_enhancement_hspace),
+            "left": float(vis.mcmc_probability_enhancement_left),
+            "right": float(vis.mcmc_probability_enhancement_right),
+        },
     )
 
     # ── Top panel: P(Escape) curves + baseline lines ──
@@ -2184,7 +2224,7 @@ def plot_probability_enhancement(
     ax_top.set_facecolor("white")
     ax_bot.set_facecolor("white")
 
-    plt.subplots_adjust(right=0.58)
+    plt.subplots_adjust(right=float(vis.mcmc_probability_enhancement_right))
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
