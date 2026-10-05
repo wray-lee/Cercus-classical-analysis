@@ -154,7 +154,7 @@ $$\text{NoResponse} \longrightarrow \text{PreEscape} \longrightarrow \text{PreWa
 ```
                           ┌── [No qualifying burst] ──────────────────────────► NoResponse
                           │
-[Response-window burst?]  ├── [Burst qualified ∧ onset < stimulus arrival] ───► PreEscape
+[Response-window burst?]  ├── [Burst qualified ∧ onset < hardware wind trigger] ───► PreEscape
                           │
                           ├── [Burst qualified ∧ active walking before wind] ──► PreWalk
                           │
@@ -173,8 +173,8 @@ For any trial, let $v(t)$ denote walking speed, $V_b$ the burst threshold, and $
 
 When enabled (`classification.use_preescape: true`), wind trials with a qualifying burst are evaluated for early movement onset:
 - **Burst anchor**: Find the first sample exceeding the burst threshold in $[t_w, t_w + 250\text{ ms}]$.
-- **Onset search**: On the acquisition clock, search backward from that burst to the last causal 20-ms averaged speed $\le 10\text{ mm/s}$; the immediately following sample marks $t_e$. Classification and independent RTm consume this same observed onset. Missing transitions remain unresolved; tables without an acquisition endpoint retain the descriptive centered onset.
-- **Criterion**: If the backward search crosses before airflow arrival ($t_e < t_w - \text{buffer}$, with buffer default $0\text{ ms}$), the trial is classified as **PreEscape**.
+- **Onset search**: On the acquisition clock, search backward within the contiguous observed motion segment to the last causal 20-ms averaged speed $\le 10\text{ mm/s}$; the immediately following sample marks $t_e$. A low-speed observation separates a preceding burst; a missing observation or a record starting in motion cannot establish an onset. If a candidate has no observable transition, check later candidates in the same hardware-anchored burst window. Classification, wind escape RT and independent RTm share this onset. Acquisition tables leave unresolved timing missing; legacy tables without acquisition columns retain their descriptive timing basis.
+- **Criterion**: If the observed onset precedes the hardware wind trigger ($t_e < t_w - \text{buffer}$, with buffer default $0\text{ ms}$), the trial is classified as **PreEscape**. Arrival calibration does not shift this comparison.
 - **Significance**: In multimodal paradigms, these represent genuine escapes triggered early by the looming visual stimulus rather than the wind. In pure-wind trials, they reflect spontaneous acceleration.
 
 ### 3. PreWalk (Pre-Stimulus Locomotion)
@@ -194,9 +194,10 @@ For airflow trials, PreWalk identifies crickets already moving when the stimulus
 Cercus cleanly decouples **escape movement onset** from **stimulus-induced stopping**:
 
 - **Escape Latency (`escape_reaction_time_ms`)**:
-  Measured as $t_e - t_a$, where $t_a$ is the calibrated airflow reference.
-  - Positive values for post-stimulus `Escape`.
-  - Negative values for `PreEscape` (reflecting lead time prior to stimulus arrival).
+  Wind trials export the observed acquisition-clock `escape_onset_ms` and $t_e - t_a$, where $t_a$ is the calibrated airflow reference. Classification, escape RT, `short_rt` and the stopping cap share this source measurement; unresolved transitions stay missing.
+  - The burst window and PreEscape comparison remain hardware-anchored. Arrival calibration shifts the motion-history and RT reference only.
+  - PreEscape retains its measured lead time. These filtered endpoints are not validated physiological latencies.
+  - `latency_ms` and `interval_onset_ms` remain descriptive centered-speed measurements for kinetics markers, distance/trajectory analysis and the existing MCMC survival view. Nonwind and legacy timing retains this descriptive basis.
 - **Causal Stopping Latency T1 (`pause_stopping_time_ms`)**:
   The latency from airflow arrival to when walking speed first drops below the $10\text{ mm/s}$ stillness threshold. Includes optical-count resolution margins (requiring $>13.33\text{ mm/s}$ at onset and confirming a drop below $<6.67\text{ mm/s}$) to guard against sensor quantization noise.
 - **Pause-to-Escape Interval T2 (`pause_to_escape_time_ms`)**:

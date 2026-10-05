@@ -162,7 +162,7 @@ def full(
     trial_cols = [
         "paradigm", "subject_id", "global_trial_index", "response_type", "type",
         "v_max", "latency_ms", "interval_onset_ms", "interval_offset_ms",
-        "reaction_time_ms", "escape_reaction_time_ms", "stillness_reaction_time_ms",
+        "reaction_time_ms", "escape_onset_ms", "escape_reaction_time_ms", "stillness_reaction_time_ms",
         "stillness_status", "stillness_presence", "stop_to_escape_interval_ms",
         "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms",
         "pause_status", "pause_escape_status", "pause_baseline_status",

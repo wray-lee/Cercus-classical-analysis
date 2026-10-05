@@ -39,9 +39,10 @@ def classify_trial(
 ) -> dict[str, str | float | bool]:
     """Measure burst/escape interval, then route NoResponse → PreEscape → PreWalk → Escape.
 
-    Wind PreWalk's compatibility RT measures stopping; escape latency is
-    exported separately. Neither short-RT QC nor missing stillness changes
-    the response class or the escape-distance integration interval.
+    Wind classification and escape RT share the observed acquisition-clock
+    onset. Compatibility PreWalk RT measures stopping; descriptive latency
+    and interval fields remain separate for distance and trajectory analysis.
+    Neither short-RT QC nor missing stillness changes class eligibility.
     """
     pause = {
         "pause_stopping_time_ms": np.nan, "pause_to_escape_time_ms": np.nan,
@@ -50,7 +51,7 @@ def classify_trial(
         "pause_moving_fraction": np.nan, "pause_moving_eligible": False,
     }
     if trial.empty:
-        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, "reaction_time_ms": np.nan, "escape_reaction_time_ms": np.nan, "stillness_reaction_time_ms": np.nan, "stillness_status": "invalid_data", "stillness_presence": "unobserved", "stop_to_escape_interval_ms": np.nan, "stillness_baseline_status": "unobserved", "stillness_window_start_ms": np.nan, "short_rt": False, "distance_mm": np.nan, "distance_500ms_mm": np.nan, **pause}
+        return {"response_type": "NoResponse", "v_max": np.nan, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, "reaction_time_ms": np.nan, "escape_onset_ms": np.nan, "escape_reaction_time_ms": np.nan, "stillness_reaction_time_ms": np.nan, "stillness_status": "invalid_data", "stillness_presence": "unobserved", "stop_to_escape_interval_ms": np.nan, "stillness_baseline_status": "unobserved", "stillness_window_start_ms": np.nan, "short_rt": False, "distance_mm": np.nan, "distance_500ms_mm": np.nan, **pause}
 
     speed_vals = trial["speed"].values
     t_vals = trial["t_rel"].values
@@ -105,6 +106,7 @@ def classify_trial(
     )
     escape_rt = rt_dist["reaction_time_ms"]
     rt_dist.update(
+        escape_onset_ms=np.nan,
         escape_reaction_time_ms=escape_rt,
         stillness_reaction_time_ms=np.nan,
         stillness_status="not_applicable",
@@ -115,32 +117,40 @@ def classify_trial(
         short_rt=bool(is_wind and 0.0 <= escape_rt < float(rt_cfg.short_escape_ms)),
     )
 
+    has_acquisition = "speed_raw" in trial and "t_acquisition_rel" in trial
     if is_wind:
-        has_acquisition = (
-            "speed_raw" in trial and "t_acquisition_rel" in trial
-            and np.count_nonzero(np.isfinite(trial["t_acquisition_rel"].to_numpy(float))) >= 2
-        )
         if has_acquisition:
             pause = measure_pause_response(
                 trial["t_acquisition_rel"].to_numpy(float),
                 trial["speed_raw"].to_numpy(float), rt_anchor, str(_trial_type),
+                hardware_onset_ms=onset,
             )
         else:
             pause.update(pause_status="missing_acquisition_clock", pause_baseline_status="unobserved")
     causal_onset = float(pause.pop("escape_onset_ms", np.nan))
+    stopping_cap = float(pause.pop("stopping_cap_ms", np.nan))
     rt_dist.update(pause)
 
     # ── 2. Priority 1 — No-burst absolute veto ──
     if not has_burst:
         return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, **rt_dist}
 
-    # ── 3. PreEscape detection (any wind paradigm) ──
-    # RTm and classification share the observed source-clock onset;
-    # the centered interval remains the descriptive distance integration basis.
-    # 风前起跑先分为 PreEscape，再判断风前运动历史，不能导出为负的 RTm。
-    classification_onset = (
-        causal_onset if np.isfinite(causal_onset) else interval_onset_ms
-    )
+    # ── 3. Shared wind onset: classification, escape RT and stopping cap ──
+    # Acquisition tables never substitute a centered onset for an unobserved
+    # causal transition. Legacy tables retain their descriptive timing basis.
+    # 居中区间只用于行程/轨迹；风试次判类与时间测量共用采集时钟起点。
+    classification_onset = causal_onset if has_acquisition else interval_onset_ms
+    if is_wind and has_acquisition:
+        escape_rt = causal_onset - rt_anchor
+        rt_dist.update(
+            escape_onset_ms=causal_onset,
+            reaction_time_ms=escape_rt,
+            escape_reaction_time_ms=escape_rt,
+            short_rt=bool(
+                np.isfinite(escape_rt) and escape_rt >= 0.0
+                and escape_rt < float(get_thresholds().reaction_time.short_escape_ms)
+            ),
+        )
     if (
         USE_PRE_ESCAPE
         and is_wind
@@ -166,20 +176,11 @@ def classify_trial(
         rt_dist["stillness_baseline_status"] = pause["pause_baseline_status"]
         if has_acquisition:
             acquisition_t = trial["t_acquisition_rel"].to_numpy(float)
-            stopping = {"onset_ms": np.nan, "status": "missing_acquisition_clock", "presence": "unobserved"}
-            acquisition_onset = np.nan
-            match = np.array([], dtype=int)
-            if np.isfinite(interval_onset_ms):
-                match = np.flatnonzero(np.isclose(t_vals, interval_onset_ms, rtol=0, atol=1e-8))
-                if len(match):
-                    acquisition_onset = float(acquisition_t[match[0]])
-            if not np.isfinite(interval_onset_ms) or np.isfinite(acquisition_onset):
-                stopping = measure_stopping(
-                    acquisition_t, trial["speed_raw"].to_numpy(float),
-                    acquisition_onset, rt_anchor,
-                )
-            elif np.isfinite(interval_onset_ms):
-                stopping["status"] = "invalid_acquisition_clock"
+            acquisition_onset = causal_onset
+            stopping = measure_stopping(
+                acquisition_t, trial["speed_raw"].to_numpy(float),
+                stopping_cap, rt_anchor,
+            )
             stillness_rt = float(stopping["onset_ms"]) - rt_anchor
             rt_dist.update(
                 stillness_reaction_time_ms=stillness_rt,
@@ -192,7 +193,9 @@ def classify_trial(
                 stop_matches = np.flatnonzero(acquisition_t == stop_ms)
                 if len(stop_matches):
                     stop_index = int(stop_matches[0])
-                    clock_segment = acquisition_t[stop_index:int(match[0]) + 1]
+                    escape_matches = np.flatnonzero(acquisition_t == acquisition_onset)
+                    escape_index = int(escape_matches[0]) if len(escape_matches) else stop_index
+                    clock_segment = acquisition_t[stop_index:escape_index + 1]
                     if (len(clock_segment) >= 2 and np.all(np.isfinite(clock_segment))
                             and np.all(np.diff(clock_segment) > 0)):
                         rt_dist["stop_to_escape_interval_ms"] = acquisition_onset - stop_ms
@@ -246,7 +249,7 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     dist_map: dict = {}
     dist500_map: dict = {}
     pause_maps = {col: {} for col in (
-        "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms",
+        "escape_onset_ms", "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms",
         "pause_status", "pause_escape_status", "pause_baseline_status",
         "pause_moving_fraction", "pause_moving_eligible",
     )}

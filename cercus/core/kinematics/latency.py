@@ -205,6 +205,23 @@ def _causal_displacement_speed(t: np.ndarray, v: np.ndarray) -> tuple[np.ndarray
     return averaged, valid, max_gap
 
 
+def _causal_escape_onset(t: np.ndarray, averaged: np.ndarray, burst_index: int) -> float:
+    """Last observed low-to-motion transition leading to this causal burst.
+
+    Walk only within the contiguous above-threshold segment. A resolved low
+    separates a preceding burst; missing observations or a record starting in
+    motion cannot establish an onset and must not be bridged.
+    """
+    index = burst_index - 1
+    while index >= 0:
+        if not np.isfinite(averaged[index]):
+            return np.nan
+        if averaged[index] <= ESCAPE_START_THRESHOLD * (1.0 + 1e-9):
+            return float(t[index + 1])
+        index -= 1
+    return np.nan
+
+
 def _movement_history_metrics(
     t: np.ndarray,
     averaged: np.ndarray,
@@ -267,6 +284,8 @@ def measure_pause_response(
     speed: np.ndarray,
     wind_onset_ms: float,
     trial_type: str = "baseline_wind",
+    *,
+    hardware_onset_ms: float | None = None,
 ) -> dict[str, float | str | bool]:
     """Source-clock T1/T2 with an earlier and a stop-relative later period.
 
@@ -277,19 +296,23 @@ def measure_pause_response(
     requires the legacy T1/T2 pair. The stop-relative later search
     remains available in both modes. Moving eligibility and strict history are
     separate from locally observable transitions after intermittent walking.
-    Response classes and distance intervals are deliberately not returned.
+    ``wind_onset_ms`` is the calibrated reference for history, stopping and RT;
+    ``hardware_onset_ms`` anchors the burst window and defaults to that reference.
+    Internal ``stopping_cap_ms`` includes the first-burst guard for both stopping
+    entry points. Response classes and distance intervals are not returned.
     """
     result: dict[str, float | str | bool] = {
         "pause_stopping_time_ms": np.nan, "pause_to_escape_time_ms": np.nan,
         "pause_reaction_time_ms": np.nan, "pause_status": "invalid_data",
         "pause_escape_status": "not_applicable", "pause_baseline_status": "unobserved",
         "pause_moving_fraction": np.nan, "pause_moving_eligible": False,
-        "escape_onset_ms": np.nan,
+        "escape_onset_ms": np.nan, "stopping_cap_ms": np.nan,
     }
     t, v = np.asarray(t_rel, dtype=float), np.asarray(speed, dtype=float)
+    hardware = wind_onset_ms if hardware_onset_ms is None else hardware_onset_ms
     cfg = get_thresholds()
     if (t.ndim != 1 or v.ndim != 1 or len(t) < 2 or len(t) != len(v)
-            or not np.isfinite(wind_onset_ms)
+            or not np.all(np.isfinite([wind_onset_ms, hardware]))
             or not np.isfinite(float(cfg.stillness.speed_window_ms))
             or float(cfg.stillness.speed_window_ms) <= 0):
         return result
@@ -297,52 +320,33 @@ def measure_pause_response(
     truncated = bool(len(bad))
     if truncated:
         t, v = t[:bad[0]], v[:bad[0]]
-    if len(t) < 2 or t[-1] < wind_onset_ms:
+    if len(t) < 2 or t[-1] < hardware:
         return result
     averaged, valid, max_gap = _causal_displacement_speed(t, v)
     earlier_end = wind_onset_ms + float(cfg.escape.window_ms)
     early_bursts = np.flatnonzero(
-        (t >= wind_onset_ms) & (t <= earlier_end)
+        (t >= hardware) & (t <= hardware + float(cfg.escape.window_ms))
         & (averaged > ESCAPE_VMAX_THRESHOLD)
     )
     # Classification always consumes this observed onset; the RTm switch
     # controls endpoint availability, never the response class.
     cap = earlier_end
-    if len(early_bursts):
-        last = int(early_bursts[0]) + 1
-        first = compute_escape_latency(
-            t[:last], averaged[:last], stim_onset_t_rel=wind_onset_ms,
-            trial_type="baseline_wind", use_angular_onset_refinement=False,
-        )
-        escape = float(first["latency_ms"])
-        result["escape_onset_ms"] = escape
+    for candidate in early_bursts:
+        escape = _causal_escape_onset(t, averaged, int(candidate))
         if np.isfinite(escape):
+            result["escape_onset_ms"] = escape
             cap = escape
             if cfg.reaction_time.independent_rtm and escape >= wind_onset_ms:
                 result["pause_reaction_time_ms"] = escape - wind_onset_ms
-        else:
-            at_reference = averaged[t <= wind_onset_ms]
-            if len(at_reference) and at_reference[-1] > ESCAPE_VMAX_THRESHOLD:
-                # An ongoing, unresolved burst cannot supply a new onset.
-                cap = wind_onset_ms
-    if not cfg.reaction_time.independent_rtm:
-        first = compute_escape_latency(
-            t, averaged, stim_onset_t_rel=wind_onset_ms, trial_type=trial_type,
-            use_angular_onset_refinement=False,
-        )
-        cap = float(first["latency_ms"])
-        at_reference = averaged[t <= wind_onset_ms]
-        if (
-            not np.isfinite(cap)
-            or (
-                cap < wind_onset_ms and cap == t[0]
-                and not (len(at_reference) and at_reference[-1] > ESCAPE_VMAX_THRESHOLD)
-            )
-        ):
-            cap = earlier_end
+            break
     if len(early_bursts):
-        # Never relabel an ongoing burst's deceleration as a pre-escape pause.
+        # The first burst still caps stopping; a later resolved onset must not
+        # turn an earlier burst's deceleration into a stimulus-linked pause.
         cap = min(cap, float(t[early_bursts[0]]))
+        at_reference = averaged[t <= wind_onset_ms]
+        if (not np.isfinite(result["escape_onset_ms"])
+                and len(at_reference) and at_reference[-1] > ESCAPE_VMAX_THRESHOLD):
+            cap = min(cap, wind_onset_ms)
     status, fraction, reference_speed = _movement_history_metrics(
         t, averaged, wind_onset_ms, float(cfg.prewalk.window_ms), max_gap,
     )
@@ -356,6 +360,7 @@ def measure_pause_response(
             and reference_speed > float(cfg.baseline.quiet_mm_s) * (1.0 + 1e-9)
         ),
     )
+    result["stopping_cap_ms"] = cap
     stopping = measure_stopping(t, v, cap, wind_onset_ms)
     result["pause_status"] = stopping["status"]
     if stopping["status"] != "observed":
@@ -380,17 +385,14 @@ def measure_pause_response(
     start = int(np.flatnonzero(t == stop)[0])
     if not np.all(np.isfinite(averaged[start:last + 1])) or not np.all(valid[start:last]):
         return result
-    later = compute_escape_latency(
-        t[:last + 1], averaged[:last + 1], stim_onset_t_rel=stop,
-        trial_type="baseline_wind", use_angular_onset_refinement=False,
-    )
-    escape = float(later["latency_ms"])
+    escape = _causal_escape_onset(t, averaged, last) if len(burst) else np.nan
     if np.isfinite(escape) and escape > stop:
         result.update(
             pause_to_escape_time_ms=escape - stop,
-            pause_reaction_time_ms=escape - wind_onset_ms,
             pause_escape_status="observed",
         )
+        if not cfg.reaction_time.independent_rtm:
+            result["pause_reaction_time_ms"] = escape - wind_onset_ms
     elif not truncated and t[-1] >= end and end - t[candidates[-1]] <= max_gap:
         result["pause_escape_status"] = "no_escape"
     return result

@@ -102,10 +102,15 @@ def test_unobserved_cohort_retains_classifier_escape_timing(wind_ms, history):
     assert select_escape_latency(pd.DataFrame([{**result, "type": trial["type"].iloc[0]}])).iloc[0] == 120.0
 
 
-def test_wind_prewalk_skips_ongoing_burst_before_stillness():
+def test_ongoing_burst_caps_stopping_before_later_observed_escape():
     result = classify_trial(_wind_trial(early_burst=True))
     assert result["response_type"] == "PreWalk"
-    assert result["reaction_time_ms"] == 70.0
+    # The first burst is already active at wind; its deceleration must not
+    # supply T1 for the later, independently observed escape onset.
+    assert np.isnan(result["reaction_time_ms"])
+    assert np.isnan(result["pause_stopping_time_ms"])
+    assert result["stillness_status"] == result["pause_status"] == "escape_first"
+    assert result["escape_reaction_time_ms"] == 120.0
     assert result["interval_onset_ms"] == 120.0
 
 
@@ -117,8 +122,9 @@ def test_stop_to_escape_interval_uses_source_clock_for_both_endpoints():
     result = classify_trial(trial)
     # At the first low row, the 20-ms average is (20*5 + 2*15)/20 = 6.5.
     assert result["stillness_reaction_time_ms"] == 90.0
-    assert result["escape_reaction_time_ms"] == 120.0
+    assert result["escape_reaction_time_ms"] == 180.0
     assert result["stop_to_escape_interval_ms"] == 90.0
+    assert result["interval_onset_ms"] == 120.0  # descriptive host-clock interval
 
 
 def test_stop_to_escape_interval_rejects_duplicate_at_actual_escape_row():
@@ -142,7 +148,9 @@ def test_prewind_stillness_is_not_clipped_into_postwind_reaction():
     trial["speed_raw"] = np.where(trial["t_rel"] < -60.0, 20.0, 2.0)
     result = classify_trial(trial)
     assert result["response_type"] == "Escape"
-    assert result["reaction_time_ms"] == 120.0
+    # The source trace has no escape burst; a centered burst cannot impute RT.
+    assert np.isnan(result["reaction_time_ms"])
+    assert np.isnan(result["escape_reaction_time_ms"])
     assert result["stillness_status"] == "not_moving_at_wind"
     assert result["interval_onset_ms"] == 120.0
     assert np.isfinite(result["distance_mm"])
@@ -176,7 +184,9 @@ def test_missing_frames_after_stopping_do_not_erase_observed_crossing():
     assert result["response_type"] == "PreWalk"
     assert result["stillness_reaction_time_ms"] == 70.0
     assert result["stillness_status"] == "observed"
-    assert result["escape_reaction_time_ms"] == 120.0
+    # The acquisition gap obscures the later low-to-motion transition.
+    assert np.isnan(result["escape_reaction_time_ms"])
+    assert np.isfinite(result["distance_mm"])
 
 
 @pytest.mark.parametrize("invalid_time", [np.nan, 70.0, -500.0])
@@ -187,7 +197,7 @@ def test_bad_source_timestamp_after_stop_keeps_classifier_endpoint(invalid_time)
     assert result["response_type"] == "PreWalk"
     assert result["stillness_status"] == "observed"
     assert result["stillness_reaction_time_ms"] == 70.0
-    assert result["escape_reaction_time_ms"] == 120.0
+    assert np.isnan(result["escape_reaction_time_ms"])  # valid prefix ends before escape
     assert np.isnan(result["stop_to_escape_interval_ms"])
     assert np.isfinite(result["distance_mm"])
 
@@ -231,7 +241,8 @@ def test_wind_continuous_movement_has_no_fabricated_onset():
     assert result["response_type"] == "PreWalk"
     assert np.isnan(result["reaction_time_ms"])
     assert np.isnan(result["interval_onset_ms"])
-    assert result["stillness_status"] == "no_preescape_stop"
+    assert np.isnan(result["escape_reaction_time_ms"])
+    assert result["stillness_status"] == result["pause_status"] == "escape_first"
 
 
 @pytest.mark.parametrize("early_burst", [False, True])
@@ -242,7 +253,11 @@ def test_wind_onset_precedes_gradual_acceleration_to_burst(early_burst):
     result = classify_trial(trial)
     assert result["interval_onset_ms"] == 120.0
     assert result["escape_reaction_time_ms"] == 120.0
-    assert result["stillness_reaction_time_ms"] == 70.0
+    if early_burst:
+        assert np.isnan(result["stillness_reaction_time_ms"])
+        assert result["stillness_status"] == "escape_first"
+    else:
+        assert result["stillness_reaction_time_ms"] == 70.0
 
 
 def test_wind_onset_at_boundary_does_not_reuse_earlier_walking_onset():
@@ -265,7 +280,12 @@ def test_observed_stopping_is_independent_of_later_tail(tail_speed):
     result = classify_trial(trial)
     assert result["response_type"] == "PreWalk"
     assert result["stillness_reaction_time_ms"] == 70.0
-    assert result["escape_reaction_time_ms"] == 120.0
+    if np.isnan(tail_speed):
+        assert np.isnan(result["escape_reaction_time_ms"])
+    else:
+        # At 100 ms, (2 + 20)/2 = 11 > onset threshold. This uninterrupted
+        # acceleration leads to the burst, so its causal onset is 100 ms.
+        assert result["escape_reaction_time_ms"] == 100.0
     assert np.isfinite(result["distance_mm"])
 
 
@@ -419,7 +439,8 @@ def test_single_frame_pause_before_escape_does_not_establish_stopping():
     assert result["response_type"] == "PreWalk"
     assert np.isnan(result["stillness_reaction_time_ms"])
     assert result["stillness_status"] == "no_preescape_stop"
-    assert result["escape_reaction_time_ms"] == 120.0
+    assert np.isnan(result["escape_reaction_time_ms"])  # averaged dip is still >10
+    assert result["interval_onset_ms"] == 120.0
 
 
 def test_label_trials_exports_separate_latencies_and_qc():
@@ -508,20 +529,24 @@ def test_stopping_uses_first_crossing_not_final_pause_before_escape():
     # Raw step at 40 ms; averaged endpoint at 50 ms. The later 60 ms pause is
     # never reached because the first crossing already fired.
     assert result["stillness_reaction_time_ms"] == 50.0
-    assert result["escape_reaction_time_ms"] == 120.0
+    assert np.isnan(result["escape_reaction_time_ms"])  # source trace never bursts
+    assert result["interval_onset_ms"] == 120.0
 
 
 @pytest.mark.parametrize("stop_ms", [120.0, 220.0])
 def test_escape_deceleration_is_not_prewalk_stopping(stop_ms):
     trial = _wind_trial()
     trial["speed_raw"] = np.where(trial["t_rel"] < stop_ms, 20.0, 5.0)
+    trial.loc[trial["t_rel"].between(30.0, stop_ms, inclusive="left"), "speed_raw"] = 120.0
     result = classify_trial(trial)
     assert result["response_type"] == "PreWalk"
     assert np.isnan(result["stillness_reaction_time_ms"])
     assert np.isnan(result["reaction_time_ms"])
-    # Deceleration at/after the escape onset is not a pre-escape stop.
+    # The genuine source burst at 30 ms caps stopping before its deceleration.
+    # Its earlier onset remains unobserved in this record starting in motion.
     assert result["stillness_status"] == "no_preescape_stop"
-    assert result["escape_reaction_time_ms"] == 120.0
+    assert np.isnan(result["escape_reaction_time_ms"])
+    assert result["interval_onset_ms"] == 120.0
     assert np.isfinite(result["distance_mm"])
 
 
@@ -604,8 +629,8 @@ def test_missing_acquisition_clock_does_not_establish_stopping():
     assert result["response_type"] == "Escape"
     assert result["pause_baseline_status"] == "unobserved"
     assert np.isnan(result["stillness_reaction_time_ms"])
-    assert result["stillness_status"] == result["pause_status"] == "missing_acquisition_clock"
-    assert result["escape_reaction_time_ms"] == 120.0
+    assert result["stillness_status"] == result["pause_status"] == "invalid_data"
+    assert np.isnan(result["escape_reaction_time_ms"])
 
 
 def test_boundary_straddling_stop_is_not_rearmed_as_later_stillness():
@@ -665,9 +690,9 @@ def test_calibration_rejects_pause_started_before_air_arrival(monkeypatch):
     assert result["response_type"] == "Escape"
     assert result["pause_baseline_status"] == "intermittent_moving"
     assert np.isnan(result["stillness_reaction_time_ms"])
-    assert result["reaction_time_ms"] == 40.0
-    assert result["escape_reaction_time_ms"] == 40.0
-    assert result["short_rt"]
+    assert np.isnan(result["reaction_time_ms"])
+    assert np.isnan(result["escape_reaction_time_ms"])
+    assert not result["short_rt"]  # no observed source burst to time
 
 
 @pytest.mark.parametrize("independent", [False, True])
@@ -724,14 +749,19 @@ def test_pause_response_does_not_use_centered_escape_endpoint():
     # Centered smoothing suggests escape 30 ms before source displacement.
     trial.loc[(trial["t_rel"] >= 90.0) & (trial["t_rel"] < 120.0), "speed"] = 120.0
     result = classify_trial(trial)
-    assert result["escape_reaction_time_ms"] == 90.0
+    assert result["interval_onset_ms"] == result["latency_ms"] == 90.0
+    assert result["escape_reaction_time_ms"] == 120.0
     assert result["pause_reaction_time_ms"] == 120.0
     assert result["pause_stopping_time_ms"] == 70.0
     assert result["pause_to_escape_time_ms"] == 50.0
     assert result["pause_escape_status"] == "observed"
 
 
-def test_pause_response_finds_escape_after_wind_window_without_changing_class():
+@pytest.mark.parametrize("independent", [False, True])
+def test_pause_response_finds_escape_after_wind_window_without_changing_class(monkeypatch, independent):
+    from cercus.config import get_thresholds
+
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "independent_rtm", independent)
     trial = _wind_trial()
     t = trial["t_rel"].to_numpy()
     speed = np.where(t < 180.0, 20.0, 2.0)
@@ -743,7 +773,10 @@ def test_pause_response_finds_escape_after_wind_window_without_changing_class():
     assert np.isnan(result["distance_mm"])
     assert np.isnan(result["escape_reaction_time_ms"])
     assert result["pause_stopping_time_ms"] == 190.0
-    assert result["pause_reaction_time_ms"] == 320.0
+    if independent:
+        assert np.isnan(result["pause_reaction_time_ms"])  # hardware250 window has no burst
+    else:
+        assert result["pause_reaction_time_ms"] == 320.0
     assert result["pause_to_escape_time_ms"] == 130.0
 
 
@@ -802,7 +835,9 @@ def test_pause_response_rejects_prestopped_and_escape_deceleration(monkeypatch, 
         trial.loc[(trial["t_rel"] >= 120.0) & (trial["t_rel"] < 220.0), "speed_raw"] = 120.0
     result = classify_trial(trial)
     assert np.isnan(result["pause_stopping_time_ms"])
-    if independent and not early_escape:
+    if independent:
+        # Both traces contain a resolved low followed by the later burst;
+        # stopping remains ineligible after the earlier burst's deceleration.
         assert result["pause_reaction_time_ms"] == 120.0
     else:
         assert np.isnan(result["pause_reaction_time_ms"])
@@ -901,17 +936,17 @@ def test_pause_response_observed_prewind_onset_is_not_a_first_sample_fallback():
     assert np.isnan(result["pause_stopping_time_ms"])
 
 
-def test_pause_response_and_legacy_stopping_have_different_escape_caps():
+def test_pause_response_and_compatibility_stopping_share_causal_cap():
     trial = _wind_trial()
     trial.loc[trial["t_rel"] == 50.0, "speed"] = 2.0
     trial.loc[(trial["t_rel"] >= 60.0) & (trial["t_rel"] < 120.0), "speed"] = 120.0
     result = classify_trial(trial)
     assert result["response_type"] == "PreWalk"
-    assert result["stillness_status"] == "no_preescape_stop"
-    assert np.isnan(result["stillness_reaction_time_ms"])
-    assert result["pause_status"] == "observed"
-    assert result["pause_stopping_time_ms"] == 70.0
-    assert result["pause_to_escape_time_ms"] == 50.0
+    assert result["stillness_status"] == result["pause_status"] == "observed"
+    assert result["stillness_reaction_time_ms"] == result["pause_stopping_time_ms"] == 70.0
+    assert result["stop_to_escape_interval_ms"] == result["pause_to_escape_time_ms"] == 50.0
+    assert result["escape_reaction_time_ms"] == 120.0
+    assert result["interval_onset_ms"] == 60.0  # centered geometry stays descriptive
 
 
 @pytest.mark.parametrize("missing", ["short", "gap"])
@@ -1022,7 +1057,9 @@ def test_prewind_interruption_keeps_local_stop_but_excludes_paper_moving_cohort(
 
 def test_preescape_retains_negative_lead_time_without_short_escape_flag():
     trial = _wind_trial(wind_ms=-373.0)
-    trial.loc[(trial["t_rel"] >= -393.0) & (trial["t_rel"] < -303.0), "speed"] = 2.0
+    # Two quiet source intervals are required to resolve a <=10 causal low
+    # before the pre-wind burst; a single 2 mm/s interval averages to 11.
+    trial.loc[(trial["t_rel"] >= -403.0) & (trial["t_rel"] < -303.0), "speed"] = 2.0
     trial.loc[(trial["t_rel"] >= -383.0) & (trial["t_rel"] < -303.0), "speed"] = 120.0
     trial["speed_raw"] = trial["speed"]
     result = classify_trial(trial)
@@ -1105,3 +1142,141 @@ def test_summary_export_keeps_fraction_precision_at_cutoff(tmp_path):
     summary = pd.read_csv(export_summary_metrics(labeled, tmp_path / "fraction.csv"))
     assert summary["pause_moving_fraction"].iloc[0] == 0.149
     assert not summary["pause_moving_eligible"].iloc[0]
+
+
+@pytest.mark.parametrize("independent", [False, True])
+@pytest.mark.parametrize("centered_onset", [30.0, 90.0])
+def test_wind_escape_primary_rt_uses_source_onset_without_pause_pair(monkeypatch, independent, centered_onset):
+    from cercus.config import get_thresholds
+    from cercus.analysis.reaction_time import select_escape_latency
+
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "independent_rtm", independent)
+    trial = _wind_trial()
+    t = trial["t_rel"]
+    trial["speed"] = np.where(t.between(centered_onset, 220.0, inclusive="left"), 120.0, 2.0)
+    trial["speed_raw"] = np.where(t.between(120.0, 220.0, inclusive="left"), 120.0, 2.0)
+    legacy = classify_trial(trial.drop(columns=["speed_raw", "t_acquisition_rel"]))
+    result = classify_trial(trial)
+    assert result["response_type"] == legacy["response_type"] == "Escape"
+    assert result["interval_onset_ms"] == result["latency_ms"] == centered_onset
+    assert result["distance_mm"] == legacy["distance_mm"]
+    assert result["escape_onset_ms"] == result["escape_reaction_time_ms"] == 120.0
+    assert not result["short_rt"]  # QC follows source120 even when centered30
+    assert select_escape_latency(pd.DataFrame([{**result, "type": "baseline_wind"}])).iloc[0] == 120.0
+    assert result["pause_status"] == "not_moving_at_wind"
+    assert np.isnan(result["pause_stopping_time_ms"])
+    if independent:
+        assert result["pause_reaction_time_ms"] == 120.0
+    else:
+        assert np.isnan(result["pause_reaction_time_ms"])
+
+
+@pytest.mark.parametrize("independent", [False, True])
+def test_first_unresolved_burst_preserves_later_onset_and_shared_stop_cap(monkeypatch, independent):
+    from cercus.config import get_thresholds
+
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "independent_rtm", independent)
+    trial = _wind_trial()
+    t = trial["t_rel"]
+    speed = np.full(len(trial), 20.0)
+    speed[t.between(20.0, 70.0, inclusive="left")] = 120.0
+    speed[t.between(70.0, 100.0, inclusive="left")] = 2.0
+    speed[t.between(100.0, 200.0, inclusive="left")] = 120.0
+    speed[t >= 200.0] = 2.0
+    trial["speed"] = trial["speed_raw"] = speed
+    result = classify_trial(trial)
+    assert result["response_type"] == "PreWalk"
+    assert result["escape_onset_ms"] == result["escape_reaction_time_ms"] == 100.0
+    # The first burst has no observed starting low. Its deceleration at80 ms
+    # cannot be T1 for a second burst, even though that second onset is valid.
+    assert result["pause_status"] == result["stillness_status"] == "no_preescape_stop"
+    assert np.isnan(result["pause_stopping_time_ms"])
+    assert np.isnan(result["stillness_reaction_time_ms"])
+    assert np.isnan(result["stop_to_escape_interval_ms"])
+    if independent:
+        assert result["pause_reaction_time_ms"] == 100.0
+    else:
+        assert np.isnan(result["pause_reaction_time_ms"])
+
+
+@pytest.mark.parametrize("delay", [0.0, 50.0])
+def test_arrival_delay_preserves_hardware_burst_and_prewind_classification(monkeypatch, delay):
+    from cercus.config import get_thresholds
+
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "wind_arrival_delay_ms", delay)
+    trial = _wind_trial()
+    t = trial["t_rel"]
+    speed = np.where(t < -300.0, 2.0, 20.0)
+    speed[t.between(20.0, 50.0, inclusive="left")] = 120.0
+    speed[t >= 50.0] = 2.0
+    trial["speed"] = trial["speed_raw"] = speed
+    result = classify_trial(trial)
+    # The only qualifying causal burst is before the delayed reference at50,
+    # but it is inside the unchanged hardware-relative classification window.
+    assert result["response_type"] == "PreEscape"
+    assert result["escape_onset_ms"] == -300.0
+    assert result["escape_reaction_time_ms"] == -300.0 - delay
+    assert np.isnan(result["pause_reaction_time_ms"])
+
+
+@pytest.mark.parametrize("delay", [0.0, 50.0])
+def test_arrival_delay_does_not_extend_primary_causal_burst_window(monkeypatch, delay):
+    from cercus.config import get_thresholds
+
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "wind_arrival_delay_ms", delay)
+    trial = _wind_trial()
+    t = trial["t_rel"]
+    trial["speed"] = np.where(t.between(120.0, 220.0, inclusive="left"), 120.0, 2.0)
+    trial["speed_raw"] = np.where(t.between(260.0, 320.0, inclusive="left"), 120.0, 2.0)
+    result = classify_trial(trial)
+    assert result["response_type"] == "Escape"
+    assert np.isnan(result["escape_onset_ms"])
+    assert np.isnan(result["escape_reaction_time_ms"])
+    assert np.isnan(result["pause_reaction_time_ms"])
+    assert result["interval_onset_ms"] == 120.0
+
+
+@pytest.mark.parametrize("corruption", ["missing_speed", "invalid_clock", "all_invalid_clock"])
+def test_missing_causal_onset_never_imputes_centered_preescape(corruption):
+    trial = _wind_trial()
+    # Centered speed joins older movement into the qualifying post-wind burst.
+    trial.loc[trial["t_rel"] < -500.0, "speed"] = 2.0
+    trial.loc[trial["t_rel"].between(-500.0, 120.0, inclusive="left"), "speed"] = 20.0
+    if corruption == "missing_speed":
+        trial.loc[trial["t_rel"] == 110.0, "speed_raw"] = np.nan
+    elif corruption == "invalid_clock":
+        trial.loc[trial["t_rel"] == 110.0, "t_acquisition_rel"] = np.nan
+    else:
+        trial["t_acquisition_rel"] = np.nan
+    legacy = classify_trial(trial.drop(columns=["speed_raw", "t_acquisition_rel"]))
+    result = classify_trial(trial)
+    assert legacy["response_type"] == "PreEscape"
+    assert result["response_type"] != "PreEscape"
+    assert np.isnan(result["escape_onset_ms"])
+    assert np.isnan(result["escape_reaction_time_ms"])
+    assert result["interval_onset_ms"] == legacy["interval_onset_ms"] == -500.0
+    assert result["distance_mm"] == legacy["distance_mm"]
+
+
+@pytest.mark.parametrize("observed", [False, True])
+def test_summary_export_keeps_causal_onset_distinct_from_centered_interval(tmp_path, observed):
+    from pipeline.io import export_summary_metrics
+
+    trial = _wind_trial()
+    t = trial["t_rel"]
+    trial["speed"] = np.where(t.between(90.0, 220.0, inclusive="left"), 120.0, 2.0)
+    trial["speed_raw"] = np.where(t.between(120.0, 220.0, inclusive="left"), 120.0, 2.0)
+    if not observed:
+        trial.loc[t == 110.0, "speed_raw"] = np.nan
+    labeled = label_trials(trial)
+    labeled["global_trial_index"] = 1
+    labeled["session_id"] = 1
+    row = pd.read_csv(export_summary_metrics(labeled, tmp_path / "causal.csv")).iloc[0]
+    assert row["interval_onset_ms"] == 90.0
+    assert row["latency_ms"] == 90.0
+    assert np.isfinite(row["distance_mm"])
+    if observed:
+        assert row["escape_onset_ms"] == row["escape_reaction_time_ms"] == 120.0
+    else:
+        assert np.isnan(row["escape_onset_ms"])
+        assert np.isnan(row["escape_reaction_time_ms"])

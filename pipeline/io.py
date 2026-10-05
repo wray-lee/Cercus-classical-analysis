@@ -284,6 +284,7 @@ def export_summary_metrics(
         "interval_onset_ms": ("interval_onset_ms", "first"),
         "interval_offset_ms": ("interval_offset_ms", "first"),
         "reaction_time_ms": ("reaction_time_ms", "first"),
+        "escape_onset_ms": ("escape_onset_ms", "first"),
         "escape_reaction_time_ms": ("escape_reaction_time_ms", "first"),
         "stillness_reaction_time_ms": ("stillness_reaction_time_ms", "first"),
         "stillness_status": ("stillness_status", "first"),
