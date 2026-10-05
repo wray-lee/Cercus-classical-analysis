@@ -646,8 +646,7 @@ def plot_reaction_distance_panel(
             ax.grid(axis="y", color="#E5E7EB", lw=0.5, alpha=0.6)
 
     rt_coverage = [
-        f"RT observed — {response}: {int(np.isfinite(group['rt']).sum())}/{len(group)}; "
-        f"missing={int((~np.isfinite(group['rt'])).sum())}"
+        f"RT observed/total — {response}: {int(np.isfinite(group['rt']).sum())}/{len(group)}"
         for response, group in trial.groupby("response_type", sort=False)
         if response in classes
     ]
@@ -717,9 +716,7 @@ def plot_reaction_distance_panel(
             coverage.append(cohort_label)
             endpoint_coverage.append(
                 f"{cohort_label}; missing={coverage_n - pair_n}\n"
-                f"  T1 observed={t1_n}; missing={coverage_n - t1_n}\n"
-                f"  T2 observed={t2_n}; missing={coverage_n - t2_n}\n"
-                f"  RT observed={rt_n}; missing={coverage_n - rt_n}"
+                f"Observed: T1 {t1_n}/{coverage_n}; T2 {t2_n}/{coverage_n}; RT {rt_n}/{coverage_n}"
             )
         paired = paired[np.isfinite(paired["t1"]) & np.isfinite(paired["t2"])]
     else:
@@ -793,7 +790,7 @@ def plot_reaction_distance_panel(
             )
             t_ax.text(
                 0.5, footer_y - footer_method_offset,
-                "Boxes/dots: subject medians; lines: trial pairs",
+                "Dark dots/boxes: subject medians; faint dots/lines: trials",
                 transform=t_ax.transAxes, ha="center", va="top",
                 fontsize=annotation_size, color="0.35",
             )
@@ -848,21 +845,19 @@ def plot_reaction_distance_panel(
         window_s = float(cfg.prewalk.window_ms) / 1000.0
         frac = float(cfg.prewalk.min_moving_fraction)
         cohort_note = (
-            "T1/T2 primary: final classifier Wind PreWalk trials; missing endpoints remain in the cohort."
+            "T1/T2: final classifier Wind PreWalk; cohort N includes missing endpoints."
             if classified else
-            f"T1/T2 diagnostic: all-class eligible history (prior {window_s:g} s occupancy >={frac:.0%}, "
-            f"reference speed >{quiet:g} mm/s; not the primary PreWalk cohort)."
+            f"T1/T2 diagnostic: all-class eligible history ({window_s:g} s occupancy >={frac:.0%}; "
+            f"reference speed >{quiet:g} mm/s)."
             if moving else
-            f"T1/T2 sensitivity: prior {window_s:g} s strictly >{quiet:g} mm/s, continuous movers only."
+            f"T1/T2 sensitivity: all-class continuous movers ({window_s:g} s strictly >{quiet:g} mm/s)."
             if strict else
-            "T1/T2 diagnostic: all local transitions, including intermittent movers (not the paper cohort)."
+            "T1/T2 diagnostic: all-class local transitions, including intermittent movers."
         )
         note = (
             cohort_note + "\n"
-            "RT selector: final Wind PreWalk uses causal T1 + T2; no second history or endpoint-availability cohort filter.\n"
-            "Class trial N is separate from RT observed/missing and paired T1/T2 coverage; Escape/nonwind timing is descriptive.\n"
-            "Causal RTm is T1 + T2 (stimulus-to-escape), not either stopping endpoint alone.\n"
-            "PreEscape is a pre-wind lead. No fixed delay correction; not physiological RT."
+            "T1 = reference-to-stop; T2 = stop-to-escape; Wind PreWalk RTm = T1 + T2. Coverage: observed/total.\n"
+            "Timing is descriptive, not physiological RT; PreEscape denotes a pre-wind lead. No fixed delay correction."
         )
     else:
         note = (
