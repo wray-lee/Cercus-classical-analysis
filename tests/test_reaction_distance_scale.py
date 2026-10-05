@@ -80,10 +80,9 @@ def test_rt_and_t1_t2_prefer_same_causal_pair_without_imputation():
     assert "Wind PreWalk" in fig.axes[2].get_title()
     assert "RT observed/total — PreWalk: 1/2" in [t.get_text() for t in fig.axes[0].texts]
     note = "\n".join(t.get_text() for t in fig.texts)
-    assert "final classifier Wind PreWalk" in note
+    assert "T1/T2 Wind PreWalk" in note
     assert "cohort N includes missing endpoints" in note
-    assert "Coverage: observed/total" in note
-    assert "Wind PreWalk RTm = T1 + T2" in note
+    assert "RTm = T1+T2" in note
     plt.close(fig)
 
 

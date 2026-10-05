@@ -845,19 +845,17 @@ def plot_reaction_distance_panel(
         window_s = float(cfg.prewalk.window_ms) / 1000.0
         frac = float(cfg.prewalk.min_moving_fraction)
         cohort_note = (
-            "T1/T2: final classifier Wind PreWalk; cohort N includes missing endpoints."
+            "Wind PreWalk"
             if classified else
-            f"T1/T2 diagnostic: all-class eligible history ({window_s:g} s occupancy >={frac:.0%}; "
-            f"reference speed >{quiet:g} mm/s)."
+            f"diagnostic eligible history ({window_s:g} s >={frac:.0%}; ref >{quiet:g} mm/s)"
             if moving else
-            f"T1/T2 sensitivity: all-class continuous movers ({window_s:g} s strictly >{quiet:g} mm/s)."
+            f"sensitivity continuous movers ({window_s:g} s >{quiet:g} mm/s)"
             if strict else
-            "T1/T2 diagnostic: all-class local transitions, including intermittent movers."
+            "diagnostic local transitions"
         )
         note = (
-            cohort_note + "\n"
-            "T1 = reference-to-stop; T2 = stop-to-escape; Wind PreWalk RTm = T1 + T2. Coverage: observed/total.\n"
-            "Timing is descriptive, not physiological RT; PreEscape denotes a pre-wind lead. No fixed delay correction."
+            f"T1/T2 {cohort_note}: T1 = reference-to-stop, T2 = stop-to-escape, "
+            "RTm = T1+T2; cohort N includes missing endpoints; descriptive, no delay correction."
         )
     else:
         note = (
