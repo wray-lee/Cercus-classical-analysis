@@ -114,6 +114,7 @@ All configurable parameters are stored as YAML files in `cercus/config/defaults/
 | `colors.yaml` | Color palette (escape, prewalk, left/right, NPG palette, etc.) |
 | `trajectory.yaml` | Trajectory rendering presets (with all alternative presets documented) |
 | `visualization.yaml` | Visualization style (`bar_label_style`, etc.) |
+| `analysis.yaml` | Population rendering workers, adaptive thresholds, individual robustness checks |
 
 ### User Overrides
 
@@ -171,8 +172,8 @@ For any trial, let $v(t)$ denote walking speed, $V_b$ the burst threshold, and $
 ### 2. PreEscape (Pre-Wind Escape)
 
 When enabled (`classification.use_preescape: true`), wind trials with a qualifying burst are evaluated for early movement onset:
-- **Burst anchor**: The burst peak must remain within the post-stimulus window $[t_w, t_w + 250\text{ ms}]$.
-- **Onset search**: Escape onset ($t_e$) is located by searching backward from the qualifying burst peak to the last speed sample $\le 10\text{ mm/s}$; the immediately following sample marks $t_e$.
+- **Burst anchor**: Find the first sample exceeding the burst threshold in $[t_w, t_w + 250\text{ ms}]$.
+- **Onset search**: On the acquisition clock, search backward from that burst to the last causal 20-ms averaged speed $\le 10\text{ mm/s}$; the immediately following sample marks $t_e$. Classification and independent RTm consume this same observed onset. Missing transitions remain unresolved; tables without an acquisition endpoint retain the descriptive centered onset.
 - **Criterion**: If the backward search crosses before airflow arrival ($t_e < t_w - \text{buffer}$, with buffer default $0\text{ ms}$), the trial is classified as **PreEscape**.
 - **Significance**: In multimodal paradigms, these represent genuine escapes triggered early by the looming visual stimulus rather than the wind. In pure-wind trials, they reflect spontaneous acceleration.
 
@@ -200,14 +201,14 @@ Cercus cleanly decouples **escape movement onset** from **stimulus-induced stopp
   The latency from airflow arrival to when walking speed first drops below the $10\text{ mm/s}$ stillness threshold. Includes optical-count resolution margins (requiring $>13.33\text{ mm/s}$ at onset and confirming a drop below $<6.67\text{ mm/s}$) to guard against sensor quantization noise.
 - **Pause-to-Escape Interval T2 (`pause_to_escape_time_ms`)**:
   The duration from the confirmed pause endpoint to the subsequent escape burst.
-- **Causal Composite RTm (`pause_reaction_time_ms`)**:
-  Defined as $\text{RTm} = \text{T1} + \text{T2}$. If either endpoint cannot be resolved unambiguously, RTm is preserved as `NaN`. We never impute missing causal values with centered or synthetic estimates.
+- **Causal Motor RTm (`pause_reaction_time_ms`)**:
+  With `thresholds.reaction_time.independent_rtm: true` (default), RTm is the observed acquisition-clock escape onset minus the calibrated wind reference; a stopping endpoint is optional. Pre-wind onsets supply PreEscape lead time, never negative RTm. Setting the switch to `false` retains the stop-dependent T1/T2 measurement: RTm requires both endpoints and equals $\text{T1} + \text{T2}$. The switch does not change classifier membership. Missing causal endpoints remain `NaN`, with no centered or synthetic imputation.
 
 ### 5. Population Summaries & Cohort Consistency
 
 - **Single Authority**: Population and cross-paradigm summaries strictly follow the final classifier labels (`response_type`).
 - **Trial Integrity**: Missing reaction-time endpoints do not alter cohort sizes; trials with unresolved RT remain in their respective response class, and counts are reported alongside coverage statistics.
-- **Distance Integration**: Escape distance (`distance_mm`) is integrated from the actual movement onset ($t_e$), not the stopping point.
+- **Distance Integration**: Escape distance (`distance_mm`) retains its descriptive centered-speed interval (`interval_onset_ms` to `interval_offset_ms`). It is independent of causal RT availability; these interval timestamps may differ from the acquisition-clock onset used for classification and RTm.
 
 ## Trajectory Configuration (`config.yaml`)
 
@@ -367,6 +368,25 @@ figures/
 ```
 
 ### Population batch (`population_analysis.py`)
+
+Subject processing uses up to `--workers` processes (all CPUs by default), capped
+by the number of subjects. Rendering serializes the population DataFrame once to
+a temporary snapshot; each worker reads it once and figure jobs carry only plot
+options. The snapshot is removed when the rendering pool exits. Its directory is
+set by `analysis.parallel.cache_dir` (default `/mnt/d/Data/Results/tmp`). The pool is
+limited by `analysis.parallel.render_workers` (default `4`), `--workers`, and the
+number of figure jobs. Override the YAML values to tune another dataset:
+
+```yaml
+analysis:
+  parallel:
+    render_workers: 4
+```
+
+Logs report subject processing, rendering, individual checks, and total pipeline
+time. The local `population.ps1` batch runner uses the required WSL `torch`
+environment and accepts `-Workers`, `-Paradigms`, and WSL-path `-InputRoot` /
+`-OutputRoot` arguments.
 
 ```
 <output-dir>/

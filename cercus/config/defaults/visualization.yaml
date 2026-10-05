@@ -27,20 +27,20 @@ prewalk_stillness_figsize: [4.5, 3.5]
 # reaction_distance_panel.svg — plot_reaction_distance_panel
 # Shared distance-axis upper limit (mm); footer offsets are from axes coordinates.
 reaction_distance_max_mm: 500
-reaction_distance_figsize: [9.5, 5.0]
+reaction_distance_figsize: [9.5, 4.5]
 reaction_distance_layout:
   left: 0.085
   right: 0.99
   top: 0.91
-  bottom: 0.40
+  bottom: 0.30
   wspace: 0.42
-reaction_distance_footer_axis_y: -0.11
-reaction_distance_footer_method_offset: 0.075
-reaction_distance_footer_coverage_offset: 0.15
-reaction_distance_note_y: 0.17
+reaction_distance_footer_axis_y: -0.13
+reaction_distance_footer_method_offset: 0.05
+reaction_distance_footer_coverage_offset: 0.10
+reaction_distance_note_y: 0.095
 reaction_distance_annotation_fontsize: 6.0
 reaction_distance_note_fontsize: 5.8
-reaction_distance_stats_y: 0.035
+reaction_distance_stats_y: 0.050
 reaction_distance_stats_fontsize: 6.0
 
 # ── Kinetics plots (kinetics.py) ──

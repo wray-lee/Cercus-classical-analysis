@@ -127,6 +127,7 @@ def classify_trial(
             )
         else:
             pause.update(pause_status="missing_acquisition_clock", pause_baseline_status="unobserved")
+    causal_onset = float(pause.pop("escape_onset_ms", np.nan))
     rt_dist.update(pause)
 
     # ── 2. Priority 1 — No-burst absolute veto ──
@@ -134,16 +135,22 @@ def classify_trial(
         return {"response_type": "NoResponse", "v_max": v_max, "latency_ms": np.nan, "escape_interval_ms": np.nan, "interval_onset_ms": np.nan, "interval_offset_ms": np.nan, **rt_dist}
 
     # ── 3. PreEscape detection (any wind paradigm) ──
-    # Burst started before wind arrived → an escape already underway before
-    # the wind reference.  Keep it out of PreWalk so a pre-wind onset cannot
-    # be mistaken for a missing post-wind RT.
-    # 风前起跑 = 风到达前已经开始逃逸，优先于 PreWalk 单独成类。
+    # RTm and classification share the observed source-clock onset;
+    # the centered interval remains the descriptive distance integration basis.
+    # 风前起跑先分为 PreEscape，再判断风前运动历史，不能导出为负的 RTm。
+    classification_onset = (
+        causal_onset if np.isfinite(causal_onset) else interval_onset_ms
+    )
     if (
         USE_PRE_ESCAPE
         and is_wind
-        and pd.notna(interval_onset_ms)
-        and interval_onset_ms < onset - PREESCAPE_BUFFER_MS
+        and pd.notna(classification_onset)
+        and classification_onset < onset - PREESCAPE_BUFFER_MS
     ):
+        if np.isfinite(causal_onset):
+            rt_dist["reaction_time_ms"] = causal_onset - rt_anchor
+            rt_dist["escape_reaction_time_ms"] = causal_onset - rt_anchor
+            rt_dist["short_rt"] = False
         return {"response_type": "PreEscape", "v_max": v_max, "latency_ms": latency_ms, "escape_interval_ms": interval_ms, "interval_onset_ms": interval_onset_ms, "interval_offset_ms": interval_offset_ms, **rt_dist}
 
     # A negative PreEscape value is a lead time, not a wind reaction.

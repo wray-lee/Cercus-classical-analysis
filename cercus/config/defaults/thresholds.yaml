@@ -29,6 +29,7 @@ stillness:
   displacement_quantum_mm: 0.04712389  # mm/axis count — local resolution margin, not a validated error bound
 
 reaction_time:
+  independent_rtm: true    # true = causal reference-to-escape RTm without requiring T1/T2; false = legacy stop-dependent RTm
   short_escape_ms: 50.0    # ms — QC flag only; never clamp measured latency
   wind_arrival_delay_ms: 0.0  # ms — measured delay from stim_state to airflow at animal; 0 = uncalibrated
 

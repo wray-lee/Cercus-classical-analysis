@@ -270,8 +270,12 @@ def measure_pause_response(
 ) -> dict[str, float | str | bool]:
     """Source-clock T1/T2 with an earlier and a stop-relative later period.
 
-    Both endpoints use the same causal displacement average, never centered
-    speed or a fixed lag correction. Moving eligibility and strict history are
+    All endpoints use the same causal displacement average, never centered
+    speed or a fixed lag correction. With reaction_time.independent_rtm enabled,
+    an observed post-reference escape onset supplies RTm even without a stop;
+    a pre-wind onset is returned separately for classification. Otherwise RTm
+    requires the legacy T1/T2 pair. The stop-relative later search
+    remains available in both modes. Moving eligibility and strict history are
     separate from locally observable transitions after intermittent walking.
     Response classes and distance intervals are deliberately not returned.
     """
@@ -280,6 +284,7 @@ def measure_pause_response(
         "pause_reaction_time_ms": np.nan, "pause_status": "invalid_data",
         "pause_escape_status": "not_applicable", "pause_baseline_status": "unobserved",
         "pause_moving_fraction": np.nan, "pause_moving_eligible": False,
+        "escape_onset_ms": np.nan,
     }
     t, v = np.asarray(t_rel, dtype=float), np.asarray(speed, dtype=float)
     cfg = get_thresholds()
@@ -295,34 +300,48 @@ def measure_pause_response(
     if len(t) < 2 or t[-1] < wind_onset_ms:
         return result
     averaged, valid, max_gap = _causal_displacement_speed(t, v)
-    first = compute_escape_latency(
-        t, averaged, stim_onset_t_rel=wind_onset_ms, trial_type=trial_type,
-        use_angular_onset_refinement=False,
-    )
-    cap = float(first["latency_ms"])
     earlier_end = wind_onset_ms + float(cfg.escape.window_ms)
-    at_reference = averaged[t <= wind_onset_ms]
-    if (
-        not np.isfinite(cap)
-        or (
-            cap < wind_onset_ms
-            and cap == t[0]
-            and not (
-                len(at_reference)
-                and at_reference[-1] > ESCAPE_VMAX_THRESHOLD
-            )
-        )
-    ):
-        # Multimodal onset fallback can return the first sample even though no
-        # pre-wind onset was observed. Keep only a burst still ongoing at wind.
-        cap = earlier_end
     early_bursts = np.flatnonzero(
         (t >= wind_onset_ms) & (t <= earlier_end)
         & (averaged > ESCAPE_VMAX_THRESHOLD)
     )
+    # Classification always consumes this observed onset; the RTm switch
+    # controls endpoint availability, never the response class.
+    cap = earlier_end
     if len(early_bursts):
-        # Even an unresolved ongoing burst cannot have its deceleration
-        # relabelled as the pre-escape pause before a later burst.
+        last = int(early_bursts[0]) + 1
+        first = compute_escape_latency(
+            t[:last], averaged[:last], stim_onset_t_rel=wind_onset_ms,
+            trial_type="baseline_wind", use_angular_onset_refinement=False,
+        )
+        escape = float(first["latency_ms"])
+        result["escape_onset_ms"] = escape
+        if np.isfinite(escape):
+            cap = escape
+            if cfg.reaction_time.independent_rtm and escape >= wind_onset_ms:
+                result["pause_reaction_time_ms"] = escape - wind_onset_ms
+        else:
+            at_reference = averaged[t <= wind_onset_ms]
+            if len(at_reference) and at_reference[-1] > ESCAPE_VMAX_THRESHOLD:
+                # An ongoing, unresolved burst cannot supply a new onset.
+                cap = wind_onset_ms
+    if not cfg.reaction_time.independent_rtm:
+        first = compute_escape_latency(
+            t, averaged, stim_onset_t_rel=wind_onset_ms, trial_type=trial_type,
+            use_angular_onset_refinement=False,
+        )
+        cap = float(first["latency_ms"])
+        at_reference = averaged[t <= wind_onset_ms]
+        if (
+            not np.isfinite(cap)
+            or (
+                cap < wind_onset_ms and cap == t[0]
+                and not (len(at_reference) and at_reference[-1] > ESCAPE_VMAX_THRESHOLD)
+            )
+        ):
+            cap = earlier_end
+    if len(early_bursts):
+        # Never relabel an ongoing burst's deceleration as a pre-escape pause.
         cap = min(cap, float(t[early_bursts[0]]))
     status, fraction, reference_speed = _movement_history_metrics(
         t, averaged, wind_onset_ms, float(cfg.prewalk.window_ms), max_gap,

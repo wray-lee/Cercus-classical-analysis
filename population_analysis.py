@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import tempfile
+import time
 from pathlib import Path
-from functools import partial
 from multiprocessing import Pool, cpu_count
 
 import numpy as np
@@ -52,6 +53,9 @@ _cfg = get_config()
 _DRAW_FIXED_THRESHOLDS = bool(_cfg.visualization.draw_fixed_thresholds)              # set False to hide start/vmax reference lines on vmax plots
 _INDIVIDUAL_CHECKS = True          # ponytail: hardcoded, flip here if needed
 _INDIVIDUAL_CHECKS_FILTER_LOW_N = False
+
+# 绘图进程只接收一次完整数据；每个任务只传函数、路径和选项。
+_RENDER_DATA: pd.DataFrame | None = None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -106,23 +110,42 @@ def _process_subject(subject_name: str, sessions: list[tuple[Path, Path]]) -> pd
         return pd.DataFrame()
 
 
+def _init_render_worker(all_data: pd.DataFrame | Path) -> None:
+    """Load the shared snapshot once per worker; serial rendering uses the frame."""
+    global _RENDER_DATA
+    try:
+        _RENDER_DATA = pd.read_pickle(all_data) if isinstance(all_data, Path) else all_data
+    except Exception as exc:
+        # Keep the worker alive so its queued jobs report failure to the parent;
+        # raising in a Pool initializer causes endless worker respawns.
+        _RENDER_DATA = None
+        log.error("Failed to load render snapshot %s: %s", all_data, exc)
+    import matplotlib
+    matplotlib.use("Agg")
+
+
 def _render_and_save(job_tuple) -> str:
-    """Wrapper for parallel figure rendering. job_tuple = (plot_func, output_path, args, kwargs)."""
+    """Render (plot_func, output_path, kwargs) using the initialized frame."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    plot_func, output_path, args, kwargs = job_tuple
+    if _RENDER_DATA is None:
+        raise RuntimeError("Population render data has not been initialized; check the snapshot load error")
+    plot_func, output_path, kwargs = job_tuple
+    fig = None
     try:
-        fig = plot_func(*args, **kwargs)
+        fig = plot_func(_RENDER_DATA, **kwargs)
         if fig is None:  # figure not applicable to this dataset (missing cols)
             return ""
         _safe_savefig(fig, output_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
         return str(output_path)
     except Exception as exc:
         log.error("Failed to render %s: %s", output_path.name, exc)
         return ""
+    finally:
+        if fig is not None:
+            plt.close(fig)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -131,7 +154,15 @@ def _render_and_save(job_tuple) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    global _RENDER_DATA
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.workers is not None and args.workers < 1:
+        parser.error("--workers must be at least 1")
+    render_worker_cap = int(get_config().analysis.parallel.render_workers)
+    if render_worker_cap < 1:
+        raise ValueError("analysis.parallel.render_workers must be at least 1")
+    t_pipeline = time.perf_counter()
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -147,15 +178,16 @@ def main(argv: list[str] | None = None) -> None:
 
     # ── Per-subject parallel processing ──
     n_workers = args.workers if args.workers else cpu_count()
-    log.info("Processing %d subjects with %d workers...", len(subjects), n_workers)
+    n_subject_workers = min(n_workers, len(subjects))
+    log.info("Processing %d subjects with %d workers...", len(subjects), n_subject_workers)
 
-    if n_workers == 1:
-        # Single-threaded fallback
+    t_subjects = time.perf_counter()
+    if n_subject_workers == 1:
         population_parts = [_process_subject(name, sess) for name, sess in subjects.items()]
     else:
-        # Parallel processing
-        with Pool(processes=n_workers) as pool:
+        with Pool(processes=n_subject_workers) as pool:
             population_parts = pool.starmap(_process_subject, subjects.items())
+    log.info("Subject processing complete in %.2fs.", time.perf_counter() - t_subjects)
 
     # Filter out empty DataFrames
     population_parts = [df for df in population_parts if not df.empty]
@@ -274,51 +306,71 @@ def main(argv: list[str] | None = None) -> None:
     ft_t_bin_s = float(getattr(ft_cfg, "t_bin_s", 0.005)) if ft_cfg else 0.005
     ft_dt_ms = float(getattr(ft_cfg, "dt_ms", 2.0)) if ft_cfg else 2.0
 
-    # ── Build plot job list: (func, output_path, args, kwargs) ──
+    # ── Build plot job list: (func, output_path, kwargs) ──
     plot_jobs = [
-        (plot_population_habituation, pop_dir / "habituation.svg", (all_data,), {}),
-        (plot_population_vmax_moving_gmm, pop_dir / "vmax_moving_gmm.svg", (all_data,),
+        (plot_population_habituation, pop_dir / "habituation.svg", {}),
+        (plot_population_vmax_moving_gmm, pop_dir / "vmax_moving_gmm.svg",
          {"gmm_escape_threshold": gmm_escape_threshold, "draw_fixed_thresholds": _DRAW_FIXED_THRESHOLDS}),
-        (plot_population_behavior_probability, pop_dir / "behavior_prob.svg", (all_data,), {}),
-        (plot_reaction_distance_panel, pop_dir / "reaction_distance_panel.svg", (all_data,), {}),
-        (plot_prewalk_stillness, pop_dir / "prewalk_stillness.svg", (all_data,), {}),
-        (plot_population_speed_kinetics, pop_dir / "speed_kinetics.svg", (all_data,), {}),
-        (plot_population_spaghetti_kinetics, pop_dir / "spaghetti_kinetics.svg", (all_data,), {}),
-        (plot_spaghetti_kinetics_heatmap, heatmap_dir / "spaghetti_density_heatmap.svg", (all_data,), {}),
-        (plot_trial_stacked_heatmap, heatmap_dir / "trial_stacked_heatmap_ttc.svg", (all_data,), {"align": "ttc"}),
-        (plot_trial_stacked_heatmap, heatmap_dir / "trial_stacked_heatmap_onset.svg", (all_data,), {"align": "onset"}),
-        (plot_spaghetti_kinetics_heatmap, full_trial_dir / "spaghetti_density_heatmap.svg", (all_data,),
+        (plot_population_behavior_probability, pop_dir / "behavior_prob.svg", {}),
+        (plot_reaction_distance_panel, pop_dir / "reaction_distance_panel.svg", {}),
+        (plot_prewalk_stillness, pop_dir / "prewalk_stillness.svg", {}),
+        (plot_population_speed_kinetics, pop_dir / "speed_kinetics.svg", {}),
+        (plot_population_spaghetti_kinetics, pop_dir / "spaghetti_kinetics.svg", {}),
+        (plot_spaghetti_kinetics_heatmap, heatmap_dir / "spaghetti_density_heatmap.svg", {}),
+        (plot_trial_stacked_heatmap, heatmap_dir / "trial_stacked_heatmap_ttc.svg", {"align": "ttc"}),
+        (plot_trial_stacked_heatmap, heatmap_dir / "trial_stacked_heatmap_onset.svg", {"align": "onset"}),
+        (plot_spaghetti_kinetics_heatmap, full_trial_dir / "spaghetti_density_heatmap.svg",
          {"t_window": ft_t_window_density, "dt": ft_dt_ms, "orientation": "vertical"}),
-        (plot_trial_stacked_heatmap, full_trial_dir / "trial_stacked_heatmap_ttc.svg", (all_data,),
+        (plot_trial_stacked_heatmap, full_trial_dir / "trial_stacked_heatmap_ttc.svg",
          {"align": "ttc", "t_window": ft_t_window_ttc, "t_bin_s": ft_t_bin_s, "orientation": "vertical"}),
-        (plot_trial_stacked_heatmap, full_trial_dir / "trial_stacked_heatmap_onset.svg", (all_data,),
+        (plot_trial_stacked_heatmap, full_trial_dir / "trial_stacked_heatmap_onset.svg",
          {"align": "onset", "t_window": ft_t_window_onset, "t_bin_s": ft_t_bin_s, "orientation": "vertical"}),
-        (plot_escape_angle_distribution, pop_dir / "escape_angle_distribution.svg", (all_data,), {}),
-        (plot_population_polar_histogram, pop_dir / "polar_direction_histogram.svg", (all_data,), {}),
-        (plot_population_pre_movement_prewalk, pop_dir / "pre_movement_prewalk.svg", (all_data,), {}),
+        (plot_escape_angle_distribution, pop_dir / "escape_angle_distribution.svg", {}),
+        (plot_population_polar_histogram, pop_dir / "polar_direction_histogram.svg", {}),
+        (plot_population_pre_movement_prewalk, pop_dir / "pre_movement_prewalk.svg", {}),
     ]
 
-    log.info("Rendering %d figures with %d workers...", len(plot_jobs), n_workers)
+    # Limit full-frame copies separately from the subject-processing pool.
+    n_render_workers = min(n_workers, render_worker_cap, len(plot_jobs))
+    log.info("Rendering %d figures with %d workers...", len(plot_jobs), n_render_workers)
 
-    if n_workers == 1:
-        # Sequential fallback
-        for job in plot_jobs:
-            _render_and_save(job)
+    t_render = time.perf_counter()
+    if n_render_workers == 1:
+        _init_render_worker(all_data)
+        try:
+            for job in plot_jobs:
+                _render_and_save(job)
+        finally:
+            _RENDER_DATA = None
     else:
-        # Parallel rendering
-        with Pool(processes=n_workers) as pool:
-            pool.map(_render_and_save, plot_jobs)
+        # Serialize once; workers read the snapshot concurrently instead of
+        # transporting the full frame through the process-startup pipe.
+        cache_root = Path(get_config().analysis.parallel.cache_dir).expanduser()
+        cache_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="population-render-", dir=cache_root) as cache_dir:
+            cache_path = Path(cache_dir) / "population.pkl"
+            all_data.to_pickle(cache_path)
+            with Pool(
+                processes=n_render_workers,
+                initializer=_init_render_worker,
+                initargs=(cache_path,),
+            ) as pool:
+                pool.map(_render_and_save, plot_jobs)
+    log.info("Figure rendering complete in %.2fs.", time.perf_counter() - t_render)
 
     # ── Individual-level robustness checks (pseudo-replication guard) ──
     if _INDIVIDUAL_CHECKS:
         from cercus.analysis.individual import run_individual_checks
 
         log.info("Running per-animal robustness checks...")
+        t_individual = time.perf_counter()
         run_individual_checks(all_data, output_dir, filter_low_n=_INDIVIDUAL_CHECKS_FILTER_LOW_N)
+        log.info("Individual checks complete in %.2fs.", time.perf_counter() - t_individual)
 
     log.info("Figures saved to %s/: habituation.svg, vmax_moving_gmm.svg, behavior_prob.svg, prewalk_stillness.svg, speed_kinetics.svg, spaghetti_kinetics.svg, escape_angle_distribution.svg, polar_direction_histogram.svg, pre_movement_prewalk.svg", pop_dir.name)
     log.info("Heatmaps saved to %s/heatmap/ and %s/heatmap/full_trial/: spaghetti_density_heatmap.svg, trial_stacked_heatmap_ttc.svg, trial_stacked_heatmap_onset.svg", pop_dir.name, pop_dir.name)
     log.info("All output in: %s", output_dir)
+    log.info("Population pipeline complete in %.2fs.", time.perf_counter() - t_pipeline)
 
 
 if __name__ == "__main__":

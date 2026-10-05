@@ -670,6 +670,55 @@ def test_calibration_rejects_pause_started_before_air_arrival(monkeypatch):
     assert result["short_rt"]
 
 
+@pytest.mark.parametrize("independent", [False, True])
+@pytest.mark.parametrize("wind_ms", [0.0, -373.0])
+def test_independent_rtm_does_not_require_stopping(monkeypatch, independent, wind_ms):
+    from cercus.config import get_thresholds
+    from cercus.analysis.reaction_time import select_escape_latency
+
+    trial = _wind_trial(wind_ms)
+    trial.loc[trial["t_rel"] <= wind_ms, "speed_raw"] = 12.0
+    config = get_thresholds().reaction_time._data
+    monkeypatch.setitem(config, "independent_rtm", False)
+    old = classify_trial(trial)
+    monkeypatch.setitem(config, "independent_rtm", independent)
+    result = classify_trial(trial)
+    assert result["response_type"] == old["response_type"] == "PreWalk"
+    assert result["distance_mm"] == old["distance_mm"]
+    assert result["escape_reaction_time_ms"] == old["escape_reaction_time_ms"]
+    assert result["pause_status"] == old["pause_status"] == "threshold_unresolved"
+    assert np.isnan(result["pause_stopping_time_ms"])
+    assert np.isnan(result["pause_to_escape_time_ms"])
+    selected = select_escape_latency(pd.DataFrame([{**result, "type": trial["type"].iloc[0]}])).iloc[0]
+    if independent:
+        assert result["pause_reaction_time_ms"] == selected == 120.0
+    else:
+        assert np.isnan(result["pause_reaction_time_ms"])
+        assert np.isnan(selected)
+
+
+@pytest.mark.parametrize("independent", [False, True])
+@pytest.mark.parametrize("wind_ms", [0.0, -225.0])
+def test_classification_and_rtm_share_causal_prewind_onset(monkeypatch, independent, wind_ms):
+    from cercus.config import get_thresholds
+    from cercus.analysis.reaction_time import select_escape_latency
+
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "independent_rtm", independent)
+    trial = _wind_trial(wind_ms)
+    t = trial["t_acquisition_rel"] - wind_ms
+    # Centered speed suggests a later burst; the source trace has already
+    # crossed the onset threshold before wind, into its first qualifying burst.
+    trial["speed_raw"] = np.where(t < -300.0, 2.0, 20.0)
+    trial.loc[(t >= 20.0) & (t < 220.0), "speed_raw"] = 120.0
+    result = classify_trial(trial)
+    selected = select_escape_latency(pd.DataFrame([{**result, "type": trial["type"].iloc[0]}])).iloc[0]
+    assert result["response_type"] == "PreEscape"
+    assert result["escape_reaction_time_ms"] == selected == -300.0
+    # Pre-wind lead time must never be exported as motor reaction time.
+    assert np.isnan(result["pause_reaction_time_ms"])
+    assert np.isfinite(result["distance_mm"])
+
+
 def test_pause_response_does_not_use_centered_escape_endpoint():
     trial = _wind_trial()
     # Centered smoothing suggests escape 30 ms before source displacement.
@@ -738,8 +787,12 @@ def test_pause_response_keeps_first_stop_without_rearming_and_preserves_clock_su
     assert result["pause_reaction_time_ms"] == result["pause_stopping_time_ms"] + result["pause_to_escape_time_ms"]
 
 
+@pytest.mark.parametrize("independent", [False, True])
 @pytest.mark.parametrize("early_escape", [False, True])
-def test_pause_response_rejects_prestopped_and_escape_deceleration(early_escape):
+def test_pause_response_rejects_prestopped_and_escape_deceleration(monkeypatch, early_escape, independent):
+    from cercus.config import get_thresholds
+
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "independent_rtm", independent)
     trial = _wind_trial()
     if early_escape:
         trial["speed_raw"] = np.where(trial["t_rel"] < 60.0, 120.0, 2.0)
@@ -749,7 +802,10 @@ def test_pause_response_rejects_prestopped_and_escape_deceleration(early_escape)
         trial.loc[(trial["t_rel"] >= 120.0) & (trial["t_rel"] < 220.0), "speed_raw"] = 120.0
     result = classify_trial(trial)
     assert np.isnan(result["pause_stopping_time_ms"])
-    assert np.isnan(result["pause_reaction_time_ms"])
+    if independent and not early_escape:
+        assert result["pause_reaction_time_ms"] == 120.0
+    else:
+        assert np.isnan(result["pause_reaction_time_ms"])
     assert result["pause_status"] in ("not_moving_at_wind", "escape_first", "no_preescape_stop")
 
 
@@ -968,6 +1024,7 @@ def test_preescape_retains_negative_lead_time_without_short_escape_flag():
     trial = _wind_trial(wind_ms=-373.0)
     trial.loc[(trial["t_rel"] >= -393.0) & (trial["t_rel"] < -303.0), "speed"] = 2.0
     trial.loc[(trial["t_rel"] >= -383.0) & (trial["t_rel"] < -303.0), "speed"] = 120.0
+    trial["speed_raw"] = trial["speed"]
     result = classify_trial(trial)
     assert result["response_type"] == "PreEscape"
     assert result["escape_reaction_time_ms"] == -10.0
@@ -1014,18 +1071,24 @@ def test_moving_fraction_cutoff_is_configurable_and_roundoff_safe(monkeypatch, m
     assert result["pause_stopping_time_ms"] == 70.0  # local measurement independent
 
 
+@pytest.mark.parametrize("independent", [False, True])
 @pytest.mark.parametrize("speed,eligible", [(10.0, False), (10.0 + 1e-9, False), (12.0, True)])
-def test_moving_reference_threshold_does_not_borrow_stopping_resolution_margin(speed, eligible):
+def test_moving_reference_threshold_does_not_borrow_stopping_resolution_margin(monkeypatch, speed, eligible, independent):
+    from cercus.config import get_thresholds
     from cercus.analysis.reaction_time import select_escape_latency
 
+    monkeypatch.setitem(get_thresholds().reaction_time._data, "independent_rtm", independent)
     trial = _wind_trial()
     trial.loc[trial["t_rel"] <= 0.0, "speed_raw"] = speed
     result = classify_trial(trial)
     assert result["pause_moving_eligible"] == eligible
     assert result["pause_status"] == "threshold_unresolved"
-    assert np.isnan(result["pause_reaction_time_ms"])
+    if independent:
+        assert result["pause_reaction_time_ms"] == 120.0
+    else:
+        assert np.isnan(result["pause_reaction_time_ms"])
     selected = select_escape_latency(pd.DataFrame([{**result, "type": "baseline_wind"}])).iloc[0]
-    if eligible:
+    if eligible and not independent:
         assert np.isnan(selected)
     else:
         assert selected == 120.0

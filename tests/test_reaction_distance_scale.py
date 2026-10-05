@@ -82,7 +82,7 @@ def test_rt_and_t1_t2_prefer_same_causal_pair_without_imputation():
     note = "\n".join(t.get_text() for t in fig.texts)
     assert "T1/T2 Wind PreWalk" in note
     assert "cohort N includes missing endpoints" in note
-    assert "RTm = T1+T2" in note
+    assert "RTm = reference-to-escape (T1+T2 when paired)" in note
     plt.close(fig)
 
 
@@ -219,6 +219,24 @@ def test_endpoint_coverage_keeps_single_and_double_missing_in_class_cohort():
     assert "RT observed/total — PreWalk: 1/3" in rt_text
     assert "Observed: T1 2/3; T2 1/3; RT 1/3" in pair_text
     assert "paired 1/3; missing=2" in pair_text
+    plt.close(fig)
+
+
+def test_negative_causal_prewalk_rt_is_missing_not_clamped_or_reclassified():
+    df = pd.DataFrame({
+        "subject_id": ["a", "b"], "global_trial_id": [1, 1],
+        "response_type": ["PreWalk", "PreEscape"], "type": ["looming_wind"] * 2,
+        "escape_reaction_time_ms": [20.0, -74.0],
+        "pause_reaction_time_ms": [-74.0, np.nan],
+        "pause_stopping_time_ms": [np.nan] * 2, "pause_to_escape_time_ms": [np.nan] * 2,
+        "distance_mm": [10.0] * 2,
+    })
+    before = df.copy(deep=True)
+    fig = plot_reaction_distance_panel(df)
+    assert list(fig.axes[0].collections[0].get_offsets()[:, 1]) == [-74.0]
+    assert "RT observed/total — PreWalk: 0/1" in _panel_text(fig.axes[0])
+    assert len(fig.axes[1].collections) == 2
+    pd.testing.assert_frame_equal(df, before)
     plt.close(fig)
 
 

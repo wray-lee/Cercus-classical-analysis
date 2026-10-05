@@ -8,7 +8,7 @@ import pandas as pd
 def select_escape_latency(trials: pd.DataFrame) -> pd.Series:
     """Use final response classes, never reselect trials from motion history.
 
-    Wind PreWalk uses causal RTm with missing endpoints left missing; Escape
+    Wind PreWalk uses nonnegative causal RTm with missing endpoints left missing; Escape
     keeps its descriptive escape timing, PreEscape its lead time, and NoResponse
     has no primary RT. Unlabeled/nonwind/legacy tables keep their timing basis.
     Endpoint availability does not redefine the classifier cohort.
@@ -26,6 +26,6 @@ def select_escape_latency(trials: pd.DataFrame) -> pd.Series:
             rt.loc[prewalk] = np.nan
             if "pause_reaction_time_ms" in trials:
                 causal = pd.to_numeric(trials["pause_reaction_time_ms"], errors="coerce")
-                rt.loc[prewalk] = causal.loc[prewalk]
+                rt.loc[prewalk] = causal.where(causal >= 0.0).loc[prewalk]
         rt.loc[trials["response_type"].eq("NoResponse")] = np.nan
     return rt.where(np.isfinite(rt))

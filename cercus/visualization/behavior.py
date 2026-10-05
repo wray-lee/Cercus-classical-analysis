@@ -854,8 +854,8 @@ def plot_reaction_distance_panel(
             "diagnostic local transitions"
         )
         note = (
-            f"T1/T2 {cohort_note}: T1 = reference-to-stop, T2 = stop-to-escape, "
-            "RTm = T1+T2; cohort N includes missing endpoints; descriptive, no delay correction."
+            f"T1/T2 {cohort_note}: T1 = reference-to-stop, T2 = stop-to-escape; "
+            "RTm = reference-to-escape (T1+T2 when paired); cohort N includes missing endpoints; no delay correction."
         )
     else:
         note = (

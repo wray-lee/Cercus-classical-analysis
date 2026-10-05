@@ -22,6 +22,14 @@ individual:
   # Include PreEscape and PreWalk alongside Escape in population individual checks.
   include_prewalk: true
 
+# Population rendering: each worker loads the full frame once from a snapshot.
+parallel:
+  # Conservative default verified on the 360-trial replay; tune for other datasets.
+  # The pool also respects --workers and never exceeds the figure job count.
+  render_workers: 4
+  # WSL path for temporary snapshots; each run removes its cache on pool exit.
+  cache_dir: /mnt/d/Data/Results/tmp
+
 # Adaptive V_max thresholding in population_analysis.py
 vmax_thresholding:
   # Set true to use adaptive threshold (KDE/GMM); false to use escape.vmax_threshold from config
