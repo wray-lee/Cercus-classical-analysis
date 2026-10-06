@@ -84,6 +84,7 @@ python mcmc_analysis.py --input-dir path/to/data/ --output results/
 | `python -m cercus.cli.app trial-panels --input <dir> --output <dir> [--workers N]` | Per-trial composite panels (parallel) | `plot_trial_panels.py` |
 | `python -m cercus.cli.app trajectories --input <dir> --output <dir>` | Unified trajectory overlay | `plot_all_trajectories_fixed.py` |
 | `python -m cercus.cli.app full --input <parent-dir> --output <dir> [--workers N]` | Cross-paradigm (full) mode: global V_max threshold + dumbbell figure | — |
+| `python -m cercus.cli.app ms --input <parent-dir> --output <dir> [--workers N]` | All-pattern MS summaries, incomplete-condition coverage and animal-bootstrap probability enhancement | — |
 | `python -m cercus.cli.app calibrate --input <dir>` | Estimate airflow stimulus angle offset | `tools/calibrate_offset.py` |
 
 **Performance Note**: The `population` and `trial-panels` commands use multiprocessing to parallelize subject processing and visualization rendering. Use `--workers N` to control concurrency (default: all CPU cores). Single-threaded fallback: `--workers 1`.
@@ -208,6 +209,8 @@ Cercus cleanly decouples **escape movement onset** from **stimulus-induced stopp
 ### 5. Population Summaries & Cohort Consistency
 
 - **Single Authority**: Population and cross-paradigm summaries strictly follow the final classifier labels (`response_type`).
+- **Derived Response Grouping**: The raw `response_type` column is never modified. `label_trials` adds a *derived* `response_group` column; with `analysis.response_grouping.merge_prewalk: true` (default) it folds raw `PreWalk` into `Escape` while `PreEscape` and `NoResponse` stay separate (`false` mirrors the raw labels exactly). Unknown/missing labels are preserved, never coerced to `NoResponse`. The toggle must be a YAML boolean — a string like `"false"` is rejected. Main aggregate views (behavior probability, population kinetics/heatmaps, default polar panels, the population V_max response annotation, and paradigm response-rate and RT/distance panels) use the derived group; raw diagnostics stay on raw `response_type` — per-trial routing, PreWalk stillness, habituation counts, the per-class V_max distribution, explicit-type polar panels, MCMC/KM binary modes, individual/PreWalk-vs-Escape circular tests, and `select_escape_latency` RT membership (the endpoint is selected per raw class *before* the display group is derived). `escape_rate` remains `is_valid_escape`-based; the distinct `escape_group_rate` reflects the derived group.
+- **Independent Pre-Stimulus Baseline (`prestim_*`)**: A separate motion measurement of the one-second window *before the first stimulus*, computed on the raw full-session kinematics (acquisition clock `ard_time`, speed denominator `hypot(dx,dy)/Δard_time`) — never from the classifier's cropped slice — and attached to every trial including `NoResponse`. `prestim_reference_kind` is `visual_event_sample` for visual/multisensory trials (the documented `Looming` event mapped to the last observed sample at or before it; a missing event stays `unobserved`, never a later wind/TTC/escape fallback), `calibrated_wind` for wind-only trials (first binary valve frame + `wind_arrival_delay_ms`), or `unobserved`. Host `sys_time` only locates the event; the history is bounded to the local continuous acquisition segment (never bridged across a session, invalid timestamp, or gap) and requires the 1-s window plus the causal averaging margin. MS's existing `pause_*` diagnostics remain wind-anchored and are independent of `prestim_*`.
 - **Trial Integrity**: Missing reaction-time endpoints do not alter cohort sizes; trials with unresolved RT remain in their respective response class, and counts are reported alongside coverage statistics.
 - **Distance Integration**: Escape distance (`distance_mm`) retains its descriptive centered-speed interval (`interval_onset_ms` to `interval_offset_ms`). It is independent of causal RT availability; these interval timestamps may differ from the acquisition-clock onset used for classification and RTm.
 
@@ -324,6 +327,49 @@ Computes three candidate thresholds independently on **all trials** (not filtere
 | `spaghetti_kinetics_heatmap_fullres.svg` | Full-trial high-resolution heatmap (no onset alignment) |
 | `escape_angle_distribution.svg` | Escape direction histogram + KDE |
 | `polar_direction_histogram.svg` | Polar rose with Rayleigh p-value |
+
+### Multisensory pattern mode (`python -m cercus.cli.app ms`)
+
+Input is the pattern parent directory, for example `D:\Data\train`, with `bv`,
+`bw`, and signed TTC pattern subdirectories. Run in the required WSL environment:
+
+```bash
+wsl -e zsh -i -c "source ~/.zshrc && openconda && conda activate torch && cd /mnt/d/Projects/Cercus-cli && python -m cercus.cli.app ms --input /mnt/d/Data/train --output /mnt/d/Data/Results/tmp/ms_mode --workers 1"
+```
+
+The mode processes standard paired source CSVs once per animal and returns trial
+summaries from workers to limit memory use. Missing/empty patterns stay visible in
+`ms_coverage.csv` and the overview figure; failed animals and unsupported schemas
+are reported. Expected pattern names, worker count, bootstrap settings, and
+excluded aggregate directories live in `analysis.multisensory`; figure geometry
+lives in `visualization.multisensory`. Outputs must be outside the input tree.
+
+| Output | Meaning |
+|---|---|
+| `ms_summary.csv` | Raw labels and diagnostics, derived grouping, selected RT endpoint, independent prestim baseline, pooled Vmax diagnostic |
+| `ms_subject_summary.csv` | Per-animal/condition probabilities, median timing/distance, classifier N and RT observed/missing counts |
+| `ms_response_probabilities.csv` | Raw-class counts/proportions with the corresponding derived group |
+| `ms_coverage.csv`, `ms_meta.json` | Available/partial/empty/missing/unsupported/failed patterns, failures and effective configuration |
+| `ms_prestim_outcomes.csv` | Prestim status × raw/derived outcome counts, including unobserved history |
+| `ms_probability_enhancement.csv` | Any-burst probability differences vs the stronger unimodal response and the independence reference, with animal-bootstrap intervals |
+| `ms_overview.svg`, `ms_probability_enhancement.svg` | Pattern overview and probability comparison figures |
+
+The overview Escape probability uses the configured derived group (raw PreWalk
+can merge into Escape; raw PreEscape remains separate). Enhancement uses the same
+**any-burst** endpoint for BV/BW/MS, including raw PreEscape, so visual-triggered
+MS responses are compared with visual-control bursts. Baselines are matched on
+recorded looming parameters. When initial angle is unrecorded in both sources,
+matching uses `lv_ratio_ms` and explicitly reports that limitation. Animals receive
+equal weight; bootstrap sampling stays within independent paradigms. Missing
+baselines or too few animals leave intervals unavailable.
+
+The probability independence reference `P(V)+P(W)-P(V)P(W)` is descriptive; it is
+not a reaction-time race-model bound. Visual timing is TTC-relative and wind timing
+uses the calibrated wind reference, so these endpoints are labeled separately.
+The legacy aggregate `all` directory is excluded: its processed positions/speed
+schema does not establish the acquisition-clock increments needed by the current
+classifier, and treating it as another pattern could duplicate source trials.
+The existing `mcmc` and `multisensory-traj` commands retain their separate roles.
 
 ### `pipeline/mcmc.py`
 Bayesian psychophysics via PyMC/NumPyro. Fits psychometric sigmoid functions to escape probability vs. TTC, tests multisensory integration hypotheses (ROPE-based posterior probability), computes Bayesian optimal integration (variance reduction), and performs survival analysis (Kaplan-Meier, Race Model Inequality).

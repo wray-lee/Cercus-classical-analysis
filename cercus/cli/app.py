@@ -121,6 +121,17 @@ def multisensory_traj(
     run_ms(argv)
 
 
+@app.command("ms")
+def ms(
+    input: Path = typer.Option(..., "--input", "-i", help="Parent directory containing all pattern folders (BV/BW/MS)"),
+    output: Path = typer.Option(..., "--output", "-o", help="Directory outside the input tree for MS tables and figures"),
+    workers: Optional[int] = typer.Option(None, "--workers", min=1, help="Parallel subject workers (default: analysis.multisensory.workers)"),
+) -> None:
+    """Multisensory analysis across patterns, with explicit missing-condition coverage."""
+    from cercus.analysis.multisensory import run_ms_analysis
+    run_ms_analysis(input, output, workers=workers)
+
+
 @app.command()
 def calibrate(
     input: Path = typer.Option(..., "--input", "-i", help="Directory containing session CSV folders"),
@@ -160,7 +171,7 @@ def full(
     output.mkdir(parents=True, exist_ok=True)
 
     trial_cols = [
-        "paradigm", "subject_id", "global_trial_index", "response_type", "type",
+        "paradigm", "subject_id", "global_trial_index", "response_type", "response_group", "type",
         "v_max", "latency_ms", "interval_onset_ms", "interval_offset_ms",
         "reaction_time_ms", "escape_onset_ms", "escape_reaction_time_ms", "stillness_reaction_time_ms",
         "stillness_status", "stillness_presence", "stop_to_escape_interval_ms",
@@ -168,7 +179,10 @@ def full(
         "pause_status", "pause_escape_status", "pause_baseline_status",
         "pause_moving_fraction", "pause_moving_eligible",
         "stillness_baseline_status", "stillness_window_start_ms", "short_rt", "distance_mm", "distance_500ms_mm", "is_valid_escape",
+        "prestim_reference_kind", "prestim_status", "prestim_moving_fraction",
+        "prestim_reference_offset_ms", "prestim_reference_sample_offset_ms", "prestim_reference_speed_mm_s",
     ]
+    trial_cols = [c for c in trial_cols if c in df.columns]
     trial = (
         df.groupby(["paradigm", "subject_id", "global_trial_index"])
         .agg({c: "first" for c in trial_cols[3:]})

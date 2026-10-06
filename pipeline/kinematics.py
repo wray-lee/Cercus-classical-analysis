@@ -248,6 +248,18 @@ def preprocess(
     """
     Per-trial integration anchored to lifecycle-derived TTC timestamps.
     """
+    # ponytail: deferred import — cercus.analysis imports visualization which
+    # imports pipeline.classifier, which imports this module at load time.
+    from cercus.analysis.baseline import (
+        PRESTIM_COLUMNS,
+        build_session_blocks,
+        measure_window_prestim,
+    )
+
+    # Independent pre-stimulus baseline is measured on the RAW session here,
+    # where the uncropped acquisition clock is available — never inside
+    # ``label_trials`` from the cropped slice.
+    session_blocks = build_session_blocks(kin)
     parts: list[pd.DataFrame] = []
     for window in trial_windows:
         tid = window["global_trial_id"]
@@ -325,7 +337,13 @@ def preprocess(
             log.warning("Trial %s: absolute baseline (no visual, no wind); using trial midpoint as zero.", tid)
 
         try:
-            parts.append(_integrate_trial(trial_kin, t_zero_sys))
+            integrated = _integrate_trial(trial_kin, t_zero_sys)
+            prestim = measure_window_prestim(
+                session_blocks, window, trial_type, t_zero_sys,
+            )
+            for col in PRESTIM_COLUMNS:
+                integrated[col] = prestim[col]
+            parts.append(integrated)
         except Exception as exc:
             log.warning("Skipping trial %s during integration: %s", tid, exc)
 

@@ -19,6 +19,7 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
 )
 from cercus.config import get_visualization
+from cercus.analysis.response_groups import effective_main_types, response_group_series
 from cercus.constants.response_types import RESPONSE_TYPES
 
 log = logging.getLogger(__name__)
@@ -153,7 +154,7 @@ def plot_vmax_distribution(
     if figsize is None:
         vis = get_visualization()
         figsize = tuple(vis.get("vmax_distribution_figsize", (5.0, 3.5)))
-    df_resp = df[df["response_type"] == "Escape"].copy()
+    df_resp = df[df["response_type"].eq("Escape")].copy()
     if df_resp.empty:
         log.warning("No Escape trials for V_max distribution plot.")
         fig, ax = plt.subplots(figsize=figsize)
@@ -382,14 +383,17 @@ def plot_population_vmax_response(
             va="top",
         )
 
-    n_esc = len(_get_trial_vmax(df, response_filter=["Escape"]))
-    n_pre = len(_get_trial_vmax(df, response_filter=["PreEscape"]))
-    n_pw = len(_get_trial_vmax(df, response_filter=["PreWalk"]))
+    trials = df.drop_duplicates(["subject_id", "global_trial_id"])
+    groups = response_group_series(trials)
+    counts = "  ".join(
+        f"{label}: {int((groups.eq(label) & trials['v_max'].notna()).sum())}"
+        for label in effective_main_types() if label != "NoResponse"
+    )
     n_subjects = df["subject_id"].nunique()
     ax.text(
         0.97,
         0.70,
-        f"Escape: {n_esc}  PreEscape: {n_pre}  PreWalk: {n_pw}\n({n_subjects} subjects)",
+        f"{counts}\n({n_subjects} subjects)",
         transform=ax.transAxes,
         ha="right",
         va="top",

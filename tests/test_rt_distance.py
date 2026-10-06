@@ -1138,9 +1138,11 @@ def test_summary_export_keeps_fraction_precision_at_cutoff(tmp_path):
     labeled["global_trial_index"] = 1
     labeled["session_id"] = 1
     labeled["pause_moving_fraction"] = 0.149
+    labeled["prestim_moving_fraction"] = 0.149123456789
     labeled["pause_moving_eligible"] = False
     summary = pd.read_csv(export_summary_metrics(labeled, tmp_path / "fraction.csv"))
     assert summary["pause_moving_fraction"].iloc[0] == 0.149
+    assert summary["prestim_moving_fraction"].iloc[0] == 0.149123456789
     assert not summary["pause_moving_eligible"].iloc[0]
 
 

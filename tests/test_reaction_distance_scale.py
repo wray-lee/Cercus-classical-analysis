@@ -78,7 +78,8 @@ def test_rt_and_t1_t2_prefer_same_causal_pair_without_imputation():
     # Missing history metadata must not change the classifier cohort.
     assert "Pure: PreWalk 2; paired 1/2" in "\n".join(t.get_text() for t in fig.axes[2].texts)
     assert "Wind PreWalk" in fig.axes[2].get_title()
-    assert "RT observed/total — PreWalk: 1/2" in [t.get_text() for t in fig.axes[0].texts]
+    # Axes 0/1 use the derived main grouping: raw PreWalk folds into Escape.
+    assert "RT observed/total — Escape: 1/2" in [t.get_text() for t in fig.axes[0].texts]
     note = "\n".join(t.get_text() for t in fig.texts)
     assert "T1/T2 Wind PreWalk" in note
     assert "cohort N includes missing endpoints" in note
@@ -216,7 +217,7 @@ def test_endpoint_coverage_keeps_single_and_double_missing_in_class_cohort():
     fig = plot_reaction_distance_panel(pd.concat([df, df]))
     rt_text = "\n".join(t.get_text() for t in fig.axes[0].texts)
     pair_text = "\n".join(t.get_text() for t in fig.axes[2].texts)
-    assert "RT observed/total — PreWalk: 1/3" in rt_text
+    assert "RT observed/total — Escape: 1/3" in rt_text
     assert "Observed: T1 2/3; T2 1/3; RT 1/3" in pair_text
     assert "paired 1/3; missing=2" in pair_text
     plt.close(fig)
@@ -234,7 +235,9 @@ def test_negative_causal_prewalk_rt_is_missing_not_clamped_or_reclassified():
     before = df.copy(deep=True)
     fig = plot_reaction_distance_panel(df)
     assert list(fig.axes[0].collections[0].get_offsets()[:, 1]) == [-74.0]
-    assert "RT observed/total — PreWalk: 0/1" in _panel_text(fig.axes[0])
+    # Raw PreWalk folds into the derived Escape group; the negative causal RT
+    # is still reported missing, never clamped or reclassified.
+    assert "RT observed/total — Escape: 0/1" in _panel_text(fig.axes[0])
     assert len(fig.axes[1].collections) == 2
     pd.testing.assert_frame_equal(df, before)
     plt.close(fig)

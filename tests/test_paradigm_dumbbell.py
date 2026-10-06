@@ -31,13 +31,14 @@ def _synthetic() -> pd.DataFrame:
 def test_summarize_subjects_semantics():
     subj = summarize_subjects(_synthetic())
     assert list(subj.columns) == [
-        "paradigm", "subject_id", "n_trials", "response_rate", "rt_mean", "dist_mean",
-        "rt_observed", "rt_trials", "rt_missing",
+        "paradigm", "subject_id", "n_trials", "response_rate", "response_group_rate",
+        "rt_mean", "dist_mean", "rt_observed", "rt_trials", "rt_missing",
     ]
     bv = subj[subj["paradigm"] == "bv"]
     # 每动物 20 trial；响应率∈(0,1]；RT 均值仅在逃逸 trial 上 → 有限
     assert (bv["n_trials"] == 20).all()
     assert bv["response_rate"].between(0, 1).all()
+    assert bv["response_group_rate"].between(0, 1).all()
     assert bv["rt_mean"].notna().all()
     assert (subj["rt_observed"] + subj["rt_missing"]).eq(subj["rt_trials"]).all()
     assert subj["rt_missing"].eq(0).all()  # NoResponse is not a missing response endpoint.
@@ -199,6 +200,46 @@ def test_rt_cohort_is_final_classifier_class_not_history_or_pair_coverage():
     assert "Multimodal" not in text
     assert "PreWalk" in fig.axes[2].get_title()
     plt.close(fig)
+
+
+def test_grouped_subject_median_preserves_raw_endpoint_and_missingness(monkeypatch):
+    from cercus.config import get_config
+    from cercus.visualization.paradigm import (
+        plot_paradigm_rt_dist, summarize_subjects_by_class,
+    )
+
+    trials = pd.DataFrame({
+        "paradigm": ["bw"] * 4, "subject_id": ["a"] * 4,
+        "global_trial_index": range(4), "type": ["baseline_wind"] * 4,
+        "response_type": ["Escape", "PreWalk", "PreWalk", "NoResponse"],
+        "escape_reaction_time_ms": [90.0] * 4,
+        "pause_reaction_time_ms": [np.nan, 120.0, np.nan, 100.0],
+        "distance_mm": [10.0, 20.0, 30.0, np.nan],
+    })
+    before = trials.copy(deep=True)
+    settings = get_config().analysis.response_grouping._data
+    for merge in (True, False):
+        monkeypatch.setitem(settings, "merge_prewalk", merge)
+        summary = summarize_subjects_by_class(
+            pd.concat([trials, trials]), grouped=True,
+        ).set_index("response_group")
+        if merge:
+            assert list(summary.index) == ["Escape"]
+            assert summary.loc["Escape", "n"] == 3
+            assert summary.loc["Escape", "rt_med"] == 105.0
+            assert summary.loc["Escape", "dist_med"] == 20.0
+            assert summary.loc["Escape", "rt_observed"] == 2
+            assert summary.loc["Escape", "rt_missing"] == 1
+        else:
+            assert set(summary.index) == {"Escape", "PreWalk"}
+            assert summary.loc["PreWalk", "n"] == 2
+            assert summary.loc["PreWalk", "rt_med"] == 120.0
+            assert summary.loc["PreWalk", "rt_missing"] == 1
+        fig = plot_paradigm_rt_dist(trials)
+        labels = [t.get_text() for t in fig.legends[0].get_texts()]
+        assert ("PreWalk" in labels) == (not merge)
+        plt.close(fig)
+    pd.testing.assert_frame_equal(trials, before)
 
 
 def test_partial_causal_schema_never_borrows_centered_rt():

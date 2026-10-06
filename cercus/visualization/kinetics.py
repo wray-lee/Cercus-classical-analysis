@@ -28,7 +28,12 @@ from cercus.visualization._core import (
     add_threshold_lines,
     draw_oscilloscope_channels,
 )
-from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
+from cercus.analysis.response_groups import (
+    effective_main_colors,
+    effective_main_types,
+    response_group_series,
+)
+from cercus.constants.response_types import RESPONSE_COLORS
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +138,7 @@ def plot_population_speed_kinetics(
             ha="center", va="center", transform=ax.transAxes, fontsize=10, color="0.5",
         )
         return fig
+    df["response_group"] = response_group_series(df)
 
     fig = plt.figure(figsize=figsize)
     height_ratios = list(vis.get("population_speed_kinetics_height_ratios", [4, 1]))
@@ -151,10 +157,10 @@ def plot_population_speed_kinetics(
     )
     df_binned["t_bin"] = df_binned["t_bin"].astype(float)
 
-    response_colors = {rt: RESPONSE_COLORS[rt] for rt in RESPONSE_TYPES}
+    response_colors = effective_main_colors()
 
     for response_type, color in response_colors.items():
-        subset = df_binned[df_binned["response_type"] == response_type]
+        subset = df_binned[df_binned["response_group"] == response_type]
         if subset.empty:
             continue
         trial_means = (
@@ -208,11 +214,6 @@ def plot_population_spaghetti_kinetics(
     df = df[
         (df["t_rel"] >= t_window[0]) & (df["t_rel"] <= t_window[1])
     ].copy()
-    response_types = list(RESPONSE_TYPES)
-    response_colors = dict(RESPONSE_COLORS)
-    n_panels = len(response_types)
-    # population/spaghetti_kinetics.svg — three response panels; width scales with N.
-    figsize = (figsize[0] * n_panels / 3, figsize[1])
     if df.empty:
         fig, ax = plt.subplots(figsize=figsize)
         ax.text(
@@ -220,6 +221,12 @@ def plot_population_spaghetti_kinetics(
             ha="center", va="center", transform=ax.transAxes, fontsize=10, color="0.5",
         )
         return fig
+    df["response_group"] = response_group_series(df)
+    response_types = list(effective_main_types())
+    response_colors = effective_main_colors()
+    n_panels = len(response_types)
+    # population/spaghetti_kinetics.svg — three response panels; width scales with N.
+    figsize = (figsize[0] * n_panels / 3, figsize[1])
 
     height_ratios = list(vis.get("population_spaghetti_kinetics_height_ratios", [4, 1]))
     hspace = float(vis.get("population_spaghetti_kinetics_hspace", 0.1))
@@ -240,7 +247,7 @@ def plot_population_spaghetti_kinetics(
 
     for j, response_type in enumerate(response_types):
         ax = ax_upper[j]
-        subset = df[df["response_type"] == response_type]
+        subset = df[df["response_group"] == response_type]
         color = response_colors[response_type]
 
         if subset.empty:

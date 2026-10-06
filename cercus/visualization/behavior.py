@@ -25,6 +25,11 @@ from pipeline.constants import (
     PREWALK_WINDOW_MS,
 )
 from cercus.analysis.reaction_time import select_escape_latency
+from cercus.analysis.response_groups import (
+    effective_main_colors,
+    effective_main_types,
+    response_group_series,
+)
 from cercus.config import get_thresholds, get_visualization
 from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
 
@@ -39,16 +44,27 @@ _NPG8 = [
 def plot_behavior_probability(
     df: pd.DataFrame,
     figsize: tuple[float, float] | None = None,
+    merge_prewalk: bool | None = None,
 ) -> plt.Figure:
-    """Bar chart of response-type proportions (RESPONSE_TYPES order)."""
-    counts = df.groupby("global_trial_id")["response_type"].first().value_counts()
+    """Bar chart of derived response-group proportions (main merged view).
+
+    ``merge_prewalk`` overrides the YAML toggle for tests; default None reads
+    the config value.
+    """
+    trial_level = (
+        df.groupby("global_trial_id")
+        .agg(response_type=("response_type", "first"))
+        .reset_index()
+    )
+    trial_level["response_group"] = response_group_series(trial_level, merge_prewalk)
+    counts = trial_level["response_group"].value_counts()
     total = counts.sum()
 
-    categories = list(RESPONSE_TYPES)
+    categories = list(effective_main_types(merge_prewalk))
     values = [
         counts.get(c, 0) / total if total > 0 else 0.0 for c in categories
     ]
-    colors = [RESPONSE_COLORS[c] for c in categories]
+    colors = [effective_main_colors(merge_prewalk)[c] for c in categories]
 
     fig, ax = plt.subplots(
         figsize=figsize or tuple(get_visualization().behavior_probability_figsize)
@@ -96,6 +112,7 @@ def plot_habituation_curve(
     x = trial_agg["global_trial_index"].values
     y = trial_agg["v_max"].values
 
+    # Raw diagnostics: habituation stays on the ungrouped classifier labels.
     point_colors = [
         RESPONSE_COLORS.get(rt, COLOR_NO_RESPONSE)
         for rt in trial_agg["response_type"].values
@@ -307,24 +324,26 @@ def plot_population_behavior_probability(
     df: pd.DataFrame,
     figsize: tuple[float, float] | None = None,
     bar_label_style: str | None = None,
+    merge_prewalk: bool | None = None,
 ) -> plt.Figure:
-    """Bar chart with per-subject scatter points."""
+    """Bar chart with per-subject scatter points (main merged view)."""
     trial_level = (
-        df.groupby(["subject_id", "global_trial_index"])["response_type"]
-        .first()
+        df.groupby(["subject_id", "global_trial_index"])
+        .agg(response_type=("response_type", "first"))
         .reset_index()
     )
+    trial_level["response_group"] = response_group_series(trial_level, merge_prewalk)
 
-    counts = trial_level["response_type"].value_counts()
+    counts = trial_level["response_group"].value_counts()
     total = counts.sum()
-    categories = [rt for rt in RESPONSE_TYPES if rt != "PreEscape" or counts.get(rt, 0) > 0]
+    categories = [rt for rt in effective_main_types(merge_prewalk) if rt != "PreEscape" or counts.get(rt, 0) > 0]
     values = [
         counts.get(c, 0) / total if total > 0 else 0.0 for c in categories
     ]
-    colors = [RESPONSE_COLORS[c] for c in categories]
+    colors = [effective_main_colors(merge_prewalk)[c] for c in categories]
 
     subject_probs = (
-        trial_level.groupby("subject_id")["response_type"]
+        trial_level.groupby("subject_id")["response_group"]
         .value_counts(normalize=True)
         .unstack(fill_value=0.0)
     )
@@ -552,10 +571,15 @@ def plot_reaction_distance_panel(
         log.warning("%s/distance_mm missing — skipping panel.", rt_col)
         return None
 
-    classes = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
     trial = df.drop_duplicates(["subject_id", "global_trial_id"]).copy()
+    # Raw-label timing selection FIRST: a raw PreWalk keeps its pause RT and
+    # missing RTs stay missing before any grouping is applied.
     trial["rt"] = select_escape_latency(trial)
     trial["dist"] = trial["distance_mm"]
+    # Main timing/distance panels use the derived grouping; the T1/T2 cohort
+    # below stays on raw wind PreWalk labels.
+    trial["response_group"] = response_group_series(trial)
+    classes = [rt for rt in effective_main_types() if rt != "NoResponse"]
     causal_pair = {"pause_stopping_time_ms", "pause_to_escape_time_ms"}.issubset(df.columns)
     t1_col = "pause_stopping_time_ms" if causal_pair else "stillness_reaction_time_ms"
     t2_col = "pause_to_escape_time_ms" if causal_pair else "stop_to_escape_interval_ms"
@@ -563,7 +587,7 @@ def plot_reaction_distance_panel(
         trial[key] = trial[col] if col in trial else np.nan
     # Subject summaries use complete trial pairs; faint lines retain each
     # actual trial pair rather than join two independent subject medians.
-    subj_med = trial.groupby(["subject_id", "response_type"])[["rt", "dist"]].median()
+    subj_med = trial.groupby(["subject_id", "response_group"])[["rt", "dist"]].median()
 
     visualization = get_visualization()
     # All dimensions/paddings below map to reaction_distance_panel.svg settings in visualization.yaml.
@@ -586,8 +610,8 @@ def plot_reaction_distance_panel(
     ):
         pairs = [
             (rt,
-             subj_med.xs(rt, level="response_type")[col].dropna().values
-             if rt in subj_med.index.get_level_values("response_type")
+             subj_med.xs(rt, level="response_group")[col].dropna().values
+             if rt in subj_med.index.get_level_values("response_group")
              else np.array([]))
             for rt in classes
         ]
@@ -647,7 +671,7 @@ def plot_reaction_distance_panel(
 
     rt_coverage = [
         f"RT observed/total — {response}: {int(np.isfinite(group['rt']).sum())}/{len(group)}"
-        for response, group in trial.groupby("response_type", sort=False)
+        for response, group in trial.groupby("response_group", sort=False)
         if response in classes
     ]
     axes[0].text(
@@ -819,13 +843,13 @@ def plot_reaction_distance_panel(
     foot = []
     for col, lbl in (("rt", "RT"), ("dist", "dist")):
         esc = (
-            subj_med.xs("Escape", level="response_type")[col].dropna().values
-            if "Escape" in subj_med.index.get_level_values("response_type")
+            subj_med.xs("Escape", level="response_group")[col].dropna().values
+            if "Escape" in subj_med.index.get_level_values("response_group")
             else np.array([])
         )
         pre = (
-            subj_med.xs("PreEscape", level="response_type")[col].dropna().values
-            if "PreEscape" in subj_med.index.get_level_values("response_type")
+            subj_med.xs("PreEscape", level="response_group")[col].dropna().values
+            if "PreEscape" in subj_med.index.get_level_values("response_group")
             else np.array([])
         )
         if len(esc) > 1 and len(pre) > 1:

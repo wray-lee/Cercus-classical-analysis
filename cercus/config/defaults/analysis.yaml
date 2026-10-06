@@ -40,3 +40,22 @@ vmax_thresholding:
   kde_search_upper: 400.0
   # set true to also compute the IQR-adaptive GMM as a candidate threshold
   enable_iqr_gmm: false
+
+# Raw-vs-derived response grouping (main aggregate plots only).
+response_grouping:
+  # true  = main derived "Escape" = raw Escape + raw PreWalk (merged burst responses);
+  #         PreEscape and NoResponse stay separate; raw PreWalk diagnostics unchanged.
+  # false = legacy split: derived groups mirror raw labels exactly.
+  # Must be a YAML boolean — a string like "false" is rejected, never coerced.
+  merge_prewalk: true
+
+# MS mode: immediate pattern directories; incomplete conditions stay visible.
+multisensory:
+  expected_patterns: [bv, bw, "-373 30°", "-308 36°", "-261 42°", "-225 48°", "-119 80°", "0 180°", "+200"]
+  # 'all' is an aggregate/legacy export, not another independent paradigm.
+  exclude_directories: [all, full, ms, output, figures, results, test, train, garbage, pilot]
+  workers: 1  # bounded memory: workers return trial summaries, not full pooled frames
+  bootstrap_iterations: 2000
+  min_subjects: 2
+  confidence_level: 0.95
+  random_seed: 42

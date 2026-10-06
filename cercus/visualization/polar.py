@@ -22,7 +22,11 @@ from pipeline.constants import (
     _get_unified_side,
 )
 from cercus.config import get_visualization
-from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
+from cercus.analysis.response_groups import (
+    effective_main_types,
+    response_group_series,
+)
+from cercus.constants.response_types import RESPONSE_COLORS
 from cercus.visualization._circstats import (
     rayleigh_p,
     watson_williams_test,
@@ -55,8 +59,11 @@ def plot_escape_angle_distribution(
         if "subject_id" in df.columns
         else ["global_trial_id"]
     )
-    escape_types = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
-    df_esc = df[df["response_type"].isin(escape_types)].copy()
+    # Main panel uses the derived grouping (merged PreWalk into Escape).
+    df = df.copy()
+    df["response_group"] = response_group_series(df)
+    escape_types = [rt for rt in effective_main_types() if rt != "NoResponse"]
+    df_esc = df[df["response_group"].isin(escape_types)].copy()
 
     if df_esc.empty:
         log.warning("No response trials for angle distribution plot.")
@@ -71,7 +78,7 @@ def plot_escape_angle_distribution(
 
     for keys, grp in df_esc.groupby(group_cols):
         grp = grp.sort_values("t_rel")
-        response_type = grp["response_type"].iloc[0]
+        response_type = grp["response_group"].iloc[0]
         if response_type not in angles_by_type:
             continue
 
@@ -170,20 +177,26 @@ def plot_population_polar_histogram(
         if "subject_id" in df.columns
         else ["global_trial_id"]
     )
+    # Default main panel uses the derived grouping; an explicit ``response_types``
+    # list is a raw diagnostic view and reads raw labels unchanged.
+    df = df.copy()
+    df["response_group"] = response_group_series(df)
+    raw_view = response_types is not None
     if response_types is None:
-        escape_types = [rt for rt in RESPONSE_TYPES if rt != "NoResponse"]
+        escape_types = [rt for rt in effective_main_types() if rt != "NoResponse"]
     elif isinstance(response_types, str):
         escape_types = [response_types]
     else:
         escape_types = list(response_types)
+    class_col = "response_type" if raw_view else "response_group"
 
-    df_esc = df[df["response_type"].isin(escape_types)].copy()
+    df_esc = df[df[class_col].isin(escape_types)].copy()
 
     angles_by_type: dict[str, list[float]] = {rtype: [] for rtype in escape_types}
 
     for keys, grp in df_esc.groupby(group_cols):
         grp = grp.sort_values("t_rel")
-        response_type = grp["response_type"].iloc[0]
+        response_type = grp[class_col].iloc[0]
         if response_type not in angles_by_type:
             continue
         side = _get_unified_side(grp)

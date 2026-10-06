@@ -223,6 +223,8 @@ def main(argv: list[str] | None = None) -> None:
     trial_level = (
         all_data.groupby(["subject_id", "global_trial_index"])
         .agg(response_type=("response_type", "first"),
+             response_group=("response_group", "first"),
+             prestim_status=("prestim_status", "first"),
              is_valid_escape=("is_valid_escape", "first"))
         .reset_index()
     )
@@ -236,9 +238,13 @@ def main(argv: list[str] | None = None) -> None:
             preescape_trials=("response_type", lambda s: (s == "PreEscape").sum()),
             prewalk_trials=("response_type", lambda s: (s == "PreWalk").sum()),
             no_response_trials=("response_type", lambda s: (s == "NoResponse").sum()),
+            escape_group_trials=("response_group", lambda s: (s == "Escape").sum()),
         )
         .assign(
+            # escape_rate stays on the raw valid-escape definition; the distinct
+            # escape_group_rate folds raw PreWalk into the derived Escape group.
             escape_rate=lambda d: d["valid_escape_trials"] / d["total_trials"],
+            escape_group_rate=lambda d: d["escape_group_trials"] / d["total_trials"],
             prewalk_rate=lambda d: d["prewalk_trials"] / d["total_trials"],
             no_response_rate=lambda d: d["no_response_trials"] / d["total_trials"],
             prewalk_fraction=lambda d: np.where(
@@ -267,6 +273,19 @@ def main(argv: list[str] | None = None) -> None:
 
     rates_csv_path = output_dir / "subject_escape_rates.csv"
     subject_rates.to_csv(rates_csv_path, index=False, float_format="%.4f")
+
+    # Independent pre-stimulus baseline outcome, by raw class (includes
+    # NoResponse and unobserved). Distinct from the wind-anchored pause_* view.
+    if "prestim_status" in trial_level.columns:
+        prestim_summary = (
+            trial_level.groupby(["response_type", "prestim_status"], dropna=False)
+            .size()
+            .rename("n")
+            .reset_index()
+        )
+        prestim_summary.to_csv(
+            output_dir / "prestim_outcome_summary.csv", index=False
+        )
 
     n_subjects = all_data["subject_id"].nunique()
     n_trials = trial_level.shape[0]

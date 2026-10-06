@@ -20,7 +20,11 @@ from pipeline.constants import (
     ESCAPE_VMAX_THRESHOLD,
 )
 from cercus.config import get_colors, get_geometry, get_visualization
-from cercus.constants.response_types import RESPONSE_COLORS, RESPONSE_TYPES
+from cercus.analysis.response_groups import (
+    effective_main_colors,
+    effective_main_types,
+    response_group_series,
+)
 
 _WIND_COLOR = str(get_colors().wind_mark)  # 风到达标识色（NPG sky blue，非行为类配色，纯图元）
 
@@ -39,6 +43,7 @@ def plot_spaghetti_kinetics_heatmap(
 ) -> plt.Figure:
     """Density heatmap of spaghetti kinetics, aligned to escape onset."""
     df = df.copy()
+    df["response_group"] = response_group_series(df)
     has_onset = df["interval_onset_ms"].notna()
     df["t_aligned"] = np.where(
         has_onset,
@@ -48,8 +53,8 @@ def plot_spaghetti_kinetics_heatmap(
 
     t_common = np.arange(t_window[0], t_window[1] + dt, dt)
 
-    response_types = list(RESPONSE_TYPES)
-    response_colors = dict(RESPONSE_COLORS)
+    response_types = list(effective_main_types())
+    response_colors = effective_main_colors()
 
     n_panels = len(response_types)
     vis = get_visualization()
@@ -96,7 +101,7 @@ def plot_spaghetti_kinetics_heatmap(
     stillness_by_panel: dict[int, float] = {}
 
     for j, response_type in enumerate(response_types):
-        subset = df[df["response_type"] == response_type]
+        subset = df[df["response_group"] == response_type]
         if subset.empty:
             continue
 
@@ -363,6 +368,7 @@ def plot_trial_stacked_heatmap(
     gamma = float(heatmap_cfg.gamma)
 
     df = df.copy()
+    df["response_group"] = response_group_series(df)
     if align == "onset":
         df["_align_t_s"] = np.where(
             df["interval_onset_ms"].notna(),
@@ -373,11 +379,14 @@ def plot_trial_stacked_heatmap(
         df["_align_t_s"] = df["t_rel"] / 1000.0
 
     n_types = df["type"].nunique() if "type" in df.columns else 0
-    if conditions is None:
+    auto_conditions = conditions is None
+    if auto_conditions:
         if n_types >= 4:
             conditions = sorted(df["type"].dropna().unique())
         else:
-            conditions = list(RESPONSE_TYPES)
+            # Default main view uses the derived grouping (merged PreWalk).
+            df["response_group"] = response_group_series(df)
+            conditions = list(effective_main_types())
 
     n_panels = len(conditions)
     if figsize is None:
@@ -411,6 +420,8 @@ def plot_trial_stacked_heatmap(
 
         if n_types >= 4:
             subset = df[df["type"] == cond].copy()
+        elif auto_conditions:
+            subset = df[df["response_group"] == cond].copy()
         else:
             subset = df[df["response_type"] == cond].copy()
 

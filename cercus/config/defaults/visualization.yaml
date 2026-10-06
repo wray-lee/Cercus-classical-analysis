@@ -99,6 +99,73 @@ paradigm_dumbbell_figsize: [7.5, 3.2]
 
 # paradigm_rt_dist.svg — plot_paradigm_rt_dist
 paradigm_rt_dist_figsize: [8.5, 3.8]
+paradigm_rt_dist_layout:
+  left: 0.085
+  right: 0.985
+  top: 0.84
+  bottom: 0.34
+  wspace: 0.28
+paradigm_rt_dist_coverage_y: 0.18
+paradigm_rt_dist_stats_y: 0.045
+paradigm_rt_dist_footer_fontsize: 5.5
+
+# ── MS parent-directory comparison (multisensory.py) ──
+multisensory:
+  overview_figsize: [9.0, 3.4]
+  enhancement_figsize: [7.0, 3.3]
+  jitter_seed: 42
+  # Separate layout per figure; the bottom band reserves footer room so
+  # bbox_inches="tight" never inflates the figure.
+  overview_layout:
+    left: 0.07
+    right: 0.99
+    bottom: 0.30
+    top: 0.88
+    wspace: 0.35
+  overview_footer_y: 0.015
+  enhancement_layout:
+    left: 0.09
+    right: 0.98
+    bottom: 0.30
+    top: 0.88
+    wspace: 0.35
+  enhancement_footer_y: 0.015
+  # Character budget per footer line before wrapping (overview coverage rows).
+  footer_pack_chars: 150
+  tick_rotation: 35
+  point_size: 14
+  annotation_fontsize: 6.5
+  title_fontsize: 8.5
+  title_pad: 8
+  label_fontsize: 7.5
+  tick_fontsize: 6.5
+  legend_fontsize: 7
+  legend_marker_size: 4
+  legend_columnspacing: 1.5
+  jitter_width: 0.05
+  point_alpha: 0.85
+  point_edge_width: 0.3
+  summary_marker_size: 3.5
+  summary_edge_width: 0.4
+  summary_line_width: 1.0
+  summary_cap_size: 2
+  ci_cap_width: 0.10
+  annotation_y: 0.03
+  unavailable_y: 0.98
+  footer_linespacing: 1.3
+  timing_axis_padding: 0.08
+  enhancement_axis_padding: 0.15
+  flat_axis_fraction: 0.1
+  min_axis_span: 1.0
+  grid_line_width: 0.5
+  grid_alpha: 0.8
+  zero_line_width: 0.6
+  grid_color: "#E5E7EB"
+  point_edge_color: "white"
+  summary_color: "black"
+  annotation_color: "0.55"
+  footer_color: "0.3"
+  zero_color: "0.5"
 
 # ── Heatmaps (heatmaps.py) ──
 # spaghetti_density_heatmap.svg — plot_spaghetti_kinetics_heatmap

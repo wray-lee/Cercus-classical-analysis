@@ -18,13 +18,13 @@ import numpy as np
 import pandas as pd
 
 from cercus.analysis.full import _paradigm_sort_key
+from cercus.analysis.response_groups import effective_main_types, response_group_series
 from cercus.config import get_visualization
 from cercus.constants.colors import NPG_PALETTE
 from cercus.constants.response_types import (
     BURST_CLASSES as _BURST_CLASSES,
     ESCAPE_CLASSES as _ESCAPE_CLASSES,
     RESPONSE_COLORS,
-    RESPONSE_TYPES,
 )
 from cercus.analysis.reaction_time import select_escape_latency
 
@@ -35,7 +35,9 @@ log = logging.getLogger(__name__)
 
 def _latency_trials(df: pd.DataFrame) -> pd.DataFrame:
     trials = df.drop_duplicates(["paradigm", "subject_id", "global_trial_index"]).copy()
+    # Select each raw class's endpoint before deriving the main display group.
     trials["rt"] = select_escape_latency(trials).where(trials["response_type"].isin(_BURST_CLASSES))
+    trials["response_group"] = response_group_series(trials)
     trials["dist"] = trials["distance_mm"]
     return trials
 
@@ -48,12 +50,14 @@ def summarize_subjects(df: pd.DataFrame) -> pd.DataFrame:
     """
     trial = _latency_trials(df)
     trial["is_escape"] = trial["response_type"].isin(_ESCAPE_CLASSES)
+    trial["is_escape_group"] = trial["response_group"].eq("Escape")
     trial["rt_trial"] = trial["response_type"].isin(_BURST_CLASSES)
     out = (
         trial.groupby(["paradigm", "subject_id"])
         .agg(
             n_trials=("global_trial_index", "size"),
             response_rate=("is_escape", "mean"),
+            response_group_rate=("is_escape_group", "mean"),
             rt_mean=("rt", "mean"),
             dist_mean=("dist", "mean"),
             rt_observed=("rt", "count"),
@@ -65,16 +69,18 @@ def summarize_subjects(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def summarize_subjects_by_class(df: pd.DataFrame) -> pd.DataFrame:
-    """Trial 级表 → per-(paradigm, subject, response_type) 的中位数汇总。
+def summarize_subjects_by_class(
+    df: pd.DataFrame, *, grouped: bool = False,
+) -> pd.DataFrame:
+    """动物级中位数；默认保留原始分类，主图用 grouped=True。
 
-    保留分类器最终三类有 burst 的行为（Escape / PreEscape / PreWalk）；
-    n 来自分类，rt_observed/rt_missing 单独报告，不据此重新筛选队列。
+    RT 先由原始分类选择 endpoint，再合并 trial；n 和 RT 覆盖分开报告。
     """
     trial = _latency_trials(df)
     esc = trial[trial["response_type"].isin(_BURST_CLASSES)]
+    class_col = "response_group" if grouped else "response_type"
     out = (
-        esc.groupby(["paradigm", "subject_id", "response_type"])
+        esc.groupby(["paradigm", "subject_id", class_col])
         .agg(
             n=("global_trial_index", "size"),
             rt_med=("rt", "median"),
@@ -144,22 +150,23 @@ def plot_paradigm_rt_dist(
     df: pd.DataFrame,
     figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:
-    """2-panel 范式 × 行为类对比：RT / escape distance（三类有 burst 行为）。
+    """2-panel 范式 × 主分析分组：RT / escape distance。
 
     箱线建立在动物级中位数上（每动物一个数据点，避免 trial 级伪重复），
     逐动物点叠加；底部 Kruskal-Wallis（跨范式，动物级）按类报告。
     """
     from scipy import stats as sps
 
+    vis = get_visualization()
     if figsize is None:
-        vis = get_visualization()
-        figsize = tuple(vis.get("paradigm_rt_dist_figsize", (8.5, 3.8)))
-    subj = summarize_subjects_by_class(df)
+        figsize = tuple(vis.paradigm_rt_dist_figsize)
+    subj = summarize_subjects_by_class(df, grouped=True)
     paradigms = sorted(subj["paradigm"].unique(), key=_paradigm_sort_key)
-    classes = [c for c in RESPONSE_TYPES
-               if c in _BURST_CLASSES and (subj["response_type"] == c).any()]
+    classes = [c for c in effective_main_types()
+               if c in _BURST_CLASSES and (subj["response_group"] == c).any()]
     n_p = len(paradigms)
     fig, axes = plt.subplots(1, 2, figsize=figsize)
+    fig.subplots_adjust(**vis.paradigm_rt_dist_layout.to_dict())
     rng = np.random.default_rng(42)
     panel_tags = ("a", "b")
     panel_notes: list[list[str]] = []
@@ -176,7 +183,7 @@ def plot_paradigm_rt_dist(
                 c for c in classes
                 if len(
                     subj.loc[
-                        (subj["paradigm"] == p) & (subj["response_type"] == c), col
+                        (subj["paradigm"] == p) & (subj["response_group"] == c), col
                     ].dropna()
                 ) > 0
             ]
@@ -192,7 +199,7 @@ def plot_paradigm_rt_dist(
             for c, off in zip(p_classes, p_offsets):
                 vals = (
                     subj.loc[
-                        (subj["paradigm"] == p) & (subj["response_type"] == c), col
+                        (subj["paradigm"] == p) & (subj["response_group"] == c), col
                     ]
                     .dropna()
                     .values
@@ -223,21 +230,27 @@ def plot_paradigm_rt_dist(
         n_per = subj.groupby("paradigm")["subject_id"].nunique()
         observed_per = subj.loc[subj[col].notna()].groupby("paradigm")["subject_id"].nunique()
         ax.set_xticklabels(
-            [f"{p}\nsubjects={int(observed_per.get(p, 0))}/{int(n_per[p])}" for p in paradigms],
+            paradigms,
             fontsize=6.5, rotation=0, ha="center",
         )
         coverage = subj.groupby("paradigm")[['n', 'rt_observed', 'rt_missing']].sum()
+        observed_total = int(coverage.rt_observed.sum())
+        n_total = int(coverage.n.sum())
+        subjects_total = int(n_per.sum())
+        observed_subjects = int(observed_per.sum())
+        per_paradigm = [
+            f"{p}: {int(coverage.loc[p, 'rt_observed'])}/{int(coverage.loc[p, 'n'])}"
+            for p in paradigms
+        ]
+        coverage_lines = [
+            f"RT coverage: N={n_total}; observed={observed_total}; missing={n_total - observed_total}",
+            f"subjects={observed_subjects}/{subjects_total}; observed / classifier trials by paradigm:",
+        ] + [";  ".join(per_paradigm[i:i + 2]) for i in range(0, n_p, 2)]
         ax.text(
-            0.0, -0.24,
-            "RT coverage:\n" + "\n".join(
-                f"{p}: N={int(coverage.loc[p, 'n'])}; "
-                f"observed={int(coverage.loc[p, 'rt_observed'])}; "
-                f"missing={int(coverage.loc[p, 'rt_missing'])}; "
-                f"subjects={int(observed_per.get(p, 0))}/{int(n_per[p])}"
-                for p in paradigms
-            ),
-            transform=ax.transAxes, fontsize=5.5, color="0.3",
-            ha="left", va="top", linespacing=1.3,
+            ax.get_position().x0, float(vis.paradigm_rt_dist_coverage_y),
+            "\n".join(coverage_lines),
+            transform=fig.transFigure, fontsize=float(vis.paradigm_rt_dist_footer_fontsize),
+            color="0.3", ha="left", va="top", linespacing=1.2,
         )
         ax.set_xlim(-0.5, n_p - 0.5)
         ax.set_ylabel(ylab, fontsize=8.0)
@@ -265,7 +278,7 @@ def plot_paradigm_rt_dist(
         for c in classes:
             groups = [
                 g[col].dropna().values
-                for _p, g in subj[subj["response_type"] == c].groupby("paradigm")
+                for _p, g in subj[subj["response_group"] == c].groupby("paradigm")
             ]
             groups = [g for g in groups if len(g) > 0]
             if len(groups) >= 3 and any(len(g) >= 2 for g in groups):
@@ -273,16 +286,15 @@ def plot_paradigm_rt_dist(
                 p_str = "p<0.001" if kw.pvalue < 0.001 else f"p={kw.pvalue:.3f}"
                 notes.append(f"{c}: H={kw.statistic:.1f}, {p_str}")
         panel_notes.append(notes)
-    # KW 统计标注：panel 外下方（不进入绘图区，绝不遮挡数据点）
+    # 固定 figure footer 行，coverage 与 KW 不再争用负轴坐标。
     for ax, notes in zip(axes, panel_notes):
         if not notes:
             continue
-        side, x = ("left", 0.0) if ax is axes[0] else ("right", 1.0)
         ax.text(
-            x, -0.40,
-            "KW (subject medians):\n" + "\n".join(notes),
-            transform=ax.transAxes, fontsize=6.0, color="0.3",
-            ha=side, va="top", linespacing=1.4,
+            ax.get_position().x0, float(vis.paradigm_rt_dist_stats_y),
+            "KW (subject medians): " + "; ".join(notes),
+            transform=fig.transFigure, fontsize=float(vis.paradigm_rt_dist_footer_fontsize),
+            color="0.3", ha="left", va="top",
         )
     handles = [
         mpatches.Patch(
@@ -291,13 +303,11 @@ def plot_paradigm_rt_dist(
         )
         for c in classes
     ]
-    # 图例贴 figure 顶；rect 顶部压到 0.82 —— b 标题与图例间留 ~20pt 净空
-    # （0.87 时实测仅 ~4pt，SVG 字体度量偏大仍会碰到图例）
+    # 图例位于固定主图区域上方，footer 的独立行保留覆盖率与统计信息。
     fig.legend(
         handles=handles, loc="upper center", bbox_to_anchor=(0.5, 1.0),
         ncol=len(classes), fontsize=7, frameon=False, columnspacing=1.5,
     )
-    fig.tight_layout(pad=1.2, rect=(0, 0.02, 1, 0.82))
     return fig
 
 
@@ -318,7 +328,7 @@ def plot_paradigm_dumbbell(
     colors = {p: NPG_PALETTE[i % len(NPG_PALETTE)] for i, p in enumerate(paradigms)}
 
     panels = (
-        ("response_rate", "Escape probability", "P(Escape+PreEscape)"),
+        ("response_group_rate", "Escape probability", "P(derived Escape group)"),
         ("rt_mean", "Class-selected response timing", "Selected timing endpoint (ms)"),
         ("dist_mean", "Escape distance", "distance (mm)"),
     )

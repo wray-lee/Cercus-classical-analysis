@@ -71,6 +71,21 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict], dict[Any, f
     if not stops.empty:
         stop_lookup = dict(zip(stops["global_trial_id"], stops["timestamp"]))
 
+    ttc_anchors: dict[Any, float] = {}
+    visual_onsets: dict[Any, float] = {}
+    transitions = df[df["event_name"] == "phase_transition"].copy()
+    for _, row in transitions.iterrows():
+        details = _parse_details(row["details"])
+        tid = row["global_trial_id"]
+        if details.get("to_phase") == "Collision_TTC0":
+            ttc_anchors[tid] = float(row["timestamp"])
+        elif details.get("to_phase") == "Looming":
+            # First visual stimulus. Kept separate from the TTC anchor: the
+            # independent pre-stimulus baseline maps this host event, never a
+            # later wind onset.
+            visual_onsets[tid] = float(row["timestamp"])
+    log.info("Extracted %d Collision_TTC0 anchors, %d Looming onsets.", len(ttc_anchors), len(visual_onsets))
+
     trial_windows: list[dict] = []
     for _, row in starts.iterrows():
         tid = row["global_trial_id"]
@@ -79,16 +94,10 @@ def load_events(path: str | Path) -> tuple[pd.DataFrame, list[dict], dict[Any, f
             t_stop = float(stop_lookup[tid])
         else:
             t_stop = t_start + (LEGACY_TRIAL_DURATION_MS / 1000.0)
-        trial_windows.append({"global_trial_id": tid, "t_start": t_start, "t_stop": t_stop})
-
-    ttc_anchors: dict[Any, float] = {}
-    transitions = df[df["event_name"] == "phase_transition"].copy()
-    for _, row in transitions.iterrows():
-        details = _parse_details(row["details"])
-        if details.get("to_phase") == "Collision_TTC0":
-            tid = row["global_trial_id"]
-            ttc_anchors[tid] = float(row["timestamp"])
-    log.info("Extracted %d Collision_TTC0 anchors.", len(ttc_anchors))
+        trial_windows.append({
+            "global_trial_id": tid, "t_start": t_start, "t_stop": t_stop,
+            "visual_onset_sys": visual_onsets.get(tid, np.nan),
+        })
 
     parsed = starts["details"].apply(_parse_details)
     details_df = pd.DataFrame(parsed.tolist(), index=starts.index)
@@ -120,10 +129,18 @@ _RE_KINEMATICS = re.compile(r"^(.+?)_session_(\d+)_kinematics\.csv$", re.IGNOREC
 _EXCLUDED_DIR_NAMES = {"garbage", "pilot", "__pycache__", "trials", "figures", "results", "output"}
 
 
-def scan_and_pair_sessions(input_dir: Path | str) -> dict[str, list[dict]]:
+def scan_and_pair_sessions(
+    input_dir: Path | str,
+    *,
+    duplicate_files: dict[str, list[Path]] | None = None,
+) -> dict[str, list[dict]]:
     """
     Scan *input_dir* (and its subdirectories) for CSV files matching the naming convention and pair
     events ↔ kinematics by ``(subject, session_id)``.
+
+    ``duplicate_files``, when supplied, records ambiguous normalized keys by
+    subject using this same traversal and directory exclusions. Callers can
+    reject affected subjects rather than accepting the legacy last file.
 
     Returns
     -------
@@ -139,12 +156,16 @@ def scan_and_pair_sessions(input_dir: Path | str) -> dict[str, list[dict]]:
         dirs[:] = [d for d in dirs if d.lower() not in _EXCLUDED_DIR_NAMES and not d.startswith((".", "_"))]
         for fname in files:
             m = _RE_EVENTS.match(fname)
+            target = event_files
+            if m is None:
+                m = _RE_KINEMATICS.match(fname)
+                target = kin_files
             if m:
-                event_files[(m.group(1), int(m.group(2)))] = Path(root) / fname
-                continue
-            m = _RE_KINEMATICS.match(fname)
-            if m:
-                kin_files[(m.group(1), int(m.group(2)))] = Path(root) / fname
+                key = (m.group(1), int(m.group(2)))
+                path = Path(root) / fname
+                if duplicate_files is not None and key in target:
+                    duplicate_files.setdefault(key[0], []).extend([target[key], path])
+                target[key] = path
 
     paired_keys = set(event_files) & set(kin_files)
     orphans_ev = set(event_files) - paired_keys
@@ -308,6 +329,13 @@ def export_summary_metrics(
         if col in df.columns:
             agg_spec[col] = (col, "first")
 
+    # Additive: derived grouping + independent pre-stimulus baseline diagnostics.
+    for col in ("response_group", "prestim_reference_kind", "prestim_status",
+                "prestim_moving_fraction", "prestim_reference_offset_ms",
+                "prestim_reference_sample_offset_ms", "prestim_reference_speed_mm_s"):
+        if col in df.columns:
+            agg_spec[col] = (col, "first")
+
     trial_agg = df.groupby(groupby).agg(**agg_spec).reset_index()
 
     float_cols = ["latency_ms", "v_max", "escape_interval_ms", "interval_onset_ms", "interval_offset_ms", "reaction_time_ms", "escape_reaction_time_ms", "stillness_reaction_time_ms", "stop_to_escape_interval_ms", "pause_stopping_time_ms", "pause_to_escape_time_ms", "pause_reaction_time_ms", "stillness_window_start_ms", "distance_mm", "distance_500ms_mm", "target_ttc_ms", "lv_ratio_ms", "init_half_angle_deg"]
@@ -323,9 +351,11 @@ def export_summary_metrics(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     # Retain occupancy precision: rounding 0.149 to 0.15 hides ineligibility.
-    trial_agg["pause_moving_fraction"] = trial_agg["pause_moving_fraction"].map(
-        lambda value: f"{value:.12g}" if pd.notna(value) else ""
-    )
+    for col in ("pause_moving_fraction", "prestim_moving_fraction"):
+        if col in trial_agg.columns:
+            trial_agg[col] = pd.to_numeric(trial_agg[col], errors="coerce").map(
+                lambda value: f"{value:.12g}" if pd.notna(value) else ""
+            )
     trial_agg.to_csv(output_path, index=False, float_format="%.2f")
     log.info("Summary metrics exported: %d trials → %s", len(trial_agg), output_path)
     return output_path

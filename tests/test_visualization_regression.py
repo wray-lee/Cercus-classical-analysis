@@ -262,6 +262,20 @@ class TestVmaxPlots:
         fig = plot_population_vmax_response(sample_df)
         _assert_regression(fig, "population_vmax_response")
 
+    def test_population_vmax_counts_follow_grouping(self, sample_df, monkeypatch):
+        from cercus.config import get_config
+
+        trials = sample_df.drop_duplicates(["subject_id", "global_trial_id"])
+        raw_escape = int(trials.response_type.eq("Escape").sum())
+        raw_prewalk = int(trials.response_type.eq("PreWalk").sum())
+        for merge in (True, False):
+            monkeypatch.setitem(get_config().analysis.response_grouping._data, "merge_prewalk", merge)
+            fig = plot_population_vmax_response(sample_df)
+            text = "\n".join(t.get_text() for t in fig.axes[0].texts)
+            assert f"Escape: {raw_escape + raw_prewalk if merge else raw_escape}" in text
+            assert ("PreWalk:" in text) == (not merge)
+            plt.close(fig)
+
 
 class TestBehaviorPlots:
     """Regression tests for behavior probability plots."""
@@ -299,6 +313,17 @@ class TestPolarPlots:
     def test_population_polar_histogram(self, sample_df):
         fig = plot_population_polar_histogram(sample_df)
         _assert_regression(fig, "population_polar_histogram")
+
+    def test_polar_histogram_merges_and_splits(self, sample_df):
+        """Default main view folds PreWalk into Escape; explicit raw view keeps it."""
+        merged = plot_population_polar_histogram(sample_df)
+        merged_labels = [t.get_text() for t in merged.axes[0].get_legend().get_texts()]
+        assert not any("PreWalk" in t for t in merged_labels)
+        assert any("Escape" in t for t in merged_labels)
+
+        raw = plot_population_polar_histogram(sample_df, response_types=["PreWalk"])
+        raw_labels = [t.get_text() for t in raw.axes[0].get_legend().get_texts()]
+        assert all("PreWalk" in t for t in raw_labels)
 
     def test_population_polar_legend_clears_circle(self, sample_df):
         fig = plot_population_polar_histogram(sample_df)

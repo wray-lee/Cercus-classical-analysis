@@ -230,6 +230,10 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     ``interval_onset_ms``, ``interval_offset_ms``, ``reaction_time_ms``,
     ``escape_reaction_time_ms``, ``stillness_reaction_time_ms``, ``short_rt``,
     ``distance_mm``, and ``distance_500ms_mm`` columns to a preprocessed DataFrame.
+
+    Also attaches the derived ``response_group`` column (additive; raw
+    ``response_type`` is never modified) and the independent ``prestim_*``
+    baseline diagnostics for every trial, including NoResponse.
     """
     classify_map: dict = {}
     v_max_map: dict = {}
@@ -296,6 +300,23 @@ def label_trials(df: pd.DataFrame) -> pd.DataFrame:
     df["distance_500ms_mm"] = df["global_trial_id"].map(dist500_map)
     for col, values in pause_maps.items():
         df[col] = df["global_trial_id"].map(values)
+
+    # ── Derived response_group (additive; raw response_type untouched) ──
+    # Central attachment so single/population/full/export all carry the
+    # display/analysis grouping without per-caller branches.
+    from cercus.analysis.response_groups import with_response_group
+    df = with_response_group(df)
+
+    # ── Independent pre-stimulus baseline ──
+    # Measured in ``preprocess`` on the raw full-session kinematics, never from
+    # this cropped slice. Guarantee the additive columns exist for callers that
+    # skip ``preprocess`` (e.g. synthetic tests) without recomputing them.
+    from cercus.analysis.baseline import PRESTIM_COLUMNS
+    for col in PRESTIM_COLUMNS:
+        if col not in df.columns:
+            df[col] = np.nan
+    df["prestim_reference_kind"] = df["prestim_reference_kind"].fillna("unobserved")
+    df["prestim_status"] = df["prestim_status"].fillna("unobserved")
 
     n_escape = sum(1 for v in classify_map.values() if v == "Escape")
     n_preescape = sum(1 for v in classify_map.values() if v == "PreEscape")

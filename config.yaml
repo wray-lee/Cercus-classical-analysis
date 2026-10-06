@@ -31,6 +31,14 @@ analysis:
     min_trials_wallraff: 5       # min escape trials to enter k-sample Wallraff dispersion test
     bootstrap_iterations: 1000   # animal-level bootstrap resamples for the pooled-mu CI
     include_prewalk: true
+  # ── Derived Response Grouping ──
+  # Raw response_type is never modified. merge_prewalk=true: the main derived
+  # "Escape" = raw Escape + raw PreWalk (merged burst responses); PreEscape and
+  # NoResponse stay separate; raw PreWalk diagnostics are unchanged.
+  # merge_prewalk=false: legacy split (derived groups mirror raw labels).
+  # Must be a YAML boolean — a string like "false" is rejected, never coerced.
+  response_grouping:
+    merge_prewalk: true
 
 
 
